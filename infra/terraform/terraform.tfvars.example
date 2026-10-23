@@ -1,0 +1,31 @@
+# Kopieren nach terraform.tfvars und anpassen. Dann:
+#   az login --tenant <tenant_id>
+#   terraform init
+#   terraform plan
+#   terraform apply
+
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+tenant_id           = "00000000-0000-0000-0000-000000000000" # Tenant DIESER Subscription
+resource_group_name = "rg-keevault"
+create_resource_group = true
+location            = "germanywestcentral"
+
+vault_name   = "kv-pws-teamops" # weltweit eindeutig
+display_name = "Team Ops"
+
+access = {
+  read = {
+    groups = ["PW Team Ops – Lesen"]
+  }
+  write = {
+    groups = ["PW Team Ops – Bearbeiten"]
+    users  = ["kim.muster@contoso.de"]
+  }
+  manage = {
+    users  = ["alex.admin@contoso.de"]
+    guests = ["dienstleister@partner.de"] # Gastbenutzer per E-Mail
+  }
+}
+
+# Optional: nur aus diesen Netzen erreichbar
+# allowed_ip_ranges = ["203.0.113.0/24"]

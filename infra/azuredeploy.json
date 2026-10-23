@@ -1,0 +1,183 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.48.1.52935",
+      "templateHash": "7777669971058994745"
+    }
+  },
+  "parameters": {
+    "vaultName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 24,
+      "metadata": {
+        "description": "Name des Key Vaults: 3–24 Zeichen, Buchstaben, Ziffern, Bindestriche, weltweit eindeutig (z. B. kv-pws-teamops)"
+      }
+    },
+    "displayName": {
+      "type": "string",
+      "defaultValue": "[parameters('vaultName')]",
+      "metadata": {
+        "description": "Anzeigename des Tresors in Keevault, z. B. „Team Ops“"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region – leer lassen für die Region der Ressourcengruppe"
+      }
+    },
+    "readPrincipalIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Lesen: Objekt-IDs von Benutzern oder Gruppen (Entra ID → Benutzer/Gruppen → Objekt-ID)"
+      }
+    },
+    "writePrincipalIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Bearbeiten: Objekt-IDs von Benutzern oder Gruppen"
+      }
+    },
+    "managePrincipalIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Verwalten (Bearbeiten + Freigeben): Objekt-IDs von Benutzern oder Gruppen"
+      }
+    },
+    "grantDeployer": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Dir selbst (wer bereitstellt) die Stufe Verwalten geben"
+      }
+    },
+    "purgeProtection": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Löschschutz: gelöschte Einträge sind 90 Tage wiederherstellbar und erst danach endgültig weg. Nicht umkehrbar – empfohlen."
+      }
+    },
+    "writeMarker": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Tresor-Kennzeichnung schreiben. Beim ERNEUTEN Ausführen auf false setzen – sonst werden Lizenz und Logo des Tresors überschrieben."
+      }
+    },
+    "containerId": {
+      "type": "string",
+      "defaultValue": "[newGuid()]",
+      "metadata": {
+        "description": "Nicht ändern (Kennung des Tresors)"
+      }
+    },
+    "created": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-ddTHH:mm:ssZ')]",
+      "metadata": {
+        "description": "Nicht ändern (Zeitstempel)"
+      }
+    }
+  },
+  "variables": {
+    "roles": {
+      "secretsUser": "4633458b-17de-408a-b874-0445c86b69e6",
+      "secretsOfficer": "b86a8fe4-44ce-4948-aee5-eccb2c155cd7",
+      "dataAccessAdmin": "8b54135c-b56d-4d72-a534-26097cfdc8d8",
+      "reader": "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+    },
+    "levelRoles": {
+      "read": [
+        "[variables('roles').secretsUser]",
+        "[variables('roles').reader]"
+      ],
+      "write": [
+        "[variables('roles').secretsOfficer]",
+        "[variables('roles').reader]"
+      ],
+      "manage": [
+        "[variables('roles').secretsOfficer]",
+        "[variables('roles').dataAccessAdmin]",
+        "[variables('roles').reader]"
+      ]
+    },
+    "managers": "[union(parameters('managePrincipalIds'), if(parameters('grantDeployer'), createArray(deployer().objectId), createArray()))]",
+    "assignments": "[union(flatten(createArray(flatten(map(parameters('readPrincipalIds'), lambda('p', map(variables('levelRoles').read, lambda('r', createObject('principalId', lambdaVariables('p'), 'role', lambdaVariables('r'))))))), flatten(map(parameters('writePrincipalIds'), lambda('p', map(variables('levelRoles').write, lambda('r', createObject('principalId', lambdaVariables('p'), 'role', lambdaVariables('r'))))))), flatten(map(variables('managers'), lambda('p', map(variables('levelRoles').manage, lambda('r', createObject('principalId', lambdaVariables('p'), 'role', lambdaVariables('r'))))))))), createArray())]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[parameters('vaultName')]",
+      "location": "[parameters('location')]",
+      "tags": {
+        "kvpwsafe": "container",
+        "kvpwsafe-name": "[parameters('displayName')]"
+      },
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 90,
+        "enablePurgeProtection": "[if(parameters('purgeProtection'), true(), null())]",
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "copy": {
+        "name": "roleAssignments",
+        "count": "[length(variables('assignments'))]"
+      },
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', parameters('vaultName')), variables('assignments')[copyIndex()].principalId, variables('assignments')[copyIndex()].role)]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('assignments')[copyIndex()].role)]",
+        "principalId": "[variables('assignments')[copyIndex()].principalId]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('writeMarker')]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', parameters('vaultName'), 'pws-container')]",
+      "tags": {
+        "kvpwsafe": "container"
+      },
+      "properties": {
+        "contentType": "application/vnd.kvpwsafe.container+json; v=1",
+        "value": "[string(createObject('format', 'kvpwsafe-container', 'v', 1, 'id', parameters('containerId'), 'created', parameters('created'), 'updated', parameters('created'), 'name', parameters('displayName')))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "vaultUri": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.KeyVault/vaults', parameters('vaultName')), '2023-07-01').vaultUri]"
+    },
+    "resourceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]"
+    }
+  }
+}

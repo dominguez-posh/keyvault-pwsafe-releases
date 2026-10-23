@@ -13,3 +13,11 @@ Thumbs.db
 windows/out/
 windows/PasskeyProvider/bin/
 windows/PasskeyProvider/obj/
+
+# Terraform: local state, provider cache and real variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log

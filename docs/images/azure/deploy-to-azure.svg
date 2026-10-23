@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 196 36" width="196" height="36" font-family="Segoe UI, system-ui, sans-serif" role="img" aria-label="Deploy to Azure">
+<rect width="196" height="36" rx="4" fill="#0078d4"/>
+<path d="M14 25 L21 9 h5 l-7 16 z M20 25 l8 -10 l6 10 z" fill="#fff"/>
+<text x="44" y="23" font-size="15" font-weight="600" fill="#fff" text-anchor="start">Deploy to Azure</text>
+</svg>

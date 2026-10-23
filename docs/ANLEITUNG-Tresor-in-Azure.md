@@ -8,7 +8,7 @@ Azure-Rollen. Die Lizenzierung eines Tresors beschreibt eine eigene Anleitung.
 
 1. [Vorab: Was du brauchst](#1-vorab-was-du-brauchst)
 2. [Weg A: Tresor in der App anlegen (empfohlen)](#2-weg-a-tresor-in-der-app-anlegen-empfohlen)
-3. [Weg B: Key Vault im Azure-Portal anlegen und in der App übernehmen](#3-weg-b-key-vault-im-azure-portal-anlegen-und-in-der-app-übernehmen)
+3. [Weg B: Key Vault in Azure anlegen (One-Klick, Portal oder Terraform)](#3-weg-b-key-vault-in-azure-anlegen-one-klick-portal-oder-terraform)
 4. [Berechtigungen](#4-berechtigungen)
 5. [Externe Personen und Kunden-Tenants](#5-externe-personen-und-kunden-tenants)
 6. [Netzwerk und Firewall](#6-netzwerk-und-firewall)
@@ -50,7 +50,7 @@ einem Schritt.
    - **Neuen Key Vault in der Ressourcengruppe anlegen** – dann den **Key-Vault-Namen** prüfen: 3–24 Zeichen,
      Buchstaben, Ziffern und Bindestriche, beginnt mit einem Buchstaben, **weltweit eindeutig**. Der Name lässt sich
      später nicht ändern (der Anzeigename schon).
-   - oder **Vorhandenen leeren Key Vault verwenden** (siehe [Weg B](#3-weg-b-key-vault-im-azure-portal-anlegen-und-in-der-app-übernehmen)).
+   - oder **Vorhandenen leeren Key Vault verwenden** (siehe [Weg B](#3-weg-b-key-vault-in-azure-anlegen-one-klick-portal-oder-terraform)).
 5. **Region** wählen (z. B. „Germany West Central“) und **Löschschutz (Purge Protection)** eingeschaltet lassen.
 6. Unter **Zugriff** die Personen oder – besser – **Entra-Gruppen** eintragen und je eine Stufe wählen:
    **Lesen**, **Bearbeiten** oder **Verwalten** (Bedeutung siehe [Abschnitt 4](#4-berechtigungen)).
@@ -63,38 +63,136 @@ Tresornamen) klicken.
 
 ---
 
-## 3. Weg B: Key Vault im Azure-Portal anlegen und in der App übernehmen
+## 3. Weg B: Key Vault in Azure anlegen (One-Klick, Portal oder Terraform)
 
-Für Fälle, in denen die IT den Key Vault anlegt (z. B. per Richtlinie oder Vorlage).
+Für Fälle, in denen die IT den Key Vault anlegt. Alle drei Varianten führen zum selben Ergebnis wie Weg A:
+RBAC-Key-Vault im Tenant der Subscription, Löschschutz, Tags zum automatischen Finden und Rollen für die gewünschten
+Personen und Gruppen.
 
-### 3.1 Key Vault anlegen
-
-Im [Azure-Portal](https://portal.azure.com) **im Verzeichnis (Tenant) der Subscription**: **Key Vaults** → **Erstellen**.
-
-| Register | Einstellung | Wert |
+| Variante | Für wen | Dauer |
 | --- | --- | --- |
-| Grundlagen | Abonnement, Ressourcengruppe | nach Bedarf |
-| | Key-Vault-Name | weltweit eindeutig, 3–24 Zeichen |
-| | Region | z. B. Germany West Central |
-| | Tarif | **Standard** |
-| | Aufbewahrung gelöschter Tresore | **90 Tage** |
-| | Löschschutz | **Aktivieren** (empfohlen, nicht umkehrbar) |
-| Zugriffskonfiguration | Berechtigungsmodell | **Rollenbasierte Azure-Zugriffssteuerung (Azure RBAC)** – *nicht* „Tresorzugriffsrichtlinie“ |
-| Netzwerk | Öffentlicher Zugriff | **Aktivieren** oder ausgewählte Netzwerke (siehe [Abschnitt 6](#6-netzwerk-und-firewall)) |
-| Tags (optional) | `kvpwsafe` | `container` |
-| | `kvpwsafe-name` | Anzeigename, z. B. `Kunde Contoso` |
+| [3.1 One-Klick](#31-one-klick-deploy-to-azure) | ein einzelner Tresor, ohne Werkzeuge | 3 Minuten |
+| [3.2 Azure-Portal](#32-im-azure-portal-schritt-für-schritt) | wer jeden Schritt selbst sehen will | 10 Minuten |
+| [3.3 Terraform](#33-mit-terraform) | mehrere Tresore, Infrastruktur als Code | einmal einrichten |
 
-> **Achtung, Tenant des Key Vaults:** Wird der Vault über Azure Lighthouse oder per Terraform aus einem anderen Tenant
-> angelegt, trägt Azure oft den *falschen* Tenant in den Vault ein. Dann greifen die Rollen nie. In Terraform
-> `tenant_id` deshalb fest auf den Tenant der Subscription setzen. Die App erkennt den Fall und bietet
-> **Tenant des Key Vaults korrigieren** an.
+Voraussetzung in allen Fällen: **Besitzer** (oder Mitwirkender + Benutzerzugriffsadministrator) auf der
+Ressourcengruppe, angemeldet **im Tenant der Subscription** – bei Kunden als Gast, nicht über Azure Lighthouse.
 
-### 3.2 Rollen vergeben
+### 3.1 One-Klick: Deploy to Azure
 
-Siehe [Abschnitt 4](#4-berechtigungen). Mindestens die Person, die den Tresor in der App einrichtet, braucht
-**Key Vault Secrets Officer** (für den ersten Schritt) und **Leser** auf dem Key Vault.
+[![Deploy to Azure](images/azure/deploy-to-azure.svg)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fdominguez-posh%2Fkeyvault-pwsafe-releases%2Fmain%2Finfra%2Fazuredeploy.json)
 
-### 3.3 In der App übernehmen
+Der Knopf öffnet im Azure-Portal die Vorlage [`infra/azuredeploy.json`](https://github.com/dominguez-posh/keyvault-pwsafe-releases/blob/main/infra/azuredeploy.json)
+(Quelle: [`azuredeploy.bicep`](https://github.com/dominguez-posh/keyvault-pwsafe-releases/blob/main/infra/azuredeploy.bicep)).
+
+1. **Abonnement** und **Ressourcengruppe** wählen (oder neu erstellen), **Region** wie gewünscht.
+2. **Vault Name**: weltweit eindeutig, z. B. `kv-pws-teamops`. **Display Name**: der Name in Keevault, z. B. `Team Ops`.
+3. **Berechtigte** als Objekt-IDs eintragen, als Liste in eckigen Klammern, z. B. `["1a2b3c4d-…", "5e6f7a8b-…"]`:
+   - **Read Principal Ids** – Lesen
+   - **Write Principal Ids** – Bearbeiten
+   - **Manage Principal Ids** – Verwalten (Bearbeiten + Freigeben)
+4. **Überprüfen + erstellen** → **Erstellen**.
+
+Die Objekt-ID steht in **Entra ID → Benutzer** bzw. **Gruppen** → Eintrag öffnen → **Objekt-ID**. Gruppen statt
+einzelner Personen sind am einfachsten zu pflegen. Du selbst bekommst automatisch **Verwalten** (**Grant Deployer**
+= `true`).
+
+Fertig: Der Tresor erscheint bei allen Berechtigten nach der Anmeldung (oder **Aktualisieren**) in Keevault – die
+Vorlage schreibt die Tresor-Kennzeichnung gleich mit. Rollen brauchen in Azure bis zu 10 Minuten.
+
+> **Vorlage nicht ein zweites Mal auf denselben Key Vault anwenden** – oder dabei **Write Marker** auf `false`
+> setzen. Sonst überschreibt sie die Tresor-Kennzeichnung, in der Keevault die Lizenz und das Logo speichert.
+
+### 3.2 Im Azure-Portal, Schritt für Schritt
+
+**Schritt 1 – Key Vault anlegen.** Im [Azure-Portal](https://portal.azure.com) oben **Schlüsseltresore** (englisch
+*Key Vaults*) suchen und **+ Erstellen** wählen.
+
+![Schlüsseltresore öffnen und Erstellen wählen](images/azure/01-schluesseltresore.svg)
+
+**Schritt 2 – Grundlagen.** ① Ressourcengruppe, ② weltweit eindeutiger Name, ③ Region (z. B. Germany West Central),
+Tarif **Standard**, 90 Tage Aufbewahrung und ④ **Bereinigungsschutz aktivieren** (Löschschutz – empfohlen, nicht
+umkehrbar).
+
+![Register Grundlagen](images/azure/02-grundlagen.svg)
+
+**Schritt 3 – Zugriffskonfiguration.** Berechtigungsmodell **Rollenbasierte Zugriffssteuerung in Azure**.
+Mit „Tresorzugriffsrichtlinie“ funktioniert Keevault nicht.
+
+![Register Zugriffskonfiguration](images/azure/03-zugriffskonfiguration.svg)
+
+**Schritt 4 – Netzwerk.** **Öffentlicher Zugriff: Alle Netzwerke** – oder ausgewählte Netzwerke, siehe
+[Abschnitt 6](#6-netzwerk-und-firewall).
+
+**Schritt 5 – Tags.** `kvpwsafe` = `container` und `kvpwsafe-name` = Anzeigename. Damit findet Keevault den Tresor
+selbst. Danach **Überprüfen + erstellen** → **Erstellen**.
+
+![Register Tags](images/azure/04-tags.svg)
+
+**Schritt 6 – Rollen vergeben.** Im neuen Key Vault ① **Zugriffssteuerung (IAM)** → ② **+ Hinzufügen** →
+**Rollenzuweisung hinzufügen** → ③ Rolle suchen:
+
+| Stufe | Rollen |
+| --- | --- |
+| Lesen | Key Vault Secrets User **und** Leser |
+| Bearbeiten | Key Vault Secrets Officer **und** Leser |
+| Verwalten | Key Vault Secrets Officer, Key Vault Data Access Administrator **und** Leser |
+
+![Rollenzuweisung hinzufügen](images/azure/05-rollenzuweisung.svg)
+
+Im Register **Mitglieder** ① **+ Mitglieder auswählen**, ② Gruppen oder Personen (auch Gäste) wählen und
+③ **Überprüfen und zuweisen**. Für jede Rolle einmal wiederholen. Die Person, die den Tresor in Keevault einrichtet,
+braucht mindestens **Bearbeiten**.
+
+![Mitglieder auswählen](images/azure/06-mitglieder.svg)
+
+**Schritt 7 – In Keevault übernehmen**, siehe [3.4](#34-in-keevault-übernehmen-nur-beim-portal-weg).
+
+> **Achtung, Tenant des Key Vaults:** Wird der Vault über Azure Lighthouse oder aus einem anderen Tenant angelegt,
+> trägt Azure oft den *falschen* Tenant in den Vault ein. Dann greifen die Rollen nie. Die App erkennt den Fall und
+> bietet **Tenant des Key Vaults korrigieren** an. One-Klick-Vorlage und Terraform setzen den Tenant immer richtig.
+
+### 3.3 Mit Terraform
+
+Der Code liegt in [`infra/terraform`](https://github.com/dominguez-posh/keyvault-pwsafe-releases/tree/main/infra/terraform).
+Berechtigte gibst du direkt mit Namen an – Terraform sucht sie in Entra ID:
+
+```hcl
+subscription_id       = "<Subscription-ID>"
+tenant_id             = "<Tenant DIESER Subscription>"
+resource_group_name   = "rg-keevault"
+create_resource_group = true
+vault_name            = "kv-pws-teamops"
+display_name          = "Team Ops"
+
+access = {
+  read   = { groups = ["PW Team Ops – Lesen"] }
+  write  = { groups = ["PW Team Ops – Bearbeiten"], users = ["kim.muster@contoso.de"] }
+  manage = { users = ["alex.admin@contoso.de"], guests = ["dienstleister@partner.de"] }
+}
+```
+
+```powershell
+cd infra/terraform
+copy terraform.tfvars.example terraform.tfvars   # anpassen
+az login --tenant <Tenant der Subscription>
+terraform init
+terraform plan
+terraform apply
+```
+
+- `users` = Benutzer per Anmeldename (UPN), `guests` = Gastbenutzer per E-Mail, `groups` = Sicherheitsgruppen per
+  Anzeigename, `object_ids` = weitere Objekt-IDs. Wer `terraform apply` ausführt, bekommt **Verwalten**
+  (`grant_current_user`).
+- Terraform prüft, dass `tenant_id` der Tenant der Subscription ist – so kann der Lighthouse-Fehler nicht passieren.
+- Die Tresor-Kennzeichnung wird einmal geschrieben und danach nie überschrieben; Lizenz und Logo bleiben erhalten.
+- Optional: `allowed_ip_ranges` (Firewall) und `log_analytics_workspace_id` (Zugriffsprotokoll).
+- Als **Gast** darfst du in fremden Verzeichnissen oft keine Benutzer nachschlagen. Dann statt `users`/`groups`
+  die `object_ids` angeben.
+
+### 3.4 In Keevault übernehmen (nur beim Portal-Weg)
+
+Nach One-Klick und Terraform erscheint der Tresor von selbst. Beim Portal-Weg einmal übernehmen:
 
 1. In der Seitenleiste neben **Tresore** auf **+** → **Neuen Key-Vault-Tresor erstellen**.
 2. Abonnement und Ressourcengruppe wählen, unter **Key Vault** → **Vorhandenen leeren Key Vault verwenden**.
@@ -102,7 +200,9 @@ Siehe [Abschnitt 4](#4-berechtigungen). Mindestens die Person, die den Tresor in
 4. Anzeigename und Zugriff wie in Weg A eintragen → **Erstellen**.
 
 Die App schreibt dabei die Tresor-Kennzeichnung (Secret `pws-container`) in den Key Vault. Erst dadurch erscheint er
-bei anderen Personen in der Auswahl **Vorhandenen Key Vault hinzufügen**.
+bei anderen Personen in der Auswahl **Tresor hinzufügen**:
+
+![Tresor in Keevault hinzufügen](images/azure/07-keevault-hinzufuegen.png)
 
 ---
 
