@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- MSIX manifest of the Windows passkey provider. __PUBLISHER__ and __VERSION__ are set by windows/build.ps1. -->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+  IgnorableNamespaces="uap uap3 desktop rescap com">
+
+  <Identity Name="KvPwSafe.PasskeyProvider" Publisher="__PUBLISHER__" Version="__VERSION__" ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Keevault Passkeys</DisplayName>
+    <PublisherDisplayName>Keevault</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.26100.0" MaxVersionTested="10.0.26200.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="de-de" />
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Provider" Executable="KvPwSafe.PasskeyProvider.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Keevault Passkeys"
+        Description="Passkey-Anbieter für Windows (Keevault)"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png"
+        AppListEntry="none" />
+      <Extensions>
+        <!-- Windows activates the plugin authenticator through this COM class. -->
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="KvPwSafe.PasskeyProvider.exe" Arguments="-PluginActivated" DisplayName="Keevault">
+              <com:Class Id="829d1c65-49a0-41a5-8b6b-ae387f64db07" DisplayName="Keevault" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
+        <!-- The desktop app calls the provider through this alias, which runs it with package identity. -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="KvPwSafe.PasskeyProvider.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="kvpwsafe-passkeys.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

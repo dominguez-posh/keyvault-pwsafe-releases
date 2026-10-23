@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Keevault</title>
+  <link rel="stylesheet" href="../styles/app.css">
+  <style>
+    body { min-height: 100vh; display: flex; flex-direction: column; }
+    header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); font-weight: 600; }
+    header img { width: 20px; height: 20px; }
+    main { flex: 1; padding: 18px 18px 12px; display: flex; flex-direction: column; gap: 12px; }
+    .site { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+    .site .icon { color: var(--passkey); }
+    .site b { display: block; overflow-wrap: anywhere; }
+    .choice { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .choice:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .choice .row-text { flex: 1; }
+    .radio { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; }
+    .radio input { margin-top: 3px; }
+    footer { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 18px 16px; border-top: 1px solid var(--border); background: var(--surface); }
+  </style>
+</head>
+<body>
+  <header><img src="../icons/icon32.png" alt="">Keevault</header>
+  <main id="main"><span class="spinner"></span></main>
+  <footer id="footer"></footer>
+  <script type="module" src="prompt.js"></script>
+</body>
+</html>

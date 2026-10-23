@@ -1,0 +1,4 @@
+{
+  "extDescription": { "message": "Passwort- und Passkey-Tresor auf Azure Key Vault oder in lokalen Dateien, mit Anmeldung über Microsoft Entra ID." },
+  "cmdFill": { "message": "Login für diese Seite ausfüllen" }
+}

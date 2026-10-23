@@ -1,0 +1,90 @@
+{
+  "name": "keyvault-pwsafe",
+  "version": "0.5.3",
+  "description": "Passwort- und Passkey-Tresor auf Azure Key Vault mit Entra-ID-Anmeldung: Desktop-App und Browser-Erweiterung",
+  "type": "module",
+  "main": "desktop/main.js",
+  "private": true,
+  "license": "Elastic-2.0",
+  "author": "Lucas Dominguez",
+  "repository": "github:dominguez-posh/keyvault-pwsafe-releases",
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "demo": "node scripts/start.mjs --demo",
+    "smoke": "node scripts/start.mjs --smoke-test && node scripts/start.mjs --demo --smoke-test",
+    "test": "node --test",
+    "check": "node scripts/check.mjs",
+    "ext:key": "node scripts/extension-key.mjs",
+    "ext:pack": "node scripts/pack-extension.mjs",
+    "dist": "electron-builder --win portable",
+    "installer": "pwsh -NoProfile -File scripts/release.ps1"
+  },
+  "dependencies": {
+    "@azure/msal-node": "^7.1.1",
+    "@azure/msal-node-extensions": "^5.5.3"
+  },
+  "devDependencies": {
+    "@simplewebauthn/server": "^14.0.3",
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.kvpwsafe.desktop",
+    "productName": "Keevault",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "extension/core/**/*",
+      "extension/styles/**/*",
+      "package.json"
+    ],
+    "protocols": [
+      {
+        "name": "Keevault",
+        "schemes": [
+          "kvpwsafe"
+        ]
+      }
+    ],
+    "win": {
+      "icon": "desktop/assets/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "include": "installer/installer.nsh",
+      "artifactName": "Keevault-Setup-${version}.exe"
+    },
+    "mac": {
+      "icon": "desktop/assets/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "icon": "desktop/assets/icon.png",
+      "target": [
+        "AppImage"
+      ]
+    },
+    "extraResources": [
+      {
+        "from": "windows/out/KvPwSafe.PasskeyProvider.msix",
+        "to": "provider/KvPwSafe.PasskeyProvider.msix"
+      },
+      {
+        "from": "windows/out/KvPwSafe-Test.cer",
+        "to": "provider/KvPwSafe-Test.cer"
+      },
+      {
+        "from": "installer/setup.ps1",
+        "to": "setup.ps1"
+      }
+    ]
+  }
+}

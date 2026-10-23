@@ -1,0 +1,15 @@
+node_modules/
+dist/
+release/
+# Private signing key of the extension (fixes the extension ID) – keep it, but never commit it.
+extension-key.pem
+*.pem
+# Local tenant configuration for the desktop app
+kvpwsafe.config.json
+.DS_Store
+Thumbs.db
+
+# Windows passkey provider build output
+windows/out/
+windows/PasskeyProvider/bin/
+windows/PasskeyProvider/obj/

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Keevault – Einstellungen</title>
+  <link rel="stylesheet" href="../styles/app.css">
+  <style>
+    body { padding: 24px 16px 48px; }
+    .page { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .page > header { display: flex; align-items: center; gap: 10px; }
+    .page > header img { width: 32px; height: 32px; }
+    section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+    section h2 { font-size: 16px; margin-bottom: 12px; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: -6px; margin-bottom: 12px; }
+    .container-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .container-row:last-child { border-bottom: 0; }
+    .container-row .row-text { flex: 1; min-width: 0; }
+    .switch { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+    .switch input { margin-top: 3px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header><img src="../icons/icon48.png" alt=""><h1>Keevault</h1><span class="spacer"></span><span id="version" class="muted small"></span></header>
+    <div id="content"><span class="spinner"></span></div>
+  </div>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

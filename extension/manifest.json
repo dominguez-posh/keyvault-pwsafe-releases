@@ -1,0 +1,88 @@
+{
+  "manifest_version": 3,
+  "name": "Keevault",
+  "short_name": "Keevault",
+  "version": "0.5.3",
+  "description": "__MSG_extDescription__",
+  "minimum_chrome_version": "116",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Keevault",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "permissions": [
+    "storage",
+    "identity",
+    "idle",
+    "alarms",
+    "offscreen",
+    "clipboardWrite",
+    "clipboardRead",
+    "webNavigation",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://*.localhost/*"
+      ],
+      "js": [
+        "content/webauthn-main.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*/*",
+        "http://*/*"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      }
+    },
+    "fill-login": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L"
+      },
+      "description": "__MSG_cmdFill__"
+    }
+  },
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0xr1/M2lyd514cCeVB7YF6DZ3uDAFkaHestI9D6t4Tj7GAfHJxYxR2ThQ+8KG+a7ydgIqavUPQbELD+PYcpV72BGCqacnhyHuTEJq1BVapPyJ33z5h4T0Ikrk5nU47iPQIR8Hkbw0110CHzuoGF7JnieboVS6HK5J9gs0Ml+fLk3yDhEDNVj7nLJKzqwYIAMz9PoWqvvkMjMdFUJ4KxjKFngiAKMc4k9Zneslr/4lfb96yMAB+HrecT7HZAB1sgtGyUkTU/veG41JBO1Gd+N5+9yXSPVW1iYqVGCReOVA8rxD/IbjrzW6PdKZnoQ6wNRuQU9w8tRvKtXbpHtfihZ3wIDAQAB",
+  "default_locale": "de"
+}

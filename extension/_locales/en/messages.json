@@ -1,0 +1,4 @@
+{
+  "extDescription": { "message": "Password and passkey vault on Azure Key Vault or in local files, with sign-in through Microsoft Entra ID." },
+  "cmdFill": { "message": "Fill login for this page" }
+}

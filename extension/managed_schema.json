@@ -1,0 +1,67 @@
+{
+  "type": "object",
+  "properties": {
+    "tenantId": {
+      "title": "Tenant-ID",
+      "description": "Verzeichnis-ID (Tenant) von Microsoft Entra ID.",
+      "type": "string"
+    },
+    "clientId": {
+      "title": "Client-ID",
+      "description": "Anwendungs-ID der App-Registrierung „Keevault“.",
+      "type": "string"
+    },
+    "containers": {
+      "title": "Container",
+      "description": "Key Vaults, die allen Benutzern angezeigt werden.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "vaultUrl": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "autoLockMinutes": {
+      "title": "Automatisch sperren (Minuten)",
+      "type": "integer"
+    },
+    "unlockPrompt": {
+      "title": "Entsperren: none, select_account oder login",
+      "type": "string"
+    },
+    "passkeys": {
+      "title": "Passkeys aktivieren",
+      "type": "boolean"
+    },
+    "inlineMenu": {
+      "title": "Auswahlmenü in Anmeldefeldern",
+      "type": "boolean"
+    },
+    "savePrompt": {
+      "title": "Speichern anbieten",
+      "type": "boolean"
+    },
+    "copyTotpOnFill": {
+      "title": "Einmalcode nach dem Ausfüllen kopieren",
+      "type": "boolean"
+    },
+    "clipboardSeconds": {
+      "title": "Zwischenablage leeren nach (Sekunden)",
+      "type": "integer"
+    },
+    "language": {
+      "title": "Sprache: auto, de oder en",
+      "type": "string"
+    },
+    "desktopBridge": {
+      "title": "Datei-Container der Desktop-App verwenden",
+      "type": "boolean"
+    }
+  }
+}
