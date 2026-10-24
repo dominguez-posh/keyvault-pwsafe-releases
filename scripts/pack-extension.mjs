@@ -74,6 +74,8 @@ const files = walk(src).map((p) => ({ name: relative(src, p).split(sep).join('/'
 const manifest = JSON.parse(readFileSync(join(src, 'manifest.json'), 'utf8'));
 const storeManifest = { ...manifest };
 delete storeManifest.key;
+// Stores update their extensions themselves and reject a foreign update URL.
+delete storeManifest.update_url;
 const storeFiles = files.map((f) => (f.name === 'manifest.json' ? { name: f.name, data: Buffer.from(`${JSON.stringify(storeManifest, null, 2)}\n`) } : f));
 
 mkdirSync(out, { recursive: true });

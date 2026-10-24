@@ -55,3 +55,10 @@ test('CRX3: signed with the extension key, ID derived from it, update manifest p
   assert.match(xml, new RegExp(`appid='${id}'`));
   assert.match(xml, /version='1\.2\.3'/);
 });
+
+test('self-hosted extension carries the update URL (otherwise Edge/Chrome look for updates in the store and never update)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { EXTENSION_UPDATE } = await import('../scripts/release-urls.mjs');
+  const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.update_url, EXTENSION_UPDATE.manifest);
+});
