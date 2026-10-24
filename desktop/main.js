@@ -901,7 +901,10 @@ const api = {
     const out = new Map();
     for (const s of await vault.azure.listSubscriptions()) {
       if (s.state !== 'Enabled') continue;
-      out.set(s.subscriptionId, { id: s.subscriptionId, name: s.displayName, tenantId: s.tenantId || home, via: !s.tenantId || s.tenantId === home ? 'home' : 'lighthouse' });
+      // Lighthouse: the subscription belongs to the customer's tenant but is reached with tokens of the home tenant –
+      // so ARM calls (resource groups, locations) use the home tenant; customerTenantId only for display.
+      const lighthouse = !!s.tenantId && s.tenantId !== home;
+      out.set(s.subscriptionId, { id: s.subscriptionId, name: s.displayName, tenantId: home, customerTenantId: lighthouse ? s.tenantId : null, via: lighthouse ? 'lighthouse' : 'home' });
     }
     const tenants = await vault.azure.listTenants().catch(() => []);
     await mapLimit(tenants.filter((x) => x.tenantId !== home), 3, async (x) => {

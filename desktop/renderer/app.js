@@ -4,7 +4,7 @@ import { DEFAULT_OPTIONS } from '../../extension/core/generator.js';
 import { unlockPanel, manageDialog, enableDialog } from '../../extension/core/ui-protect.js';
 import { importDialog } from '../../extension/core/ui-import.js';
 import { ACCESS_LEVELS } from '../../extension/core/azure.js';
-import { setLanguage, t, LANGUAGES } from '../../extension/core/i18n.js';
+import { setLanguage, t, LANGUAGES, getLanguage, locale } from '../../extension/core/i18n.js';
 import { pickImage, LOGO_MAX_CHARS } from '../../extension/core/image.js';
 import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
 import { MAX_FOLDER_DEPTH } from '../../extension/core/model.js';
@@ -83,6 +83,7 @@ let reloadTimer = null;
 const containerName = (id) => st?.containers.find((c) => c.id === id)?.name || '';
 const copy = (text, label = t('Wert')) => call('copy', text).then(() => toast(t('{label} kopiert', { label })));
 const openUrl = (url) => call('openExternal', url);
+const formatDate = (iso) => new Date(iso).toLocaleDateString(locale(), { day: '2-digit', month: '2-digit', year: 'numeric' });
 const field = (label, input, hint) => h('div', { class: 'field' }, h('label', {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
 const notice = (text, kind = 'error') => h('div', { class: `notice ${kind}` }, text);
 const writable = (c) => c.access?.write !== false && !c.error && !c.locked;
@@ -798,17 +799,27 @@ async function licenseDialog(c) {
     return;
   }
   const key = h('textarea', { rows: 3, placeholder: 'KVPL-…', spellcheck: 'false' });
-  const status = st0.licensed
+  const permanent = st0.licensed && !st0.expires;
+  const status = permanent
     ? notice(t('Lizenziert{to} – unbegrenzt viele Einträge.', { to: st0.to ? ` (${st0.to})` : '' }), 'info')
-    : notice(t('Ohne Lizenz: {count} von {limit} Einträgen genutzt.', { count: st0.count, limit: st0.limit }), st0.count >= st0.limit ? 'warn' : 'info');
+    : st0.licensed
+      ? notice(t('Befristete Lizenz{to} bis {date} – danach gilt wieder die Grenze von {limit} Einträgen.', { to: st0.to ? ` (${st0.to})` : '', date: formatDate(st0.expires), limit: st0.limit }), 'info')
+      : notice(t('Ohne Lizenz: {count} von {limit} Einträgen genutzt.', { count: st0.count, limit: st0.limit }), st0.count >= st0.limit ? 'warn' : 'info');
+  // Website with the request code filled in: order form and free trial (in the app's language).
+  const site = getLanguage() === 'en' ? 'https://keevault.de/en/' : 'https://keevault.de/';
+  const query = `?code=${encodeURIComponent(st0.code)}&vault=${encodeURIComponent(st0.vault.split('.')[0])}`;
+  const links = h('div', { class: 'license-links' },
+    h('button', { type: 'button', class: 'btn primary', onclick: () => openUrl(`${site}${getLanguage() === 'en' ? 'license.html' : 'lizenz.html'}${query}`) }, icon('external', 14), t('Lizenz bestellen')),
+    st0.licensed ? null : h('button', { type: 'button', class: 'btn', onclick: () => openUrl(`${site}${getLanguage() === 'en' ? 'trial.html' : 'testlizenz.html'}${query}`) }, icon('external', 14), t('3 Monate kostenlos testen')));
   modal(t('Lizenz für „{name}“', { name: c.name }), h('div', {},
     status,
     st0.reason ? notice(st0.reason) : null,
-    st0.licensed ? null : h('div', {},
-      h('p', { class: 'muted' }, t('Schicke diese Lizenzanfrage an den Anbieter. Du bekommst einen Lizenzschlüssel, der genau für diesen Tresor gilt – dauerhaft.')),
+    permanent ? null : h('div', {},
+      h('p', { class: 'muted' }, t('Bestelle eine Lizenz auf der Website – der Anfragecode ist schon eingetragen. Du bekommst einen Lizenzschlüssel, der genau für diesen Tresor gilt.')),
+      links,
       h('div', { class: 'field-row' }, h('code', { class: 'license-code' }, st0.code), iconButton('copy', t('Kopieren'), () => copy(`${st0.code}  (${st0.vault})`, t('Lizenzanfrage')))),
       h('p', { class: 'muted small' }, t('Tresor: {vault}', { vault: st0.vault })),
-      field(t('Lizenzschlüssel'), key))), st0.licensed ? [{ label: t('Schließen') }] : [
+      field(t('Lizenzschlüssel'), key))), permanent ? [{ label: t('Schließen') }] : [
     { label: t('Abbrechen') },
     { label: t('Aktivieren'), primary: true, onClick: async () => {
       await call('setLicense', c.id, key.value);
@@ -1295,7 +1306,10 @@ function licenseBadge(c) {
   const draw = (l) => slot.replaceChildren(l && !l.licensed ? h('button', {
     type: 'button', class: 'badge warn badge-button', title: t('Ohne Lizenz: {count} von {limit} Einträgen genutzt.', { count: l.count, limit: l.limit }),
     onclick: () => licenseDialog(c),
-  }, t('Demo')) : '');
+  }, t('Demo')) : l?.expires ? h('button', {
+    type: 'button', class: 'badge badge-button', title: t('Befristete Lizenz bis {date}', { date: formatDate(l.expires) }),
+    onclick: () => licenseDialog(c),
+  }, t('Test bis {date}', { date: formatDate(l.expires) })) : '');
   if (c.error || c.locked) return slot;
   if (licenses.has(c.id)) draw(licenses.get(c.id));
   else call('licenseState', c.id).then((l) => { licenses.set(c.id, l); draw(l); }, () => {});

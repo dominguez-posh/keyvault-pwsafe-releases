@@ -931,6 +931,16 @@ export default {
   '„{title}“ verschoben: {from} → {to}': '“{title}” moved: {from} → {to}',
   '„{title}“ wiederhergestellt': '“{title}” restored',
 
+  // Limited licenses, order links
+  'Lizenz bestellen': 'Order a license',
+  '3 Monate kostenlos testen': 'Try free for 3 months',
+  'Bestelle eine Lizenz auf der Website – der Anfragecode ist schon eingetragen. Du bekommst einen Lizenzschlüssel, der genau für diesen Tresor gilt.': 'Order a license on the website – the request code is already filled in. You receive a license key that is valid for exactly this vault.',
+  'Befristete Lizenz{to} bis {date} – danach gilt wieder die Grenze von {limit} Einträgen.': 'Limited license{to} until {date} – afterwards the limit of {limit} entries applies again.',
+  'Befristete Lizenz bis {date}': 'Limited license until {date}',
+  'Test bis {date}': 'Trial until {date}',
+  'Die Lizenz ist am {date} abgelaufen': 'The license expired on {date}',
+  'Der Tresor hat bereits eine dauerhafte Lizenz': 'The vault already has a permanent license',
+
   // Vault settings (admins), export, folder depth
   'Tresor-Einstellungen': 'Vault settings',
   'Tresor-Einstellungen (Admin)': 'Vault settings (admin)',

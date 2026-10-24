@@ -109,3 +109,4 @@ body { overflow: hidden; }
 /* Vault settings dialog */
 .policy-list { display: grid; gap: 10px; margin: 14px 0; }
 .policy-row { align-items: flex-start; }
+.license-links { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 14px; }

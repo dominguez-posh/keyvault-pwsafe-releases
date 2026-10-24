@@ -79,15 +79,26 @@ export async function verifyLicense(key, vaultId, publicKeys = LICENSE_PUBLIC_KE
   } catch {
     return { valid: false, reason: t('Der Lizenzschlüssel ist nicht echt') };
   }
-  if (payload.v !== 1 || payload.code !== (await requestCode(vaultId))) {
+  // v1: permanent license. v2: limited license with "expires" (e.g. a trial) – a new version number on purpose,
+  // so that app versions before 0.5.7, which know no expiry, reject it instead of treating it as permanent.
+  if (![1, 2].includes(payload.v) || payload.code !== (await requestCode(vaultId))) {
     return { valid: false, reason: t('Der Lizenzschlüssel gehört zu einem anderen Tresor ({vault})', { vault: payload.vault || '?' }), payload };
+  }
+  if (payload.v === 2) {
+    const end = Date.parse(payload.expires);
+    if (!Number.isFinite(end)) return { valid: false, reason: t('Der Lizenzschlüssel ist nicht echt'), payload };
+    if (end < Date.now()) {
+      return { valid: false, expired: true, reason: t('Die Lizenz ist am {date} abgelaufen', { date: new Date(end).toLocaleDateString() }), payload };
+    }
   }
   return { valid: true, payload };
 }
 
-/** License tool side: signs a license for a request code. privateKey: CryptoKey (Ed25519). */
-export async function issueLicense({ privateKey, code, vault = '', to = '' }) {
-  const payload = { v: 1, code: normalizeRequestCode(code), vault, issued: new Date().toISOString(), to };
+/** License tool side: signs a license for a request code. privateKey: CryptoKey (Ed25519). expires: limited license. */
+export async function issueLicense({ privateKey, code, vault = '', to = '', expires = '', trial = false }) {
+  const payload = expires
+    ? { v: 2, code: normalizeRequestCode(code), vault, issued: new Date().toISOString(), to, expires: new Date(expires).toISOString(), ...(trial ? { trial: true } : {}) }
+    : { v: 1, code: normalizeRequestCode(code), vault, issued: new Date().toISOString(), to };
   const data = utf8(JSON.stringify(payload));
   const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, privateKey, data));
   return `KVPL-${b64uEncode(data)}.${b64uEncode(sig)}`;

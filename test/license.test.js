@@ -66,3 +66,21 @@ test('license: without license a vault holds FREE_LIMIT entries; edits stay poss
   assert.equal(state.count, FREE_LIMIT);
   assert.equal(state.code, await requestCode(cid));
 });
+
+test('license: limited licenses (v2) are valid until their end date and are rejected afterwards', async () => {
+  const code = await requestCode('kv-trial.vault.azure.net');
+  const { signing, pub } = await testKeys();
+  const day = 86_400_000;
+  const trial = await issueLicense({ privateKey: signing, code, vault: 'kv-trial', to: 'Test', expires: Date.now() + 90 * day, trial: true });
+  const ok = await verifyLicense(trial, 'kv-trial.vault.azure.net', pub);
+  assert.equal(ok.valid, true);
+  assert.equal(ok.payload.v, 2);
+  assert.equal(ok.payload.trial, true);
+  const old = await issueLicense({ privateKey: signing, code, vault: 'kv-trial', to: 'Test', expires: Date.now() - day });
+  const expired = await verifyLicense(old, 'kv-trial.vault.azure.net', pub);
+  assert.equal(expired.valid, false);
+  assert.equal(expired.expired, true);
+  assert.match(expired.reason, /abgelaufen/);
+  const permanent = await issueLicense({ privateKey: signing, code, vault: 'kv-trial', to: 'Test' });
+  assert.equal(JSON.parse(Buffer.from(permanent.slice(5).split('.')[0], 'base64url')).v, 1, 'permanent licenses keep format v1 (old apps)');
+});

@@ -55,6 +55,13 @@ const networkClient = {
 const NOT_IN_TENANT = /AADSTS(50020|90072|50034)\b/;
 
 /** Another tenant (customer) needs an interactive sign-in first, e.g. its own MFA policy. */
+/**
+ * "The user has to sign in interactively". MSAL Node reports it as InteractionRequiredAuthError, the Windows broker
+ * (WAM) as a native error with errorCode/message "interaction_required" (e.g. MFA or Conditional Access in a tenant).
+ */
+export const isInteractionRequired = (e) => e instanceof InteractionRequiredAuthError
+  || /interaction_?required|consent_required|login_required/i.test(`${e?.errorCode || ''} ${e?.message || ''}`);
+
 export class TenantSignInError extends Error {
   constructor(tenantId) {
     super(t('Für den Tenant {tenant} ist eine Anmeldung nötig (z. B. MFA des Kunden).', { tenant: tenantId }));
@@ -222,7 +229,7 @@ export class Auth {
       const r = await this.pca().acquireTokenSilent({ account: this.account, scopes: [KV_SCOPE] });
       this.account = r.account;
     } catch (e) {
-      if (!(e instanceof InteractionRequiredAuthError)) throw e;
+      if (!isInteractionRequired(e)) throw e;
       const r = await this.interactive([KV_SCOPE], { loginHint: this.account.username });
       this.account = r.account;
     }
@@ -268,7 +275,7 @@ export class Auth {
       return r;
     } catch (e) {
       if (tenantId && NOT_IN_TENANT.test(String(e.errorMessage || e.message))) throw notInTenant(tenantId);
-      if (!(e instanceof InteractionRequiredAuthError) || silentOnly) throw e;
+      if (!isInteractionRequired(e) || silentOnly) throw e;
       if (tenantId && tenantId !== this.account.tenantId) throw new TenantSignInError(tenantId);
       try {
         return await this.interactive([scope], { loginHint: this.account.username, authority });

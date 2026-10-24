@@ -730,6 +730,8 @@ export class VaultSession {
     return {
       licensed: check.valid, code: await requestCode(c.id), vault: c.id, count, limit: FREE_LIMIT,
       to: check.payload?.to || '', issued: check.payload?.issued || '', reason: key && !check.valid ? check.reason : null,
+      // Limited licenses (v2): end date, trial flag, already expired.
+      expires: check.payload?.v === 2 ? check.payload.expires : '', trial: !!check.payload?.trial, expired: !!check.expired,
     };
   }
 
@@ -737,6 +739,11 @@ export class VaultSession {
     const c = await this.container(containerId);
     const check = await verifyLicense(key, c.id);
     if (!check.valid) throw new Error(check.reason);
+    // A trial must not replace a permanent license that is still valid.
+    if (check.payload.v === 2) {
+      const current = await this.licenseState(containerId);
+      if (current.licensed && !current.expires) throw new Error(t('Der Tresor hat bereits eine dauerhafte Lizenz'));
+    }
     if (c.kind === 'keyvault') await this.writeContainerMeta(this.kv(c), { license: String(key).replace(/\s+/g, '') });
     else await this.adapter(c).setLicense(c.id, String(key).replace(/\s+/g, ''));
     return this.licenseState(containerId);
