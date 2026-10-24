@@ -13,6 +13,7 @@ import { hashPin, verifyPin, PinGuard, MIN_PIN_LENGTH } from './pin.js';
 import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.js';
 import { totpCode } from '../extension/core/totp.js';
 import { BrowserBridge, launchPath, registerNativeHost, unregisterNativeHost } from './bridge.js';
+import { Updater, UPDATE_MODES } from './updater.js';
 import { VaultSession, MemoryStore, POLICY_LABELS } from '../extension/core/session.js';
 import { buildInvite, parseInvite, ROLES } from '../extension/core/azure.js';
 import { vaultHost, KV_SCOPE } from '../extension/core/keyvault.js';
@@ -297,6 +298,7 @@ async function serve(rel) {
 let passkeyWindow = null;
 let ceremony = null; // { id, request, resolve, reject, timer }
 let quitting = false;
+let updater = null;
 const autoTypeCalls = [];
 let selectedKey = null;
 let windowStateBeforeRequest = null;
@@ -653,6 +655,7 @@ const api = {
       containers: out,
       settings,
       version: app.getVersion(),
+      updateKind: updater?.kind || 'dev',
       passkeyAvailable: process.platform === 'win32' || !!demo,
       platform: process.platform,
     };
@@ -662,6 +665,11 @@ const api = {
     const s = config.update(patch);
     applyLanguage();
     if (before.autoTypeKeys !== s.autoTypeKeys) applyShortcuts();
+    if (before.updateMode !== s.updateMode) {
+      if (!UPDATE_MODES.includes(s.updateMode)) config.update({ updateMode: 'off' });
+      updater?.applyMode();
+      if (config.get().updateMode !== 'off') updater?.background();
+    }
     if (before.browserIntegration !== s.browserIntegration || before.windowsProvider !== s.windowsProvider
       || JSON.stringify(before.extensionIds) !== JSON.stringify(s.extensionIds)) await applyBrowserIntegration();
     return s;
@@ -1406,6 +1414,9 @@ const api = {
     return r;
   },
   openWindowsPasskeySettings: () => shell.openExternal('ms-settings:savedpasskeys'),
+  updateState: () => updater?.state || null,
+  checkForUpdates: () => updater.check(),
+  installUpdate: () => updater.installNow(),
 
 };
 
@@ -1448,6 +1459,10 @@ function createTray() {
       send({ type: 'generator' });
     } },
     { label: t('Sperren'), enabled: opened, click: () => lockNow() },
+    { label: t('Nach Updates suchen …'), click: () => {
+      showWindow();
+      send({ type: 'checkUpdates' });
+    } },
     { type: 'separator' },
     { label: t('Beenden'), click: () => { quitting = true; app.quit(); } },
   ]);
@@ -1575,6 +1590,26 @@ app.whenReady().then(async () => {
 
   createWindow();
   if (!smokeTest) createTray();
+  updater = new Updater({
+    mode: () => (smokeTest ? 'off' : config.get().updateMode),
+    onState: (state) => send({ type: 'update', state }),
+    ask: async (version) => {
+      const r = await dialog.showMessageBox(win?.isVisible() ? win : null, {
+        type: 'question',
+        buttons: [t('Jetzt installieren'), t('Später')],
+        defaultId: 0,
+        cancelId: 1,
+        message: t('Keevault {version} ist bereit.', { version }),
+        detail: t('Das Update wurde im Hintergrund heruntergeladen. Jetzt installieren? Keevault startet danach neu.'),
+      });
+      return r.response === 0;
+    },
+    // Nobody working in the app: locked, or only in the tray.
+    isIdle: () => !opened || !win?.isVisible(),
+    beforeInstall: () => { quitting = true; },
+    fetch: (url, init) => net.fetch(url, init),
+  });
+  updater.start();
   if (smokeTest) runSmokeTest();
 });
 

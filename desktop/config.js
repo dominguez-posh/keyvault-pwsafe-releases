@@ -31,8 +31,10 @@ const DEFAULTS = {
   fileEmail: '',
   approvedBrowsers: [],
   extensionIds: ['pbkjijhihclckeeefbepoedgdmajioip'],
+  // Updates: off (default, only "Check for updates"), auto (keep up to date), ask (download, ask at next start).
+  updateMode: 'off',
 };
-const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin'];
+const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode'];
 
 function readJson(file) {
   try {

@@ -7,7 +7,7 @@ Keevault verwaltet Passwörter und Passkeys – Sicherheitshinweise nehmen wir e
 Bitte **nicht** als öffentliches Issue melden, sondern vertraulich:
 
 - über GitHub: Reiter **Security → Report a vulnerability** (private Meldung), oder
-- per E-Mail an **lizenz@keevault.de** mit dem Betreff „Sicherheit“.
+- per E-Mail an **info@keevault.de** mit dem Betreff „Sicherheit“.
 
 Hilfreich sind: betroffene Version (in der App unten rechts), Schritte zum Nachvollziehen und die mögliche Auswirkung.
 Du bekommst innerhalb von 5 Werktagen eine Rückmeldung. Wir veröffentlichen eine Lücke erst, wenn ein Update

@@ -125,6 +125,10 @@ window.pwsafe.onEvent((ev) => {
     checkWindowsRequests();
   } else if (ev.type === 'generator') {
     generatorDialog();
+  } else if (ev.type === 'update') {
+    for (const fn of updateListeners) fn(ev.state);
+  } else if (ev.type === 'checkUpdates') {
+    updateDialog();
   }
 });
 
@@ -219,8 +223,9 @@ async function render() {
   document.body.dataset.ready = '1';
   // Installed version, always visible at the bottom right.
   let versionTag = document.getElementById('app-version');
-  if (!versionTag) document.body.append(versionTag = h('div', { id: 'app-version', 'aria-label': t('Version') }));
+  if (!versionTag) document.body.append(versionTag = h('button', { id: 'app-version', type: 'button', onclick: () => updateDialog() }));
   versionTag.textContent = `Keevault ${st.version}`;
+  versionTag.title = t('Nach Updates suchen …');
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
@@ -809,13 +814,13 @@ async function licenseDialog(c) {
   const site = getLanguage() === 'en' ? 'https://keevault.de/en/' : 'https://keevault.de/';
   const query = `?code=${encodeURIComponent(st0.code)}&vault=${encodeURIComponent(st0.vault.split('.')[0])}`;
   const links = h('div', { class: 'license-links' },
-    h('button', { type: 'button', class: 'btn primary', onclick: () => openUrl(`${site}${getLanguage() === 'en' ? 'license.html' : 'lizenz.html'}${query}`) }, icon('external', 14), t('Lizenz bestellen')),
+    h('button', { type: 'button', class: 'btn primary', onclick: () => openUrl(`${site}${getLanguage() === 'en' ? 'license.html' : 'lizenz.html'}${query}`) }, icon('external', 14), t('Lizenz anfragen')),
     st0.licensed ? null : h('button', { type: 'button', class: 'btn', onclick: () => openUrl(`${site}${getLanguage() === 'en' ? 'trial.html' : 'testlizenz.html'}${query}`) }, icon('external', 14), t('3 Monate kostenlos testen')));
   modal(t('Lizenz für „{name}“', { name: c.name }), h('div', {},
     status,
     st0.reason ? notice(st0.reason) : null,
     permanent ? null : h('div', {},
-      h('p', { class: 'muted' }, t('Bestelle eine Lizenz auf der Website – der Anfragecode ist schon eingetragen. Du bekommst einen Lizenzschlüssel, der genau für diesen Tresor gilt.')),
+      h('p', { class: 'muted' }, t('Frag auf der Website unverbindlich eine Lizenz an – der Anfragecode ist schon eingetragen. Wir melden uns persönlich; der Lizenzschlüssel gilt genau für diesen Tresor.')),
       links,
       h('div', { class: 'field-row' }, h('code', { class: 'license-code' }, st0.code), iconButton('copy', t('Kopieren'), () => copy(`${st0.code}  (${st0.vault})`, t('Lizenzanfrage')))),
       h('p', { class: 'muted small' }, t('Tresor: {vault}', { vault: st0.vault })),
@@ -2287,6 +2292,54 @@ function openImport(container) {
   });
 }
 
+// ---------------------------------------------------------------- updates
+
+const updateListeners = new Set();
+
+/** "Check for updates" (version label, settings, tray): result, download progress, install. */
+async function updateDialog() {
+  const body = h('div', {});
+  const { close } = modal(t('Updates'), body, [{ label: t('Schließen') }]);
+  const draw = (s) => {
+    if (!s) return;
+    const managed = s.kind === 'msi' || s.kind === 'msix';
+    if (s.status === 'checking') return body.replaceChildren(h('p', {}, h('span', { class: 'spinner' }), ' ', t('Suche nach Updates …')));
+    if (s.status === 'error') return body.replaceChildren(notice(t('Update fehlgeschlagen: {message}', { message: s.error })));
+    if (s.status === 'downloading') {
+      return body.replaceChildren(h('p', {}, t('Version {version} wird heruntergeladen …', { version: s.version || '' })),
+        h('progress', { class: 'update-progress', max: 100, value: s.progress || 0 }));
+    }
+    if (s.status === 'none') return body.replaceChildren(h('p', {}, t('Keevault {version} ist aktuell.', { version: s.current })));
+    if (s.status === 'available' || s.status === 'ready') {
+      return body.replaceChildren(
+        h('p', {}, t('Version {version} ist verfügbar (installiert: {current}).', { version: s.version, current: s.current })),
+        managed
+          ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
+          : h('p', { class: 'muted small' }, t('Keevault lädt das Update von keevault.de, installiert es und startet neu. Deine Daten bleiben unverändert.')),
+        managed
+          ? h('button', { type: 'button', class: 'btn', onclick: () => openUrl('https://keevault.de/download.html') }, icon('external', 14), t('Download-Seite öffnen'))
+          : h('button', { type: 'button', class: 'btn primary', onclick: async (e) => {
+            e.currentTarget.disabled = true;
+            try {
+              await call('installUpdate');
+            } catch (err) {
+              toast(err.message, 'error');
+            }
+          } }, icon('download', 14), s.status === 'ready' ? t('Jetzt installieren und neu starten') : t('Herunterladen und installieren')));
+    }
+    return undefined;
+  };
+  updateListeners.add(draw);
+  body.closest('dialog')?.addEventListener('close', () => updateListeners.delete(draw));
+  draw({ status: 'checking' });
+  try {
+    draw(await call('checkForUpdates'));
+  } catch (e) {
+    draw({ status: 'error', error: e.message });
+  }
+  return close;
+}
+
 function settingsDialog() {
   const s = st.settings;
   const enforced = (k) => s.enforced.includes(k);
@@ -2331,6 +2384,9 @@ function settingsDialog() {
   const autoTypeKeys = h('select', {},
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
+  const updateMode = h('select', { disabled: enforced('updateMode') },
+    ...[['off', 'Aus – nur manuell suchen (Standard)'], ['auto', 'Automatisch aktuell halten'], ['ask', 'Im Hintergrund laden, beim Start fragen']]
+      .map(([v, l]) => h('option', { value: v, selected: (s.updateMode || 'off') === v }, t(l))));
   const machine = h('div', { class: 'muted small' });
   const drawMachine = (x) => {
     if (!x?.supported) return machine.replaceChildren();
@@ -2378,6 +2434,11 @@ function settingsDialog() {
     h('p', { class: 'muted small' }, st.pinSet ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.') : t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')),
     st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
       : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
+    h('h3', {}, t('Updates')),
+    st.updateKind === 'msi' || st.updateKind === 'msix'
+      ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
+      : field(t('Automatische Updates'), updateMode, t('„Automatisch“ installiert neue Versionen, sobald die App gesperrt ist oder beendet wird. Die Updates kommen von keevault.de.')),
+    h('button', { type: 'button', class: 'btn small', onclick: () => updateDialog() }, icon('download', 14), t('Jetzt nach Updates suchen')),
     h('h3', {}, t('Einrichtung dieses Geräts')),
     machine,
     h('div', { class: 'actions' },
@@ -2410,6 +2471,7 @@ function settingsDialog() {
         windowsProvider: windowsProvider.checked,
         autoTypeKeys: autoTypeKeys.value,
         signInWindows: signInWindows.checked,
+        updateMode: updateMode.value,
         extensionIds: extensionIds.value.split(/[\s,;]+/).filter((x) => /^[a-p]{32}$/.test(x)),
       });
       if (changedTenant && st.signedIn) await call('switchTenant', tenant.value.trim());
