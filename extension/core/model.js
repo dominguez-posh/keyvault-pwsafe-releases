@@ -11,7 +11,9 @@ export const ITEM_TAG = 'kvpwsafe';
 export const ITEM_PREFIX = 'pws-';
 // Key Vault allows 25 KB per secret value; keep headroom.
 export const MAX_ITEM_BYTES = 24 * 1024;
-export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz' };
+export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat' };
+// Certificate files live inside the item (base64), so they must fit into one secret together with the rest.
+export const CERT_MAX_BYTES = 16 * 1024;
 
 export class ItemTooLargeError extends Error {
   constructor(size) {
@@ -71,10 +73,36 @@ export function normalizeItem(input = {}) {
     folder: normalizeFolder(input.folder),
     favorite: !!input.favorite,
     icon: isImageDataUrl(input.icon, ICON_MAX_CHARS) ? input.icon : '',
+    card: normalizeCard(input.card),
+    cert: normalizeCert(input.cert),
     created: input.created || '',
     createdBy: input.createdBy || '',
   };
 }
+
+function normalizeCard(c = {}) {
+  return {
+    holder: str(c?.holder).trim(),
+    number: str(c?.number).replace(/\D/g, ''),
+    expiry: str(c?.expiry).trim(),
+    cvc: str(c?.cvc).trim(),
+    pin: str(c?.pin).trim(),
+  };
+}
+
+function normalizeCert(c = {}) {
+  const data = /^[A-Za-z0-9+/=]*$/.test(str(c?.data)) ? str(c?.data) : '';
+  return { fileName: str(c?.fileName).trim(), data, size: data ? Math.floor((data.length * 3) / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0) : 0 };
+}
+
+/** Card number in groups of four for display ("4111 1111 1111 1111"). */
+export const formatCardNumber = (number) => str(number).replace(/\D/g, '').replace(/(\d{4})(?=\d)/g, '$1 ');
+
+/** "•••• 1234" – the only part of a card number that appears in lists. */
+export const cardLast4 = (number) => {
+  const digits = str(number).replace(/\D/g, '');
+  return digits.length >= 4 ? `•••• ${digits.slice(-4)}` : '';
+};
 
 export function itemHosts(item) {
   return [...new Set((item.urls || []).map(hostFromUrl).filter(Boolean))];
@@ -99,6 +127,8 @@ export function serializeItem(input, actor = '') {
     notes: item.notes,
     fields: item.fields,
     passkeys: item.passkeys,
+    card: item.type === 'card' ? item.card : undefined,
+    cert: item.type === 'certificate' && item.cert.data ? { fileName: item.cert.fileName, data: item.cert.data } : undefined,
     folder: item.folder,
     favorite: item.favorite,
     icon: item.icon || undefined,
@@ -116,7 +146,9 @@ export function serializeItem(input, actor = '') {
     t: item.type,
     n: truncate(item.title, 256),
   };
-  if (item.username) tags.u = truncate(item.username, 256);
+  // Lists show the user name – for cards the last four digits, for certificates the file name.
+  const sub = item.type === 'card' ? cardLast4(item.card.number) || item.card.holder : item.type === 'certificate' ? item.cert.fileName : item.username;
+  if (sub) tags.u = truncate(sub, 256);
   const hosts = itemHosts(item);
   if (hosts.length) tags.h = truncate(hosts.join(' '), 256);
   const rpIds = itemRpIds(item);

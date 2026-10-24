@@ -23,6 +23,7 @@ import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
 import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
+import { CERT_MAX_BYTES } from '../extension/core/model.js';
 import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -1237,6 +1238,22 @@ const api = {
   },
   // No export: entries never leave the app as a plain file (only encrypted owner backups, see createBackup). The only file the
   // app writes on request is the built-in import sample – never content passed in by the renderer.
+  /** The certificate file of one entry, on explicit request (Save as…) – the file itself is what the entry holds. */
+  async saveCertificate(name, data) {
+    requireOpen();
+    const bytes = Buffer.from(String(data || ''), 'base64');
+    if (!bytes.length || bytes.length > CERT_MAX_BYTES) throw new Error(t('Ungültige Zertifikatsdatei'));
+    const safeName = String(name || 'zertifikat.pfx').replace(/[\\/:*?"<>|]+/g, '_');
+    const ext = (safeName.match(/\.([a-z0-9]+)$/i) || [])[1];
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: t('Zertifikat speichern'),
+      defaultPath: safeName,
+      filters: ext ? [{ name: t('Zertifikat'), extensions: [ext] }] : [],
+    });
+    if (canceled || !filePath) return null;
+    await fs.writeFile(filePath, bytes);
+    return filePath;
+  },
   async saveSampleCsv() {
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
       defaultPath: 'kvpwsafe-import-sample.csv', filters: [{ name: 'CSV', extensions: ['csv'] }],
@@ -1681,6 +1698,37 @@ function runSmokeTest() {
       const view = process.argv.find((a) => a.startsWith('--view='))?.slice('--view='.length);
       if (view === 'edit') await js('document.querySelector(".detail-pane .btn.primary")?.click()');
       if (view === 'detail') await js('document.querySelector(".list-pane .row-item:not(.folder-row)")?.click()');
+      if (view === 'newcard' || view === 'newcert') {
+        await js('document.querySelector(".list-head .btn.primary")?.click()');
+        await sleep(300);
+        await js(`document.querySelector('.context-menu [data-action="${view === 'newcard' ? 'new-card' : 'new-certificate'}"]')?.click()`);
+      }
+      if (view === 'cardcert') {
+        // Create a credit card and a certificate through the form, then check their detail views.
+        const create = async (action, fill, expect) => {
+          await js('document.querySelector(".list-head .btn.primary")?.click()');
+          await sleep(300);
+          await js(`document.querySelector('.context-menu [data-action="${action}"]')?.click()`);
+          await sleep(400);
+          await js(fill);
+          await sleep(300);
+          await js('document.querySelector(".item-form")?.requestSubmit()');
+          await sleep(1500);
+          const text = await js('document.querySelector(".detail-pane")?.innerText || ""');
+          for (const e of expect) if (!text.includes(e)) errors.push(`${action}: "${e}" missing in detail view`);
+        };
+        await create('new-card', `(() => { const f = document.querySelector(".item-form");
+          f.title.value = "Firmen-Visa"; f.cardHolder.value = "Alex Demo"; f.cardNumber.value = "4111 1111 1111 1111";
+          f.cardExpiry.value = "12/28"; f.cardCvc.value = "123"; f.cardPin.value = "9876"; return true; })()`, ['Kartennummer', '•••• •••• •••• 1111', 'Alex Demo', '12/28']);
+        await create('new-certificate', `(() => { const f = document.querySelector(".item-form");
+          f.title.value = "VPN-Zertifikat"; f.certPassword.value = "geheim";
+          const dt = new DataTransfer(); dt.items.add(new File([new Uint8Array(2048).fill(7)], "vpn.pfx"));
+          const input = f.querySelector('input[type=file]'); input.files = dt.files; input.dispatchEvent(new Event('change'));
+          return true; })()`, ['Zertifikat', 'vpn.pfx', '2 KB', 'Zertifikats-Passwort']);
+      }
+      // Resizable panes: two drag handles, widths applied as CSS variables.
+      const panes = await js('(() => { const s = document.querySelector(".shell"); return JSON.stringify({ handles: document.querySelectorAll(".shell > .splitter").length, sidebar: s?.style.getPropertyValue("--sidebar-w"), list: s?.style.getPropertyValue("--list-w") }); })()');
+      if (!/"handles":2,"sidebar":"\d+px","list":"\d+px"/.test(panes)) errors.push(`resizable panes: ${panes}`);
       if (view === 'small') {
         win.setSize(1000, 560);
         await sleep(300);

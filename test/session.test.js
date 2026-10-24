@@ -304,3 +304,24 @@ test('backup: encrypted file, wrong password rejected, restore brings back delet
   assert.equal((await session.summaries()).filter((s) => s.containerId === 'kv-b.vault.azure.net').length, 2);
   await assert.rejects(session.restoreSecrets('kv-b.vault.azure.net', { vault: a, secrets: opened.secrets, isProtected: true }), /denselben Key Vault/);
 });
+
+test('credit card and certificate entries: stored completely, lists show only last digits / file name', async () => {
+  const { kv, session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  const card = await session.saveItem(cid, { type: 'card', title: 'Firmen-Visa', card: { holder: 'Kim Muster', number: '4111 1111-1111 1111', expiry: '12/28', cvc: '123', pin: '9876' } });
+  const pfx = Buffer.alloc(3000, 7).toString('base64');
+  const cert = await session.saveItem(cid, { type: 'certificate', title: 'VPN', password: 'geheim', cert: { fileName: 'vpn.pfx', data: pfx } });
+  const readCard = await session.getItem(cid, card.id, { fresh: true });
+  assert.deepEqual(readCard.card, { holder: 'Kim Muster', number: '4111111111111111', expiry: '12/28', cvc: '123', pin: '9876' });
+  const readCert = await session.getItem(cid, cert.id, { fresh: true });
+  assert.equal(readCert.cert.data, pfx);
+  assert.equal(readCert.cert.size, 3000);
+  assert.equal(readCert.password, 'geheim');
+  const summaries = await session.summaries();
+  assert.equal(summaries.find((s) => s.id === card.id).username, '•••• 1111');
+  assert.equal(summaries.find((s) => s.id === cert.id).username, 'vpn.pfx');
+  const tags = kv.secrets.get(card.id).at(-1).tags;
+  assert.ok(!JSON.stringify(tags).includes('4111111111111111'), 'full card number never in tags');
+  // A certificate that does not fit into one Key Vault secret is refused.
+  await assert.rejects(session.saveItem(cid, { type: 'certificate', title: 'Zu groß', cert: { fileName: 'big.pfx', data: Buffer.alloc(20000, 1).toString('base64') } }), /zu groß/);
+});

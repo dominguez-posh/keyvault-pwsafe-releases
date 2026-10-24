@@ -222,13 +222,84 @@ async function render() {
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
-  root.replaceChildren(h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail));
+  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail);
+  root.replaceChildren(shell);
+  setupSplitters(shell);
   renderSidebar();
   renderList();
   checkWindowsRequests();
   loadLogos();
   if (st.requirePin && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ forced: true });
   return renderDetail();
+}
+
+// ---------------------------------------------------------------- resizable panes
+
+const PANE_DEFAULTS = { sidebar: 250, list: 380 };
+const PANE_LIMITS = { sidebar: [180, 420], list: [260, 720] };
+const DETAIL_MIN = 340;
+
+function paneWidths() {
+  try {
+    return { ...PANE_DEFAULTS, ...JSON.parse(localStorage.getItem('paneWidths') || '{}') };
+  } catch {
+    return { ...PANE_DEFAULTS };
+  }
+}
+
+/** Two drag handles between sidebar, list and detail; widths are remembered, double-click restores the default. */
+function setupSplitters(shell) {
+  const widths = paneWidths();
+  const apply = () => {
+    // Keep room for the detail pane when the window is narrow.
+    const room = Math.max(0, shell.clientWidth - DETAIL_MIN);
+    const sidebar = Math.min(Math.max(widths.sidebar, PANE_LIMITS.sidebar[0]), PANE_LIMITS.sidebar[1]);
+    const list = Math.max(PANE_LIMITS.list[0], Math.min(widths.list, PANE_LIMITS.list[1], room > 0 ? room - sidebar : Infinity));
+    shell.style.setProperty('--sidebar-w', `${sidebar}px`);
+    shell.style.setProperty('--list-w', `${list}px`);
+    handles.sidebar.style.left = `${sidebar}px`;
+    handles.list.style.left = `${sidebar + list}px`;
+  };
+  const save = () => {
+    try { localStorage.setItem('paneWidths', JSON.stringify(widths)); } catch {}
+  };
+  const handle = (pane) => {
+    const el = h('div', { class: 'splitter', role: 'separator', 'aria-orientation': 'vertical', title: t('Breite ziehen – Doppelklick setzt zurück') });
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging');
+      shell.classList.add('resizing');
+      const startX = e.clientX;
+      const start = widths[pane];
+      const move = (ev) => {
+        widths[pane] = Math.round(start + ev.clientX - startX);
+        apply();
+      };
+      const up = () => {
+        el.classList.remove('dragging');
+        shell.classList.remove('resizing');
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        // Store what is actually shown (after the limits).
+        widths.sidebar = parseInt(shell.style.getPropertyValue('--sidebar-w'), 10);
+        widths.list = parseInt(shell.style.getPropertyValue('--list-w'), 10);
+        save();
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+    });
+    el.addEventListener('dblclick', () => {
+      widths[pane] = PANE_DEFAULTS[pane];
+      apply();
+      save();
+    });
+    return el;
+  };
+  const handles = { sidebar: handle('sidebar'), list: handle('list') };
+  shell.append(handles.sidebar, handles.list);
+  apply();
+  new ResizeObserver(apply).observe(shell);
 }
 
 async function loadItems() {
@@ -490,6 +561,8 @@ function renderList() {
         i.favorite ? icon('star', 12) : null,
         i.rpIds.length ? h('span', { class: 'badge passkey', title: t('Passkey') }, icon('key', 11)) : null,
         i.type === 'note' ? h('span', { class: 'badge' }, t('Notiz')) : null,
+        i.type === 'card' ? h('span', { class: 'badge', title: t('Kreditkarte') }, icon('card', 11)) : null,
+        i.type === 'certificate' ? h('span', { class: 'badge', title: t('Zertifikat') }, icon('certificate', 11)) : null,
         i.unprotected ? h('span', { class: 'badge warn', title: t('Dieser Eintrag ist nicht verschlüsselt') }, t('unverschlüsselt')) : null),
       h('div', { class: 'row-sub' }, [i.username || i.hosts[0], container ? null : containerName(i.containerId)].filter(Boolean).join(' · '))));
   }
@@ -539,6 +612,8 @@ function renderList() {
         contextMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 4 }, [
           { action: 'new-login', icon: 'key', label: t('Passwort / Login'), onClick: () => newItem('login') },
           { action: 'new-note', icon: 'note', label: t('Sichere Notiz'), onClick: () => newItem('note') },
+          { action: 'new-card', icon: 'card', label: t('Kreditkarte'), onClick: () => newItem('card') },
+          { action: 'new-certificate', icon: 'certificate', label: t('Zertifikat'), onClick: () => newItem('certificate') },
           container ? '-' : null,
           container ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
         ]);
@@ -1158,7 +1233,8 @@ function itemActions(i) {
     { action: 'favorite', icon: 'star', label: i.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), disabled: !canWrite, onClick: () => toggleFavorite(i) },
     '-',
     i.username ? { action: 'copy-user', icon: 'copy', label: t('Benutzername kopieren'), onClick: async () => copy((await open()).username, t('Benutzername')) } : null,
-    i.type !== 'note' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copy((await open()).password, t('Passwort')) } : null,
+    i.type === 'login' || i.type === 'certificate' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copy((await open()).password, t('Passwort')) } : null,
+    i.type === 'card' ? { action: 'copy-card', icon: 'copy', label: t('Kartennummer kopieren'), onClick: async () => copy((await open()).card.number, t('Kartennummer')) } : null,
     i.hosts?.[0] ? { action: 'open', icon: 'external', label: t('Website öffnen'), onClick: () => openUrl(`https://${i.hosts[0]}`) } : null,
     '-',
     { action: 'edit', icon: 'edit', label: t('Bearbeiten'), disabled: !canWrite, onClick: async () => {
@@ -1254,6 +1330,14 @@ async function renderDetail() {
     copy,
     openUrl,
     containerName,
+    saveFile: async (name, data) => {
+      try {
+        const path = await call('saveCertificate', name, data);
+        if (path) toast(t('Gespeichert: {path}', { path }));
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    },
     onRemovePasskey: canWrite ? async (credentialId) => {
       if (!(await confirmDialog(t('Passkey entfernen'), t('Passkey aus dem Eintrag entfernen? Die Anmeldung bei der Website damit ist danach nicht mehr möglich – entferne ihn dort ebenfalls.'), { confirmLabel: t('Entfernen'), danger: true }))) return;
       try {

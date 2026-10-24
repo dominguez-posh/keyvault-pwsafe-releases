@@ -3,7 +3,7 @@
 import { h, icon, iconButton, formatDateTime, avatar, toast } from './dom.js';
 import { totpCode, parseTotp } from './totp.js';
 import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator.js';
-import { ITEM_TYPES, normalizeItem } from './model.js';
+import { ITEM_TYPES, CERT_MAX_BYTES, normalizeItem, formatCardNumber } from './model.js';
 import { t } from './i18n.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 
@@ -15,8 +15,17 @@ import { pickImage, ICON_MAX_CHARS } from './image.js';
  */
 export function itemDetail(item, ctx) {
   const rows = [];
+  if (item.type === 'card') {
+    const c = item.card;
+    if (c.holder) rows.push(textField(t('Karteninhaber'), c.holder, ctx));
+    if (c.number) rows.push(secretField(t('Kartennummer'), formatCardNumber(c.number), ctx, { masked: `•••• •••• •••• ${c.number.slice(-4)}`, copyValue: c.number }));
+    if (c.expiry) rows.push(textField(t('Gültig bis'), c.expiry, ctx));
+    if (c.cvc) rows.push(secretField(t('Prüfnummer (CVC)'), c.cvc, ctx));
+    if (c.pin) rows.push(secretField(t('PIN'), c.pin, ctx));
+  }
+  if (item.type === 'certificate' && item.cert.data) rows.push(certificateField(item.cert, ctx));
   if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
-  if (item.password) rows.push(secretField(t('Passwort'), item.password, ctx));
+  if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
   if (item.totp) rows.push(totpField(item.totp, ctx));
   if (item.urls.length) {
     rows.push(h('div', { class: 'field' }, h('label', {}, item.urls.length > 1 ? t('Websites') : t('Website')),
@@ -48,17 +57,35 @@ function textField(label, value, ctx) {
     h('div', { class: 'field-row' }, h('span', { class: 'value' }, value), iconButton('copy', t('Kopieren'), () => ctx.copy(value, label))));
 }
 
-function secretField(label, value, ctx) {
-  const span = h('span', { class: 'value secret' }, '••••••••••••');
+function secretField(label, value, ctx, { masked = '••••••••••••', copyValue = value } = {}) {
+  const span = h('span', { class: 'value secret' }, masked);
   let shown = false;
   const toggle = iconButton('eye', t('Anzeigen'), () => {
     shown = !shown;
-    span.textContent = shown ? value : '••••••••••••';
+    span.textContent = shown ? value : masked;
     span.classList.toggle('revealed', shown);
     toggle.replaceChildren(icon(shown ? 'eyeOff' : 'eye'));
   });
   return h('div', { class: 'field' }, h('label', {}, label),
-    h('div', { class: 'field-row' }, span, toggle, iconButton('copy', t('Kopieren'), () => ctx.copy(value, label))));
+    h('div', { class: 'field-row' }, span, toggle, iconButton('copy', t('Kopieren'), () => ctx.copy(copyValue, label))));
+}
+
+const fileSize = (bytes) => (bytes < 1024 ? `${bytes} B` : `${Math.ceil(bytes / 1024)} KB`);
+
+function certificateField(cert, ctx) {
+  return h('div', { class: 'field' }, h('label', {}, t('Zertifikat')),
+    h('div', { class: 'field-row' },
+      h('span', { class: 'value' }, icon('note', 14), ` ${cert.fileName || t('Zertifikat')} · ${fileSize(cert.size)}`),
+      ctx.saveFile ? h('button', { type: 'button', class: 'btn small', onclick: () => ctx.saveFile(cert.fileName || 'zertifikat.pfx', cert.data) }, icon('download', 14), t('Speichern unter …')) : null));
+}
+
+/** File → base64 (for certificates, within CERT_MAX_BYTES). */
+async function readCertificate(file) {
+  if (file.size > CERT_MAX_BYTES) throw new Error(t('Die Datei ist zu groß ({size} KB, maximal {max} KB).', { size: Math.ceil(file.size / 1024), max: CERT_MAX_BYTES / 1024 }));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { fileName: file.name, data: btoa(bin), size: bytes.length };
 }
 
 function totpField(secret, ctx) {
@@ -196,7 +223,58 @@ export function itemForm(item, ctx) {
     row(t('Websites'), urls),
     row(t('Einmalcode (TOTP)'), h('div', { class: 'field-row' }, totp, revealTotp)),
     passkeyBox);
-  const syncType = () => { loginOnly.hidden = typeSelect.value !== 'login'; };
+  // Credit card
+  const secretInput = (name, value, extra = {}) => h('input', { name, type: 'password', value, autocomplete: 'off', spellcheck: 'false', ...extra });
+  const revealFor = (input) => {
+    const b = iconButton('eye', t('Anzeigen'), () => {
+      input.type = input.type === 'password' ? 'text' : 'password';
+      b.replaceChildren(icon(input.type === 'password' ? 'eye' : 'eyeOff'));
+    });
+    return b;
+  };
+  const cardHolder = h('input', { name: 'cardHolder', value: it.card.holder, autocomplete: 'off', placeholder: t('Name wie auf der Karte') });
+  const cardNumber = secretInput('cardNumber', formatCardNumber(it.card.number), { inputmode: 'numeric', placeholder: '1234 5678 9012 3456' });
+  const cardExpiry = h('input', { name: 'cardExpiry', value: it.card.expiry, autocomplete: 'off', placeholder: t('MM/JJ') });
+  const cardCvc = secretInput('cardCvc', it.card.cvc, { inputmode: 'numeric', maxlength: '4' });
+  const cardPin = secretInput('cardPin', it.card.pin, { inputmode: 'numeric', maxlength: '12' });
+  const cardOnly = h('div', { class: 'card-only' },
+    row(t('Karteninhaber'), cardHolder),
+    row(t('Kartennummer'), h('div', { class: 'field-row' }, cardNumber, revealFor(cardNumber))),
+    h('div', { class: 'grid2' },
+      row(t('Gültig bis'), cardExpiry),
+      row(t('Prüfnummer (CVC)'), h('div', { class: 'field-row' }, cardCvc, revealFor(cardCvc)))),
+    row(t('PIN'), h('div', { class: 'field-row' }, cardPin, revealFor(cardPin))));
+
+  // Certificate: file inside the item, plus its password
+  let cert = it.cert.data ? { ...it.cert } : null;
+  const certInfo = h('span', { class: 'value' });
+  const certFile = h('input', { type: 'file', accept: '.pfx,.p12,.cer,.crt,.pem,.der,.p7b,.key', hidden: true });
+  const drawCert = () => certInfo.replaceChildren(cert ? `${cert.fileName} · ${fileSize(cert.size)}` : t('Keine Datei gewählt'));
+  certFile.addEventListener('change', async () => {
+    const file = certFile.files?.[0];
+    if (!file) return;
+    try {
+      cert = await readCertificate(file);
+      if (!title.value.trim()) title.value = file.name.replace(/\.[^.]+$/, '');
+      drawCert();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+    certFile.value = '';
+  });
+  drawCert();
+  const certPassword = secretInput('certPassword', it.type === 'certificate' ? it.password : '', { autocomplete: 'new-password' });
+  const certOnly = h('div', { class: 'cert-only' },
+    h('div', { class: 'field' }, h('label', {}, t('Zertifikatsdatei')),
+      h('div', { class: 'field-row' }, certInfo, h('button', { type: 'button', class: 'btn small', onclick: () => certFile.click() }, icon('upload', 14), t('Datei wählen …')), certFile),
+      h('div', { class: 'muted small' }, t('PFX/P12, CER/CRT, PEM oder DER – bis {max} KB. Die Datei wird im Tresor gespeichert.', { max: CERT_MAX_BYTES / 1024 }))),
+    row(t('Zertifikats-Passwort'), h('div', { class: 'field-row' }, certPassword, revealFor(certPassword))));
+
+  const syncType = () => {
+    loginOnly.hidden = typeSelect.value !== 'login';
+    cardOnly.hidden = typeSelect.value !== 'card';
+    certOnly.hidden = typeSelect.value !== 'certificate';
+  };
   typeSelect.addEventListener('change', syncType);
   syncType();
   updateMeter();
@@ -208,6 +286,8 @@ export function itemForm(item, ctx) {
     row(t('Titel'), title),
     row(t('Logo'), h('div', { class: 'field-row icon-row' }, iconPreview, iconChoose, iconRemove)),
     loginOnly,
+    cardOnly,
+    certOnly,
     h('div', { class: 'grid2' }, row(t('Ordner'), h('div', {}, folder, folderOptions)), h('div', { class: 'field' }, h('label', {}, ' '), h('label', { class: 'inline' }, favorite, t('Favorit')))),
     h('div', { class: 'field' }, h('label', {}, t('Zusätzliche Felder')), fieldsBox,
       h('button', { type: 'button', class: 'btn small', onclick: () => { fields.push({ name: '', value: '', hidden: false }); renderFields(); } }, icon('plus', 14), t('Feld hinzufügen'))),
@@ -229,15 +309,22 @@ export function itemForm(item, ctx) {
       toast(t('Kein beschreibbarer Tresor verfügbar'), 'error');
       return;
     }
-    const login = typeSelect.value === 'login';
+    const type = typeSelect.value;
+    const login = type === 'login';
+    if (type === 'certificate' && !cert) {
+      toast(t('Bitte eine Zertifikatsdatei wählen'), 'error');
+      return;
+    }
     const next = {
       ...item,
-      type: typeSelect.value,
+      type,
       title: title.value,
       username: login ? username.value : '',
-      password: login ? password.value : '',
+      password: login ? password.value : type === 'certificate' ? certPassword.value : '',
       urls: login ? urls.value.split(/\r?\n/) : [],
       totp: login ? totp.value : '',
+      card: type === 'card' ? { holder: cardHolder.value, number: cardNumber.value, expiry: cardExpiry.value, cvc: cardCvc.value, pin: cardPin.value } : undefined,
+      cert: type === 'certificate' ? cert : undefined,
       folder: folder.value,
       icon: icon64,
       favorite: favorite.checked,
