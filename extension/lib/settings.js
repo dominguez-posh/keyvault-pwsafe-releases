@@ -1,24 +1,17 @@
 // Settings: enterprise policy (chrome.storage.managed, e.g. via Intune/GPO) overrides user settings.
 
 export const DEFAULTS = {
-  tenantId: '',
-  clientId: '',
-  autoLockMinutes: 30,
-  unlockPrompt: 'select_account', // none | select_account | login
   passkeys: true,
   inlineMenu: true,
   savePrompt: true,
   copyTotpOnFill: false,
   clipboardSeconds: 30,
-  containers: [], // manually added [{ name, vaultUrl }]
-  hiddenContainers: [],
   neverSave: [],
   defaultContainer: '',
   language: 'auto',
-  desktopBridge: true,
 };
 
-const POLICY_KEYS = ['language', 'desktopBridge', 'tenantId', 'clientId', 'autoLockMinutes', 'unlockPrompt', 'passkeys', 'inlineMenu', 'savePrompt', 'copyTotpOnFill', 'clipboardSeconds'];
+const POLICY_KEYS = ['language', 'passkeys', 'inlineMenu', 'savePrompt', 'copyTotpOnFill', 'clipboardSeconds'];
 
 export async function getPolicy() {
   try {
@@ -38,7 +31,6 @@ export async function getSettings() {
       enforced.push(key);
     }
   }
-  s.policyContainers = Array.isArray(policy.containers) ? policy.containers : [];
   s.enforced = enforced;
   return s;
 }

@@ -23,43 +23,88 @@ export function pipePath(userData) {
   return path.join(userData, 'bridge.sock');
 }
 
-// Host process, started by the browser via the launcher with ELECTRON_RUN_AS_NODE=1.
-export const hostScript = (pipe) => HOST_SCRIPT.replace('__PIPE__', JSON.stringify(pipe));
+// Host process, started by the browser via the launcher with ELECTRON_RUN_AS_NODE=1. It lives as long as the
+// extension keeps its port open: while the app is not running it says so ("offline"), answers requests at once with
+// AppOffline and connects as soon as the app is back ("online"). "launch" starts the app.
+// launch: { cmd, args } – how to start the app (packaged: the exe or the MSIX alias; development: electron + folder).
+export const hostScript = (pipe, launch = { cmd: process.execPath, args: [] }) => HOST_SCRIPT
+  .replace('__PIPE__', JSON.stringify(pipe))
+  .replace('__LAUNCH__', JSON.stringify(launch));
 
 const HOST_SCRIPT = `// Keevault native messaging host (generated). Relays between the browser and the desktop app.
 const net = require('net');
+const { spawn } = require('child_process');
 const PIPE = __PIPE__;
+const LAUNCH = __LAUNCH__;
+const RETRY_MS = 1500;
 const origin = process.argv.find((a) => a.startsWith('chrome-extension://')) || '';
 let socket = null;
+let state = 'unknown';
 let input = Buffer.alloc(0);
-let lines = '';
-const queue = [];
+const waiting = [];
 function send(msg) {
   const json = Buffer.from(JSON.stringify(msg));
   const len = Buffer.alloc(4);
   len.writeUInt32LE(json.length, 0);
   process.stdout.write(Buffer.concat([len, json]));
 }
-function forward(msg) {
-  if (msg && msg.cmd === 'hello') msg.origin = origin;
-  if (socket && !socket.connecting) socket.write(JSON.stringify(msg) + '\\n');
-  else queue.push(msg);
+const offlineReply = (msg) => send({ id: msg.id, ok: false, error: { name: 'AppOffline', message: 'Keevault is not running' } });
+function launch() {
+  const env = Object.assign({}, process.env);
+  delete env.ELECTRON_RUN_AS_NODE;
+  spawn(LAUNCH.cmd, LAUNCH.args, { detached: true, stdio: 'ignore', env, windowsHide: false }).unref();
 }
-socket = net.connect(PIPE);
-socket.setEncoding('utf8');
-socket.on('connect', () => { for (const m of queue.splice(0)) socket.write(JSON.stringify(m) + '\\n'); });
-socket.on('data', (d) => {
-  lines += d;
-  let i;
-  while ((i = lines.indexOf('\\n')) >= 0) {
-    const line = lines.slice(0, i);
-    lines = lines.slice(i + 1);
-    if (line) send(JSON.parse(line));
+function connect() {
+  const s = net.connect(PIPE);
+  let lines = '';
+  let done = false;
+  s.setEncoding('utf8');
+  s.on('connect', () => {
+    socket = s;
+    state = 'online';
+    send({ event: 'online' });
+    for (const m of waiting.splice(0)) s.write(JSON.stringify(m) + '\\n');
+  });
+  s.on('data', (d) => {
+    lines += d;
+    let i;
+    while ((i = lines.indexOf('\\n')) >= 0) {
+      const line = lines.slice(0, i);
+      lines = lines.slice(i + 1);
+      if (line) send(JSON.parse(line));
+    }
+  });
+  const lost = () => {
+    if (done) return;
+    done = true;
+    if (socket === s) socket = null;
+    if (state !== 'offline') {
+      state = 'offline';
+      send({ event: 'offline' });
+      for (const m of waiting.splice(0)) offlineReply(m);
+    }
+    setTimeout(connect, RETRY_MS);
+  };
+  s.on('error', lost);
+  s.on('close', lost);
+}
+function forward(msg) {
+  if (!msg) return;
+  if (msg.cmd === 'launch') {
+    try {
+      launch();
+      send({ id: msg.id, ok: true, result: true });
+    } catch (e) {
+      send({ id: msg.id, ok: false, error: { name: 'Error', message: e.message } });
+    }
+    return;
   }
-});
-const offline = () => { send({ event: 'offline' }); setTimeout(() => process.exit(0), 50); };
-socket.on('error', offline);
-socket.on('close', offline);
+  if (msg.cmd === 'hello') msg.origin = origin;
+  if (socket) socket.write(JSON.stringify(msg) + '\\n');
+  else if (state === 'unknown') waiting.push(msg);
+  else offlineReply(msg);
+}
+connect();
 process.stdin.on('data', (chunk) => {
   input = Buffer.concat([input, chunk]);
   while (input.length >= 4) {
@@ -85,11 +130,11 @@ function browserDirs() {
 const REGISTRY = ['HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts', 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts'];
 
 /** Writes host script, launcher and manifest and registers them for Edge and Chrome (current user only). */
-export async function registerNativeHost({ userData, extensionIds }) {
+export async function registerNativeHost({ userData, extensionIds, launch }) {
   const dir = path.join(userData, 'native-host');
   await fs.mkdir(dir, { recursive: true });
   const script = path.join(dir, 'host.cjs');
-  await fs.writeFile(script, hostScript(pipePath(userData)));
+  await fs.writeFile(script, hostScript(pipePath(userData), launch));
   let launcher;
   if (process.platform === 'win32') {
     launcher = path.join(dir, 'host.cmd');

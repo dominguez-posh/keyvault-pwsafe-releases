@@ -57,7 +57,7 @@ Desktop-App ─┬─ Entra-ID-Token ──▶ Key Vault „Team Ops“      Azu
              │                    Key Vault „Notfall“        zusätzlich verschlüsselt (Masterpasswort/Passkeys)
              └─ Dateisystem ─────▶ team.kvpws (Netzlaufwerk)  Passkeys von Alex und Kim, Wiederherstellungsschlüssel
                     ▲
-Erweiterung ────────┴─ Native Messaging (Datei-Container)     Key Vault direkt mit eigenem Entra-Token
+Erweiterung ────────┴─ Native Messaging                       alles über die laufende App, keine eigene Verbindung
 ```
 
 Ein Eintrag ist ein Secret im Key Vault bzw. ein Datensatz in der Datei. Verschlüsselte Container nutzen einen
@@ -143,8 +143,8 @@ Microsoft an (wie die Azure-SDKs ohne eigene App-Registrierung), findet Containe
 automatisch und listet unter **+ → Vorhandenen Key Vault hinzufügen** alle Key Vaults, die du in Azure sehen
 darfst. Das Verzeichnis (Tenant) wechselst du in den Einstellungen. Blockiert eure Organisation den Azure-CLI-Client
 per bedingtem Zugriff oder soll die Anmeldung eine eigene Identität haben, trägst du dort unter **Eigene
-App-Registrierung** Tenant-ID und Client-ID ein. Die Browser-Erweiterung braucht immer die eigene
-App-Registrierung (Redirect-URI der Erweiterung).
+App-Registrierung** Tenant-ID und Client-ID ein. Die Browser-Erweiterung braucht keine eigene Anmeldung: sie
+arbeitet ausschließlich über die laufende Desktop-App.
 
 **Key Vaults bei Kunden (Gastkonten):** Die Desktop-App erkennt den Tenant jedes Key Vaults selbst und holt das
 Token dort – Vaults aus mehreren Tenants sind gleichzeitig nutzbar. Voraussetzung ist ein Gastkonto (B2B) im
@@ -197,9 +197,9 @@ Ohne Angaben meldet sich die App mit dem Azure-CLI-Client an. Eigene Tenant-ID u
 
 1. `edge://extensions` (bzw. `chrome://extensions`) öffnen, **Entwicklermodus** einschalten,
    **Entpackte Erweiterung laden** und den Ordner `extension` wählen.
-2. In den Einstellungen der Erweiterung Sprache, Tenant-ID und Client-ID festlegen und entsperren.
-3. Für Datei-Container in der Desktop-App unter **Einstellungen → Datei-Container in der Browser-Erweiterung
-   verfügbar machen** einschalten und beim ersten Zugriff der Erweiterung zustimmen.
+2. Die Desktop-App starten und beim ersten Zugriff der Erweiterung zustimmen. Die Erweiterung meldet sich nirgends
+   selbst an und verbindet sich nirgends selbst – Anmeldung, Tresore und Schlüssel liegen in der App. Läuft die App
+   nicht, ist die Erweiterung inaktiv und bietet an, sie zu starten.
 
 Im Unternehmen: Installation über den Edge-Add-ons-Store (privat) oder eine selbst gehostete CRX
 (`npm run ext:pack`; Store-Versionen haben eine eigene ID → `Setup-KvPwSafe.ps1 -ExtensionId <id>` und in der

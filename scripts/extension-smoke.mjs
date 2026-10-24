@@ -5,14 +5,13 @@
 // Usage: node scripts/extension-smoke.mjs [--browser=<path>] [--out=<dir for screenshots>]
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, rmSync, cpSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyRegistrationResponse, verifyAuthenticationResponse } from '@simplewebauthn/server';
 
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
-const extensionPath = fileURLToPath(new URL('../extension', import.meta.url));
 const browser = arg('browser') || [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
@@ -23,6 +22,14 @@ const browser = arg('browser') || [
 if (!browser) throw new Error('Kein Edge/Chrome gefunden (--browser=<pfad>)');
 const out = arg('out');
 const profile = mkdtempSync(join(tmpdir(), 'kvpwsafe-smoke-'));
+// A copy without the fixed key: its own extension ID, so a Keevault installed by policy on this machine neither
+// blocks the test nor gets involved (the app's native host only accepts the real ID).
+const extensionPath = join(profile, 'extension');
+cpSync(arg('extension') || fileURLToPath(new URL('../extension', import.meta.url)), extensionPath, { recursive: true });
+const manifest = JSON.parse(readFileSync(join(extensionPath, 'manifest.json'), 'utf8'));
+delete manifest.key;
+delete manifest.update_url;
+writeFileSync(join(extensionPath, 'manifest.json'), JSON.stringify(manifest, null, 2));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
 const check = (ok, message) => {
@@ -132,14 +139,26 @@ try {
   console.log(`Erweiterung geladen: ${id}`);
   const ext = `chrome-extension://${id}`;
   await sleep(1000);
-  check((await send('Target.getTargets')).targetInfos.some((x) => x.type === 'service_worker' && x.url === `${ext}/background.js`), 'Service Worker läuft nicht');
+  const worker = (await send('Target.getTargets')).targetInfos.find((x) => x.type === 'service_worker' && x.url === `${ext}/background.js`);
+  check(worker, 'Service Worker läuft nicht');
 
-  // Developer demo backend, no desktop bridge; restart the extension so that the service worker picks it up.
-  let options = await open(`${ext}/options/options.html`);
-  await evaluate(options.sessionId, `chrome.storage.local.set({ devDemo: true, settings: { desktopBridge: false, language: 'de' } }).then(() => true)`);
-  await evaluate(options.sessionId, 'setTimeout(() => chrome.runtime.reload(), 50), true');
+  // Without the app (this copy's ID is not allowed by any native host): the popup says so and offers to start it.
+  const offline = await open(`${ext}/popup/popup.html`);
+  const offlineText = await waitFor(async () => {
+    const tx = await evaluate(offline.sessionId, 'document.body.innerText');
+    return /Keevault-App/.test(tx) && tx;
+  });
+  check(offlineText, 'Popup ohne App: kein Hinweis auf die Keevault-App');
+  await shot(offline.sessionId, 'ext-popup-offline');
+  pageErrors(offline.sessionId, 'popup-offline');
+
+  // Developer demo backend instead of the desktop app – set in the service worker itself, before any page asks the
+  // app (a real Keevault on this machine must not be involved); restart so that the worker picks it up.
+  const workerSession = await attach(worker.targetId);
+  await evaluate(workerSession, `chrome.storage.local.set({ devDemo: true, settings: { language: 'de' } }).then(() => true)`);
+  await evaluate(workerSession, 'setTimeout(() => chrome.runtime.reload(), 50), true');
   await sleep(2500);
-  options = await open(`${ext}/options/options.html`);
+  let options = await open(`${ext}/options/options.html`);
   await waitFor(() => evaluate(options.sessionId, 'document.body.dataset.ready === "1"'));
   const unlocked = await sw(options.sessionId, 'unlock');
   check(unlocked.containers.length === 2, `Demo-Container: ${unlocked.containers.length}`);
@@ -174,6 +193,7 @@ try {
       if (prompt) {
         const g = await attach(prompt.targetId);
         await waitFor(() => evaluate(g, '!!document.querySelector(".choice")'));
+        await shot(g, 'ext-prompt-get');
         await evaluate(g, 'document.querySelector(".choice").click(), true');
         const r2 = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).get && evaluate(tab.sessionId, 'results'));
         check(r2?.get === 'resolved', `get(): ${r2?.get}`);
@@ -187,25 +207,6 @@ try {
     }
   }
   pageErrors(tab.sessionId, 'testpage');
-
-  // Extra protection: master password, then a browser passkey (virtual authenticator with PRF).
-  await sw(options.sessionId, 'protection:enable', { containerId: personal.id, methods: { password: 'smoke-master-1' } });
-  await sw(options.sessionId, 'protection:lock', { containerId: personal.id });
-  let st = await sw(options.sessionId, 'state');
-  check(st.containers.find((c) => c.id === personal.id)?.locked, 'Container nach dem Sperren nicht gesperrt');
-  await sw(options.sessionId, 'protection:unlock', { containerId: personal.id, params: { password: 'smoke-master-1' } });
-  await send('Target.activateTarget', { targetId: options.targetId }); // WebAuthn needs the focused tab
-  await send('WebAuthn.enable', { enableUI: false }, options.sessionId);
-  await send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'usb', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true } }, options.sessionId);
-  await evaluate(options.sessionId, `import('/lib/protect-ctx.js').then(async ({ protectCtx }) => {
-    const ctx = protectCtx({ name: 'Smoke' });
-    await ctx.addPasskey(${JSON.stringify(personal.id)}, 'Smoke-Key');
-    await ctx.lock(${JSON.stringify(personal.id)});
-    await ctx.unlockPasskey(${JSON.stringify(personal.id)});
-    return true;
-  })`);
-  st = await sw(options.sessionId, 'state');
-  check(!st.containers.find((c) => c.id === personal.id)?.locked, 'Entsperren mit Passkey fehlgeschlagen');
 
   // Import of the sample CSV.
   const before = (await sw(options.sessionId, 'items')).length;

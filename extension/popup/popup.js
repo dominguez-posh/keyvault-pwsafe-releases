@@ -30,8 +30,7 @@ function renderTop() {
     buttons.push(iconButton('wand', t('Passwortgenerator'), renderGenerator));
     buttons.push(iconButton('refresh', t('Neu laden'), async () => {
       try {
-        const r = await call('refresh');
-        if (r.discoverError) toast(t('Tresor-Suche: {message}', { message: r.discoverError }), 'error');
+        await call('refresh');
         await reload();
         toast(t('Aktualisiert'));
       } catch (e) {
@@ -51,8 +50,7 @@ async function reload() {
   st = await call('state');
   setLanguage(st.settings.language);
   renderTop();
-  if (!st.configured && !st.open) return renderSetup();
-  if (!st.open) return renderLocked();
+  if (!st.open) return st.demo || st.desktop?.connected ? renderLocked() : renderOffline();
   const [list, ctx] = await Promise.all([
     call('items').catch((e) => {
       toast(e.message, 'error');
@@ -66,33 +64,36 @@ async function reload() {
   return renderList();
 }
 
-function renderSetup() {
-  setView(h('div', { class: 'center' }, icon('shield', 40), h('h2', {}, t('Einrichtung erforderlich')),
-    h('p', { class: 'muted' }, t('Starte die Desktop-App Keevault – die Erweiterung nutzt deren Anmeldung und Tresore automatisch.')),
-    h('button', { class: 'btn primary', onclick: () => chrome.runtime.openOptionsPage() }, icon('settings'), t('Einstellungen öffnen'))));
+/** The extension works only through the running app. */
+function renderOffline() {
+  const missing = st.desktop?.reason === 'AppMissing';
+  const start = h('button', { class: 'btn primary', onclick: async () => {
+    start.disabled = true;
+    start.replaceChildren(h('span', { class: 'spinner' }), t('Keevault startet …'));
+    // The popup reloads by itself once the app is reachable (state:changed).
+    await call('unlock').catch((e) => toast(e.message, 'error'));
+  } }, icon('unlock'), t('Keevault starten'));
+  setView(h('div', { class: 'center' }, icon('shield', 40), h('h2', {}, missing ? t('Keevault-App fehlt') : t('Keevault-App läuft nicht')),
+    h('p', { class: 'muted' }, missing
+      ? t('Die Erweiterung arbeitet nur zusammen mit der Desktop-App. Installiere Keevault auf diesem Computer.')
+      : t('Die Erweiterung arbeitet nur zusammen mit der Desktop-App. Starte Keevault – danach geht es hier sofort weiter.')),
+    missing ? h('a', { class: 'btn primary', href: 'https://keevault.de/download.html', target: '_blank', rel: 'noopener' }, t('Keevault herunterladen')) : start));
 }
 
 function renderLocked(error) {
   const button = h('button', { class: 'btn primary', onclick: async () => {
     button.disabled = true;
-    button.replaceChildren(h('span', { class: 'spinner' }), t('Anmeldung läuft …'));
     try {
-      const r = await call('unlock');
-      if (r.discoverError) toast(t('Tresor-Suche: {message}', { message: r.discoverError }), 'error');
-      await reload();
+      await call('unlock');
+      if (st.demo) await reload();
     } catch (e) {
       renderLocked(e.message);
     }
-  } }, icon('unlock'), t('Mit Microsoft Entra ID entsperren'));
-  const lockedFiles = st.containers.filter((c) => c.kind === 'remote' && c.locked);
+  } }, icon('unlock'), st.demo ? t('Entsperren') : t('In der Desktop-App entsperren'));
   setView(h('div', { class: 'center' }, icon('lock', 40), h('h2', {}, t('Tresor gesperrt')),
-    h('p', { class: 'muted' }, t('Melde dich an, um deine Einträge zu verwenden.')),
+    h('p', { class: 'muted' }, t('Entsperre Keevault in der Desktop-App – danach geht es hier sofort weiter.')),
     error ? h('div', { class: 'notice error' }, error) : null,
-    st.ownSignIn ? button : null,
-    st.desktop?.connected && !st.desktop.opened ? h('button', { class: 'btn primary', onclick: () => call('desktopFocus').catch((e) => toast(e.message, 'error')) },
-      icon('unlock'), t('In der Desktop-App entsperren')) : null,
-    lockedFiles.length ? h('button', { class: 'btn', onclick: () => call('desktopFocus').catch((e) => toast(e.message, 'error')) },
-      icon('note'), t('Datei-Tresore in der Desktop-App entsperren ({count})', { count: lockedFiles.length })) : null));
+    button));
 }
 
 function matchesSite(s) {
@@ -155,7 +156,7 @@ function renderList() {
   const status = h('div', { class: 'status' }, icon('vault', 14),
     t('{containers} Tresore · {items} Einträge', { containers: st.containers.length, items: items.length }),
     problems.length ? h('span', { class: 'badge warn', title: problems.map((c) => `${c.name}: ${c.error.message}`).join('\n') }, t('{count} ohne Zugriff', { count: problems.length })) : null,
-    h('span', { class: 'spacer' }), st.account?.username || '');
+    h('span', { class: 'spacer' }));
 
   setView(
     h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search'), search),
@@ -163,8 +164,8 @@ function renderList() {
     tabs,
     locked.length ? h('div', { class: 'notice info locked-row' }, icon('lock', 14),
       h('span', { class: 'spacer' }, t('Gesperrt: {names}', { names: locked.map((c) => c.name).join(', ') })),
-      h('button', { class: 'btn small', onclick: () => call('openPrompt', { hash: 'containers' }).then(() => window.close()) }, t('Entsperren'))) : null,
-    st.containers.length ? null : h('div', { class: 'notice info' }, t('Noch kein Tresor. In den Einstellungen einen Key Vault hinzufügen, in der Desktop-App einen Tresor anlegen oder die Desktop-App verbinden.')),
+      h('button', { class: 'btn small', onclick: () => call('desktopFocus').catch((e) => toast(e.message, 'error')) }, t('Entsperren'))) : null,
+    st.containers.length ? null : h('div', { class: 'notice info' }, t('Noch kein Tresor. Lege in der Desktop-App einen Tresor an.')),
     h('div', { class: 'list-wrap' }, listEl),
     status,
   );

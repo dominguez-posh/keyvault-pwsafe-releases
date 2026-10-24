@@ -1,10 +1,8 @@
-// Passkey dialogs (create / sign in), the unlock window and unlocking of protected containers.
+// Passkey dialogs (create / sign in). Unlocking happens in the desktop app; the dialog continues once it is open.
 
 import { h, icon, avatar, setChildren, toast } from '../core/dom.js';
-import { unlockPanel } from '../core/ui-protect.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call } from '../lib/api.js';
-import { protectCtx } from '../lib/protect-ctx.js';
 
 const main = document.getElementById('main');
 const footer = document.getElementById('footer');
@@ -34,9 +32,28 @@ function site(details) {
     h('span', { class: 'muted small' }, new URL(details.origin).host)));
 }
 
+/** Resolves once check(state) holds – the service worker reports every change of the app (state:changed). */
+function waitForState(check) {
+  return new Promise((resolve) => {
+    const test = async () => {
+      st = await call('state').catch(() => st);
+      if (check(st)) {
+        chrome.runtime.onMessage.removeListener(listener);
+        resolve(st);
+      }
+    };
+    const listener = (m) => {
+      if (m?.type === 'state:changed') test();
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    test();
+  });
+}
+
 async function unlockThen(next) {
-  show([h('div', { class: 'center' }, h('span', { class: 'spinner' }), t('Anmeldung bei Microsoft Entra ID …'))]);
+  show([h('div', { class: 'center' }, h('span', { class: 'spinner' }), t('Entsperre Keevault in der Desktop-App …'))], [button(t('Abbrechen'), cancel)]);
   await call('unlock');
+  await waitForState((s) => s.open);
   await next();
 }
 
@@ -52,28 +69,22 @@ async function renderUnlock() {
   }, renderUnlock);
 }
 
-/** Unlock panels for locked protected containers; next() runs when all are open (or the user continues). */
+/** Locked protected vaults are unlocked in the desktop app; next() runs when all are open (or the user continues). */
 async function renderContainers(next, filter = () => true) {
   st = await call('state');
-  const locked = st.containers.filter((c) => c.protected && c.locked && filter(c));
+  const lockedNow = (x) => x.containers.filter((c) => c.protected && c.locked && filter(c));
+  const locked = lockedNow(st);
   if (!locked.length) {
     if (next) return next();
     show([h('div', { class: 'notice info' }, t('Alle Tresore sind entsperrt.'))], [button(t('Schließen'), () => window.close(), 'btn primary')]);
     return undefined;
   }
-  const ctx = protectCtx(st.account);
-  const panels = [];
-  for (const c of locked) {
-    if (c.kind === 'remote') {
-      panels.push(h('div', { class: 'unlock-panel' }, h('div', { class: 'unlock-head' }, icon('note', 24), h('div', {}, h('h3', {}, c.name), h('div', { class: 'muted small' }, t('Datei-Tresore der Desktop-App')))),
-        button(t('In der Desktop-App entsperren'), () => call('desktopFocus').catch((e) => toast(e.message, 'error')))));
-      continue;
-    }
-    const info = await call('protection:info', { containerId: c.id });
-    panels.push(unlockPanel(c, info, ctx, () => renderContainers(next, filter)));
-  }
-  show(panels, [next ? button(t('Weiter'), () => next(), 'btn primary') : button(t('Schließen'), () => window.close())]);
-  return undefined;
+  show([h('div', { class: 'notice' }, t('Gesperrt: {names}', { names: locked.map((c) => c.name).join(', ') })),
+    h('div', { class: 'center' }, h('span', { class: 'spinner' }), t('Entsperre die Tresore in der Desktop-App …'))],
+  [next ? button(t('Weiter'), () => next(), 'btn primary') : button(t('Schließen'), () => window.close())]);
+  call('desktopFocus').catch((e) => toast(e.message, 'error'));
+  await waitForState((x) => !lockedNow(x).length);
+  return renderContainers(next, filter);
 }
 
 function lockedView(details, next) {

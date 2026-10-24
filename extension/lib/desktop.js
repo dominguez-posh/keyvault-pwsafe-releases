@@ -1,60 +1,95 @@
-// Containers of the desktop app (Key Vault and file), reached over native messaging (adapter for VaultSession,
-// kind "remote"). The desktop app signs in, holds the keys and does the work; it asks once per browser for approval.
+// The extension's only data source: the Keevault desktop app, reached over native messaging. The app signs in, holds
+// the keys and talks to Azure; the extension never connects anywhere itself. Without the running app it does nothing.
+//
+// One native port stays open while the service worker lives (it also keeps the worker alive). The host reports
+// whether the app is reachable ("online"/"offline") and relays the app's events, so status changes and edits show up
+// at once. Entries come as one snapshot that is reused until the app reports a change.
 
 import { t } from '../core/i18n.js';
+import { itemMatchesHost } from '../core/match.js';
+import { filterPasskeys } from '../core/webauthn.js';
 
 const HOST = 'com.kvpwsafe.desktop';
+const SNAPSHOT_MAX_AGE = 60_000;
 let port = null;
 let seq = 0;
+let online = null; // null: not known yet, false: app not running, true: app reachable
+let hostError = '';
+let lastAttempt = 0;
 let hello = null;
-let failedAt = 0;
+let snap = null;
+let snapAt = 0;
 const pending = new Map();
 const listeners = new Set();
-let enabled = () => true;
 
-export function configure({ isEnabled, onEvent }) {
-  enabled = isEnabled;
-  if (onEvent) listeners.add(onEvent);
+/** fn(event): 'online', 'offline', 'changed' – after any of them the snapshot is reloaded on demand. */
+export function onEvent(fn) {
+  listeners.add(fn);
 }
 
-function reset(error) {
-  port = null;
+const emit = (event) => {
+  for (const fn of listeners) fn(event);
+};
+
+function offlineError() {
+  const missing = /not found|nicht gefunden/i.test(hostError);
+  return Object.assign(new Error(missing ? t('Keevault-App ist nicht installiert') : t('Keevault-App läuft nicht')), { name: missing ? 'AppMissing' : 'AppOffline' });
+}
+
+function forget() {
   hello = null;
-  for (const p of pending.values()) p.reject(new Error(error || t('Desktop-App nicht erreichbar')));
+  snap = null;
+}
+
+function failAll() {
+  for (const p of pending.values()) p.reject(offlineError());
   pending.clear();
 }
 
-function connect() {
-  port = chrome.runtime.connectNative(HOST);
-  port.onMessage.addListener((msg) => {
-    if (msg?.event) {
-      if (msg.event === 'offline') {
-        failedAt = Date.now();
-        const p = port;
-        reset();
-        p?.disconnect();
-      }
-      for (const fn of listeners) fn(msg.event);
-      return;
+function onMessage(msg) {
+  if (msg?.event) {
+    if (msg.event === 'online') online = true;
+    if (msg.event === 'offline') {
+      online = false;
+      failAll();
     }
-    const p = pending.get(msg?.id);
-    if (!p) return;
-    pending.delete(msg.id);
-    if (msg.ok) p.resolve(msg.result);
-    else p.reject(Object.assign(new Error(msg.error?.message || 'Error'), { name: msg.error?.name }));
-  });
+    forget();
+    emit(msg.event);
+    return;
+  }
+  const p = pending.get(msg?.id);
+  if (!p) return;
+  pending.delete(msg.id);
+  if (msg.ok) p.resolve(msg.result);
+  else p.reject(Object.assign(new Error(msg.error?.message || 'Error'), { name: msg.error?.name }));
+}
+
+/** Opens the native port (starts the host). Called at start-up and whenever a request finds no port. */
+export function connect() {
+  if (port) return;
+  lastAttempt = Date.now();
+  hostError = '';
+  online = null;
+  port = chrome.runtime.connectNative(HOST);
+  port.onMessage.addListener(onMessage);
   port.onDisconnect.addListener(() => {
-    failedAt = Date.now();
-    reset(chrome.runtime.lastError?.message);
+    hostError = chrome.runtime.lastError?.message || '';
+    port = null;
+    online = false;
+    forget();
+    failAll();
+    emit('offline');
   });
 }
 
-function request(cmd, args = {}, timeout = 15_000) {
-  if (!port) connect();
+function request(cmd, args = {}, timeout = 30_000) {
+  // No port: start the host again, but not in a tight loop when it is missing.
+  if (!port && Date.now() - lastAttempt > 2000) connect();
+  if (!port || online === false) return Promise.reject(offlineError());
   return new Promise((resolve, reject) => {
     const id = ++seq;
     const timer = setTimeout(() => {
-      if (pending.delete(id)) reject(new Error(t('Desktop-App antwortet nicht')));
+      if (pending.delete(id)) reject(new Error(t('Keevault-App antwortet nicht')));
     }, timeout);
     pending.set(id, { resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
     // id/cmd last: arguments must never overwrite the request number (the answer is matched by it).
@@ -62,11 +97,9 @@ function request(cmd, args = {}, timeout = 15_000) {
   });
 }
 
-async function ready() {
-  if (!(await enabled())) throw new Error(t('Desktop-Verbindung ist ausgeschaltet'));
-  if (!port && Date.now() - failedAt < 30_000) throw new Error(t('Desktop-App nicht erreichbar'));
+function ready() {
   // The first hello may wait for the approval in the desktop app.
-  if (!hello) hello = request('hello', {}, 120_000).catch((e) => { hello = null; failedAt = Date.now(); throw e; });
+  if (!hello) hello = request('hello', {}, 120_000).catch((e) => { hello = null; throw e; });
   return hello;
 }
 
@@ -75,44 +108,75 @@ const call = async (cmd, args, timeout) => {
   return request(cmd, args, timeout);
 };
 
-const inDesktop = () => {
-  throw new Error(t('Das geht bei Datei-Tresoren nur in der Desktop-App'));
+/** { opened, version, containers, summaries } – cached until the app reports a change. */
+export function snapshot() {
+  if (snap && Date.now() - snapAt < SNAPSHOT_MAX_AGE) return snap;
+  snapAt = Date.now();
+  const current = (async () => {
+    const h = await ready();
+    let s;
+    try {
+      s = await request('snapshot', {}, 60_000);
+    } catch (e) {
+      if (!/Unknown command/.test(e.message)) throw e;
+      // App before 0.5.9.
+      const [containers, summaries] = await Promise.all([request('containers'), request('summaries', {}, 60_000)]);
+      s = { opened: !!h.opened, version: h.version, containers, summaries };
+    }
+    return { ...s, containers: s.containers.map((c) => ({ ...c, kind: 'remote' })) };
+  })();
+  snap = current;
+  current.catch(() => {
+    if (snap === current) snap = null;
+  });
+  return current;
+}
+
+const changedHere = (result) => {
+  snap = null;
+  return result;
 };
 
 export async function status() {
-  failedAt = 0; // an explicit status check always tries again
   try {
-    const h = await ready();
-    return { connected: true, version: h.version, opened: !!h.opened };
+    const s = await snapshot();
+    return { connected: true, version: s.version, opened: !!s.opened };
   } catch (e) {
-    return { connected: false, error: e.message };
+    return { connected: false, error: e.message, reason: e.name };
   }
 }
 
-export const desktopAdapter = {
-  async containers() {
-    const list = await call('containers');
-    return list.map((c) => ({ ...c, remote: true }));
-  },
-  summaries: async (id) => (await call('summaries')).filter((s) => s.containerId === id),
-  getItem: (id, itemId) => call('item', { containerId: id, itemId }),
-  saveItem: (id, item, { expectedVersion } = {}) => call('save', { containerId: id, item, expectedVersion }),
-  deleteItem: (id, itemId) => call('delete', { containerId: id, itemId }),
-  passkeyCandidates: (rpId) => call('passkeyCandidates', { rpId }),
-  async protectionInfo(id) {
+/** Vault API of the background script – the same method names the desktop app's VaultSession uses. */
+export const app = {
+  containers: async () => (await snapshot()).containers,
+  summaries: async () => (await snapshot()).summaries,
+  async container(id) {
     const c = (await this.containers()).find((x) => x.id === id);
-    return { kind: 'remote', protected: true, locked: !!c?.locked, methods: null, passkeys: [] };
+    if (!c) throw new Error(t('Tresor nicht gefunden'));
+    return c;
   },
-  async unlock() {
-    await call('focus').catch(() => {});
-    throw new Error(t('Entsperren geht in der Desktop-App'));
+  getItem: (containerId, itemId) => call('item', { containerId, itemId }),
+  saveItem: async (containerId, item, { expectedVersion } = {}) => changedHere(await call('save', { containerId, item, expectedVersion })),
+  deleteItem: async (containerId, itemId) => changedHere(await call('delete', { containerId, itemId })),
+  async matchesForHost(host) {
+    return (await this.summaries()).filter((s) => s.type === 'login' && itemMatchesHost(s.hosts, host));
   },
-  lock: inDesktop,
-  updateKeyring: inDesktop,
-  trash: inDesktop,
-  restore: inDesktop,
-  purge: inDesktop,
-  history: inDesktop,
-  getVersion: inDesktop,
+  async passkeyCandidates(rpId, allowCredentials = []) {
+    const list = await call('passkeyCandidates', { rpId });
+    return list.filter((c) => filterPasskeys([c.passkey], rpId, allowCredentials).length);
+  },
+  /** Reloads the vaults from Azure in the app (popup "Reload"). */
+  refresh: async () => changedHere(await call('refresh', {}, 120_000)),
   focus: () => call('focus'),
+  lock: async () => changedHere(await call('lock')),
+  /** Starts the app; the host does that itself, it works while the app is not running. */
+  launch() {
+    if (!port) connect();
+    return new Promise((resolve, reject) => {
+      const id = ++seq;
+      const timer = setTimeout(() => pending.delete(id) && reject(offlineError()), 5000);
+      pending.set(id, { resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
+      port.postMessage({ id, cmd: 'launch' });
+    });
+  },
 };

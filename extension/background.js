@@ -1,4 +1,6 @@
-// Service worker: vault session, autofill, save prompts and the passkey provider.
+// Service worker: autofill, save prompts and the passkey provider on top of the Keevault desktop app.
+// All data comes from the running app (lib/desktop.js) – the extension signs in nowhere and has no connection of its
+// own. Only the developer demo (chrome.storage.local devDemo, for automated tests) runs a local in-memory session.
 // Extension pages may call every command; content scripts only the cs:* commands, which are
 // always scoped to the sender's own origin (taken from the browser, never from the message).
 
@@ -6,20 +8,19 @@ import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
 import { hostFromUrl, itemMatchesHost } from './core/match.js';
 import { itemHosts } from './core/model.js';
-import { parseInvite } from './core/azure.js';
-import { vaultHost } from './core/keyvault.js';
 import { totpCode } from './core/totp.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
 import { setLanguage, t } from './core/i18n.js';
 import { createDemoBackend } from './core/demo.js';
 import * as auth from './lib/auth.js';
 import { getSettings, updateSettings } from './lib/settings.js';
-import { desktopAdapter, configure as configureDesktop, status as desktopStatus } from './lib/desktop.js';
+import { app, connect as connectApp, onEvent as onAppEvent, snapshot, status as appStatus } from './lib/desktop.js';
 
 const PAGE_ORIGIN = chrome.runtime.getURL('').replace(/\/$/, '');
-const RP_ID = chrome.runtime.id;
 const VS = 'vs:';
 let demo = null;
+// Same method names in both: the app client and the demo's VaultSession.
+let vault = app;
 
 const sessionStore = {
   async get(key) {
@@ -40,33 +41,29 @@ const sessionStore = {
   },
 };
 
-const vault = new VaultSession({
-  getToken: auth.getToken,
-  store: sessionStore,
-  fetch: (url, init) => (demo ? demo.fetch(url, init) : fetch(url, init)),
-  actor: async () => (await auth.account())?.username || '',
-  adapters: { remote: desktopAdapter },
-});
-
-configureDesktop({
-  isEnabled: async () => (await getSettings()).desktopBridge,
-  onEvent: () => broadcast({ type: 'state:changed' }),
-});
+onAppEvent(() => broadcast({ type: 'state:changed' }));
 
 const ready = (async () => {
   const s = await getSettings();
   setLanguage(s.language);
-  await applyIdle(s);
-  if ((await chrome.storage.local.get('devDemo')).devDemo) demo = createDemoBackend();
+  if ((await chrome.storage.local.get('devDemo')).devDemo) {
+    demo = createDemoBackend();
+    vault = new VaultSession({
+      getToken: auth.getToken,
+      store: sessionStore,
+      fetch: (url, init) => demo.fetch(url, init),
+      actor: async () => (await auth.account())?.username || '',
+    });
+  } else {
+    connectApp();
+  }
 })().catch(() => {});
 
-const signedIn = async () => !!(await auth.account());
-
-/** Usable at all: signed in to Entra ID or at least one unlocked file container of the desktop app. */
+/** Usable: the app runs and is unlocked (demo: signed in). */
 async function isOpen() {
-  if (await signedIn()) return true;
+  if (demo) return !!(await auth.account());
   try {
-    return (await vault.adapterContainers()).some((c) => !c.locked);
+    return !!(await snapshot()).opened;
   } catch {
     return false;
   }
@@ -79,106 +76,61 @@ async function requireOpen() {
 // ---------------------------------------------------------------- state, lock, containers
 
 async function containerList() {
-  const containers = await vault.containers();
-  const index = await vault.index();
-  const out = [];
-  for (const c of containers) {
-    let count = index[c.id]?.items.length ?? null;
-    if (c.kind === 'remote' && !c.locked) count = (await desktopAdapter.summaries(c.id).catch(() => [])).length;
-    out.push({ ...c, count, error: c.error || index[c.id]?.error || null });
+  if (!demo) {
+    const s = await snapshot().catch(() => null);
+    if (!s?.opened) return [];
+    return s.containers.map((c) => ({ ...c, count: c.locked ? null : s.summaries.filter((x) => x.containerId === c.id).length }));
   }
-  return out;
+  const index = await vault.index();
+  return (await vault.containers()).map((c) => ({ ...c, count: index[c.id]?.items.length ?? null, error: c.error || index[c.id]?.error || null }));
 }
 
 async function state() {
   await ready;
   const settings = await getSettings();
-  const account = await auth.account();
-  const containers = await containerList();
-  const desktop = settings.desktopBridge ? await desktopStatus() : { connected: false };
+  const desktop = demo ? { connected: false } : await appStatus();
+  const open = await isOpen();
   return {
-    // Set up = own app registration, or simply the desktop app (which does sign-in and everything else).
-    configured: !!(settings.tenantId && settings.clientId) || !!demo || desktop.connected,
-    ownSignIn: !!(settings.tenantId && settings.clientId) || !!demo,
-    desktop,
-    unlocked: !!account,
-    open: !!account || containers.some((c) => c.kind === 'remote' && !c.locked),
-    account,
-    containers,
-    settings,
     demo: !!demo,
-    redirectUri: chrome.identity.getRedirectURL(),
+    desktop,
+    open,
+    containers: open ? await containerList() : [],
+    settings,
     extensionId: chrome.runtime.id,
     version: chrome.runtime.getManifest().version,
   };
 }
 
-async function refreshContainers() {
-  const s = await getSettings();
-  const configured = [
-    ...s.policyContainers.map((c) => ({ ...c, source: 'policy' })),
-    ...s.containers.map((c) => ({ ...c, source: 'manual' })),
-  ];
-  return vault.refreshContainers({ configured, hidden: s.hiddenContainers, discover: true });
-}
-
+/** Unlocking happens in the app: bring it to the front (start it when it is not running). */
 async function unlock() {
   await ready;
-  const s = await getSettings();
-  if (demo) await auth.signInDemo(demo.account);
-  else await auth.signIn({ interactive: true, prompt: s.unlockPrompt });
-  const { discoverError } = await refreshContainers();
-  await vault.refreshIndex();
-  await applyIdle(s);
-  await broadcast({ type: 'state:changed', unlocked: true });
-  return { ...(await state()), discoverError };
+  if (demo) {
+    await auth.signInDemo(demo.account);
+    await vault.refreshContainers({ discover: true });
+    await vault.refreshIndex();
+    await broadcast({ type: 'state:changed' });
+    return state();
+  }
+  const s = await appStatus();
+  if (s.connected) await app.focus();
+  else await app.launch();
+  return state();
 }
 
 async function lock() {
-  await auth.clear();
-  await vault.clear();
-  await broadcast({ type: 'state:changed', unlocked: false });
+  if (demo) {
+    await auth.clear();
+    await vault.clear();
+  } else {
+    await app.lock();
+  }
+  await broadcast({ type: 'state:changed' });
 }
 
 async function broadcast(message) {
   chrome.runtime.sendMessage(message).catch(() => {});
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) if (tab.id >= 0 && /^https?:/.test(tab.url || '')) chrome.tabs.sendMessage(tab.id, message).catch(() => {});
-}
-
-async function applyIdle(settings) {
-  const minutes = Number(settings.autoLockMinutes) || 0;
-  chrome.idle.setDetectionInterval(Math.max(60, minutes * 60));
-}
-
-chrome.idle.onStateChanged.addListener(async (idleState) => {
-  if (!(await signedIn())) return;
-  const s = await getSettings();
-  if (idleState === 'locked' || (idleState === 'idle' && Number(s.autoLockMinutes) > 0)) await lock();
-});
-
-async function addContainer({ input, name }) {
-  const invite = parseInvite(input);
-  const id = vaultHost(invite.vaultUrl);
-  const s = await getSettings();
-  const containers = s.containers.filter((c) => vaultHost(c.vaultUrl) !== id);
-  containers.push({ name: name || invite.name || id.split('.')[0], vaultUrl: invite.vaultUrl });
-  await updateSettings({ containers, hiddenContainers: s.hiddenContainers.filter((x) => x !== id) });
-  if (await signedIn()) {
-    await refreshContainers();
-    await vault.refreshIndex([id]);
-  }
-  return state();
-}
-
-async function removeContainer({ id }) {
-  const s = await getSettings();
-  await updateSettings({
-    containers: s.containers.filter((c) => vaultHost(c.vaultUrl) !== id),
-    hiddenContainers: [...new Set([...s.hiddenContainers, id])],
-  });
-  if (await signedIn()) await refreshContainers();
-  return state();
 }
 
 // ---------------------------------------------------------------- clipboard (offscreen document)
@@ -284,7 +236,8 @@ async function fillTab({ tabId, containerId, id, force = false }) {
 chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command !== 'fill-login' || !tab?.id) return;
   if (!(await isOpen())) {
-    await openPrompt('unlock', tab);
+    if (demo) await openPrompt('unlock', tab);
+    else await unlock().catch(() => {});
     return;
   }
   const host = hostFromUrl(tab.url);
@@ -612,12 +565,7 @@ async function abortRequest({ requestId }, sender) {
   if (req.windowId) chrome.windows.remove(req.windowId).catch(() => {});
 }
 
-// ---------------------------------------------------------------- protection and import
-
-async function protectionChanged(result) {
-  await broadcast({ type: 'state:changed' });
-  return result;
-}
+// ---------------------------------------------------------------- import
 
 async function importItems({ containerId, items }) {
   await requireOpen();
@@ -638,18 +586,18 @@ async function importItems({ containerId, items }) {
 
 // ---------------------------------------------------------------- message routing
 
+/** Locked or app not running: bring the app to the front (or start it), where unlocking happens. */
+const showApp = () => (demo ? null : unlock());
+
 const pageCommands = {
   state: () => state(),
   unlock: () => unlock(),
   lock: () => lock(),
   refresh: async () => {
     await requireOpen();
-    let discoverError = null;
-    if (await signedIn()) {
-      ({ discoverError } = await refreshContainers());
-      await vault.refreshIndex();
-    }
-    return { ...(await state()), discoverError };
+    if (demo) await vault.refreshIndex();
+    else await app.refresh();
+    return state();
   },
   items: async () => {
     await requireOpen();
@@ -664,26 +612,17 @@ const pageCommands = {
     return { host, url: tab.url, matches: host && (await isOpen()) ? await vault.matchesForHost(host) : [] };
   },
   fill: (msg) => fillTab(msg),
-  addContainer: (msg) => addContainer(msg),
-  removeContainer: (msg) => removeContainer(msg),
   settings: () => getSettings(),
   updateSettings: async ({ patch }) => {
     const s = await updateSettings(patch);
     setLanguage(s.language);
-    await applyIdle(s);
     await broadcast({ type: 'state:changed' });
     return s;
   },
   clipboardCopied: ({ hash }) => scheduleClipboardClear(hash),
   openPrompt: async ({ hash }) => openPrompt(hash, (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0] || {}),
-  desktopStatus: () => desktopStatus(),
-  desktopFocus: () => desktopAdapter.focus(),
-  'protection:info': ({ containerId }) => vault.protectionInfo(containerId, RP_ID),
-  'protection:unlock': async ({ containerId, params }) => protectionChanged(await vault.unlockContainer(containerId, params)),
-  'protection:enable': async ({ containerId, methods }) => protectionChanged(await vault.enableProtection(containerId, methods)),
-  'protection:update': ({ containerId, op }) => vault.updateProtection(containerId, op),
-  'protection:disable': async ({ containerId }) => protectionChanged(await vault.disableProtection(containerId)),
-  'protection:lock': async ({ containerId }) => protectionChanged(await vault.lockContainer(containerId)),
+  desktopStatus: () => appStatus(),
+  desktopFocus: () => showApp(),
   import: (msg) => importItems(msg),
   'webauthn:details': (msg) => webauthnDetails(msg),
   'webauthn:approve': (msg) => webauthnApprove(msg),
@@ -698,8 +637,9 @@ const contentCommands = {
     if (!s.inlineMenu || !host) return { enabled: false };
     const ui = contentStrings();
     if (!(await isOpen())) {
-      const viaDesktop = s.desktopBridge && (await desktopStatus()).connected;
-      return { enabled: true, locked: true, configured: !!(s.tenantId && s.clientId) || !!demo || viaDesktop, ui };
+      // App not running: no menu at all – the extension only works together with the app.
+      if (!demo && !(await appStatus()).connected) return { enabled: false };
+      return { enabled: true, locked: true, configured: true, ui };
     }
     const names = await containerNames();
     return {
@@ -732,13 +672,8 @@ const contentCommands = {
   },
   'cs:saveCaptured': (msg, sender) => saveCaptured(msg, sender),
   'cs:dismissCaptured': (msg, sender) => dismissCaptured(msg, sender),
-  // Without an own app registration the desktop app is where unlocking happens.
-  'cs:unlock': async (_msg, sender) => {
-    const s = await getSettings();
-    if (!(s.tenantId && s.clientId) && !demo && s.desktopBridge) return desktopAdapter.focus();
-    return openPrompt('unlock', sender.tab);
-  },
-  'cs:unlockContainers': (_msg, sender) => openPrompt('containers', sender.tab),
+  'cs:unlock': async (_msg, sender) => (demo ? openPrompt('unlock', sender.tab) : showApp()),
+  'cs:unlockContainers': async (_msg, sender) => (demo ? openPrompt('containers', sender.tab) : showApp()),
   'cs:webauthn': (msg, sender) => webauthnRequest(msg, sender),
   'cs:webauthnSelect': (msg, sender) => conditionalSelect(msg, sender),
   'cs:webauthnCandidates': (msg, sender) => conditionalCandidates(msg, sender),
@@ -757,9 +692,4 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       (error) => sendResponse({ ok: false, error: { name: error.name, message: error.message, status: error.status } }),
     );
   return true;
-});
-
-chrome.runtime.onInstalled.addListener(async ({ reason }) => {
-  const s = await getSettings();
-  if (reason === 'install' && !(s.tenantId && s.clientId)) chrome.runtime.openOptionsPage();
 });

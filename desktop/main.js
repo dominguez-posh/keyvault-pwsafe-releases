@@ -477,26 +477,61 @@ const forBrowser = (c) => ({
 });
 const browserContainers = async () => (opened ? (await vault.containers()).map(forBrowser) : []);
 
+const INDEX_MAX_AGE = 5 * 60_000;
+let staleRefresh = null;
+
+/** Vaults loaded longer ago than INDEX_MAX_AGE: reload them in the background and report the change. */
+async function refreshStaleForBrowser() {
+  if (staleRefresh || !opened) return;
+  const index = await vault.index();
+  if (!Object.values(index).some((e) => Date.now() - (e.loadedAt || 0) > INDEX_MAX_AGE)) return;
+  staleRefresh = vault.summaries({ maxAgeMs: INDEX_MAX_AGE }).then(changed, () => {}).finally(() => { staleRefresh = null; });
+}
+
 const browserHandlers = {
   hello: async () => ({ version: app.getVersion(), opened, containers: await browserContainers() }),
+  // Everything the extension lists in one answer, straight from the cache (never waits for Azure when there is a
+  // cache); outdated vaults are reloaded afterwards and announced with "changed".
+  snapshot: async () => {
+    if (!opened) return { version: app.getVersion(), opened: false, containers: [], summaries: [] };
+    const summaries = await vault.summaries({ maxAgeMs: Infinity });
+    refreshStaleForBrowser().catch(() => {});
+    return { version: app.getVersion(), opened: true, containers: await browserContainers(), summaries };
+  },
   containers: () => browserContainers(),
   summaries: async () => (opened ? vault.summaries() : []),
+  refresh: async () => {
+    requireOpen();
+    await vault.summaries({ maxAgeMs: 0 });
+    changed();
+    return true;
+  },
   // itemId – "id" is the request number of the bridge protocol.
   item: ({ containerId, itemId }) => {
     requireOpen();
     return vault.getItem(containerId, itemId, { fresh: true });
   },
-  save: ({ containerId, item, expectedVersion }) => {
+  // Changes from the browser show up in the app (and other browsers) at once.
+  save: async ({ containerId, item, expectedVersion }) => {
     requireOpen();
-    return vault.saveItem(containerId, item, { expectedVersion });
+    const saved = await vault.saveItem(containerId, item, { expectedVersion });
+    changed();
+    return saved;
   },
-  delete: ({ containerId, itemId }) => {
+  delete: async ({ containerId, itemId }) => {
     requireOpen();
-    return vault.deleteItem(containerId, itemId);
+    const result = await vault.deleteItem(containerId, itemId);
+    changed();
+    return result;
+  },
+  lock: async () => {
+    await lockNow();
+    return true;
   },
   passkeyCandidates: async ({ rpId }) => (opened ? vault.passkeyCandidates(rpId) : []),
   matches: async ({ host }) => (opened ? (await vault.summaries()).filter((s) => s.type === 'login' && itemMatchesHost(s.hosts, host)) : []),
   focus: async () => {
+    if (win?.isMinimized()) win.restore();
     win?.show();
     win?.focus();
     return true;
@@ -565,8 +600,10 @@ async function setupWindowsProvider() {
 async function applyBrowserIntegration() {
   const s = config.get();
   if (!demo) {
-    if (s.browserIntegration) await registerNativeHost({ userData: app.getPath('userData'), extensionIds: s.extensionIds });
-    else await unregisterNativeHost();
+    if (s.browserIntegration) {
+      const launch = { cmd: launchPath(), args: app.isPackaged ? [] : [appRoot] };
+      await registerNativeHost({ userData: app.getPath('userData'), extensionIds: s.extensionIds, launch });
+    } else await unregisterNativeHost();
     if (s.windowsProvider) await rememberDesktopCommand(launchPath(), app.isPackaged ? '' : `"${appRoot}"`).catch(() => {});
   }
   if ((s.browserIntegration || s.windowsProvider) && !demo) {

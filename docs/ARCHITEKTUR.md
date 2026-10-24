@@ -49,10 +49,8 @@ Konflikt statt zu überschreiben.
 
 ### Entsperren
 
-- **Erweiterung**: Autorisierungscode mit PKCE über `chrome.identity.launchWebAuthFlow`, Redirect-URI
-  `https://<id>.chromiumapp.org/` (SPA). Zustimmung für Key Vault und Resource Manager in einem Schritt; Tokens und
-  Refresh-Token nur in `chrome.storage.session`. SPA-Refresh-Tokens laufen nach 24 Stunden ab, dann meldet sich
-  die Erweiterung still über die Browsersitzung neu an.
+- **Erweiterung**: meldet sich nirgends an. Entsperrt wird in der Desktop-App; die Erweiterung holt sie dazu in den
+  Vordergrund (oder startet sie) und macht weiter, sobald die App „entsperrt“ meldet.
 - **Desktop**: MSAL Node, interaktiv im Systembrowser mit Loopback-Redirect `http://localhost`. Der Token-Cache ist
   mit `safeStorage` verschlüsselt (DPAPI unter Windows).
 - Danach: Container ermitteln (Resource Graph + Richtlinie + manuell hinzugefügte), eigene Rechte je Container
@@ -105,10 +103,10 @@ Zusätzlich vergibt sie „Leser“, damit der Container beim Empfänger automat
 | --- | --- | --- | --- |
 | `keyvault` | Azure Key Vault | Entra ID + Azure RBAC | Key Vault; optional zusätzlich clientseitig |
 | `file` | `.kvpws`-Datei (Desktop-App) | Dateisystem | immer clientseitig |
-| `remote` | Datei-Container der Desktop-App, aus Sicht der Erweiterung | Native Messaging | in der Desktop-App |
+| `remote` | jeder Tresor der Desktop-App (Key Vault oder Datei), aus Sicht der Erweiterung | Native Messaging | in der Desktop-App |
 
-`core/session.js` behandelt alle drei gleich; Datei- und Remote-Container kommen über Adapter
-(`desktop/files.js`, `extension/lib/desktop.js`).
+`core/session.js` (Desktop-App) behandelt `keyvault` und `file` gleich; Datei-Container kommen über einen Adapter
+(`desktop/files.js`). Die Erweiterung nutzt `extension/lib/desktop.js` mit denselben Methodennamen.
 
 ## Schlüsselbund (keyring)
 
@@ -144,6 +142,13 @@ erhalten. Die Desktop-App beobachtet die Datei und lädt Änderungen anderer Ben
 Erweiterung ── connectNative("com.kvpwsafe.desktop") ──▶ host.cmd → host.cjs (Electron als Node)
 host.cjs ── Named Pipe \\.\pipe\kvpwsafe-<benutzer> (Unix: Socket im Profil) ──▶ Desktop-App
 ```
+
+Die Erweiterung hat keine eigene Verbindung zu Azure: alle Daten kommen über diesen Weg aus der laufenden App.
+Der Service Worker hält einen Port offen; der Host lebt so lange, meldet `online`/`offline` (App erreichbar oder
+nicht), beantwortet Anfragen ohne App sofort mit `AppOffline`, verbindet sich selbst neu, sobald die App wieder
+läuft, und startet sie auf `launch`. Die Liste der Tresore und Einträge holt die Erweiterung als ein `snapshot`
+(aus dem Cache der App, veraltete Tresore lädt die App danach nach) und verwirft ihn bei jedem `changed` der App –
+Änderungen im Browser oder in der App sind so sofort auf beiden Seiten sichtbar.
 
 Die Desktop-App registriert den Host nur für den eigenen Benutzer (HKCU bzw. Profilordner) und nur für die
 eingetragenen Erweiterungs-IDs. Die Herkunft der Erweiterung übergibt der Browser beim Start des Hosts; jede
