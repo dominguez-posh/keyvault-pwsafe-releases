@@ -52,6 +52,16 @@ Invoke-Step 'Geräte-Skript für IT/Intune (Zertifikat eingebettet)' {
     [IO.File]::WriteAllText((Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), $script, [Text.UTF8Encoding]::new($true))
 }
 
+Invoke-Step 'Richtlinien-Vorlagen (ADMX für GPO/Intune + Intune-Skript)' {
+    $stage = Join-Path $root 'release/policy'
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    Copy-Item (Join-Path $root 'installer/policy') $stage -Recurse
+    # BOM for Windows PowerShell 5.1 (umlauts in the settings block).
+    $ps = Join-Path $stage 'Keevault-Richtlinie-Intune.ps1'
+    [IO.File]::WriteAllText($ps, [IO.File]::ReadAllText($ps), [Text.UTF8Encoding]::new($true))
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $root 'release/Keevault-Richtlinien.zip') -Force
+}
+
 $setup = Join-Path $root "release/Keevault-Setup-$version.exe"
 # Same installer under a fixed name: the website links to releases/latest/download/Keevault-Setup.exe.
 # latest.yml (+ blockmap) is what the app's update check reads via https://keevault.de/update/ (website/php/api/dl.php).
@@ -63,7 +73,7 @@ Copy-Item $msi (Join-Path $root 'release/Keevault.msi') -Force
 Copy-Item $msix (Join-Path $root 'release/Keevault.msix') -Force
 # Public part of the signing certificate: devices must trust it before the MSIX installs (until a purchased one).
 Copy-Item (Join-Path $root 'windows/out/KvPwSafe-Test.cer') (Join-Path $root 'release/Keevault-Zertifikat.cer') -Force
-$assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'))
+$assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'))
 foreach ($a in $assets) { if (-not (Test-Path $a)) { throw "$a fehlt" } }
 Write-Host "Fertig: $setup" -ForegroundColor Green
 

@@ -5,6 +5,7 @@
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readPolicy } from './policy.js';
 
 const DEFAULTS = {
   tenantId: '',
@@ -56,6 +57,9 @@ export class Config {
       path.join(app.getAppPath(), 'kvpwsafe.config.json'),
     ].filter(Boolean);
     this.org = candidates.map(readJson).find(Boolean) || {};
+    // Group Policy / Intune (registry) over the file; vaults from both.
+    const policy = readPolicy();
+    this.org = { ...this.org, ...policy.settings, containers: [...(Array.isArray(this.org.containers) ? this.org.containers : []), ...policy.containers] };
     if (process.env.KVPWSAFE_TENANT_ID) this.org.tenantId = process.env.KVPWSAFE_TENANT_ID;
     if (process.env.KVPWSAFE_CLIENT_ID) this.org.clientId = process.env.KVPWSAFE_CLIENT_ID;
   }

@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Keevault: Group Policy / Intune (ADMX import) template. Writes HKLM or HKCU\SOFTWARE\Policies\Keevault,
+     read by the app at start (desktop/policy.js). Computer settings win over user settings. -->
+<policyDefinitions xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <policyNamespaces>
+    <target prefix="keevault" namespace="Keevault.Policies.Keevault" />
+    <using prefix="windows" namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+  <resources minRequiredRevision="1.0" />
+  <supportedOn>
+    <definitions>
+      <definition name="SUPPORTED_Keevault_0_6_2" displayName="$(string.SUPPORTED_Keevault_0_6_2)" />
+    </definitions>
+  </supportedOn>
+  <categories>
+    <category name="Keevault" displayName="$(string.Keevault)" />
+  </categories>
+  <policies>
+    <policy name="Vaults" class="Both" displayName="$(string.Vaults)" explainText="$(string.Vaults_Help)" presentation="$(presentation.Vaults)" key="Software\Policies\Keevault\Vaults">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <list id="VaultsList" key="Software\Policies\Keevault\Vaults" explicitValue="true" />
+      </elements>
+    </policy>
+    <policy name="TenantId" class="Both" displayName="$(string.TenantId)" explainText="$(string.TenantId_Help)" presentation="$(presentation.TenantId)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <text id="TenantId" valueName="TenantId" maxLength="100" required="true" />
+      </elements>
+    </policy>
+    <policy name="ClientId" class="Both" displayName="$(string.ClientId)" explainText="$(string.ClientId_Help)" presentation="$(presentation.ClientId)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <text id="ClientId" valueName="ClientId" maxLength="100" required="true" />
+      </elements>
+    </policy>
+    <policy name="UnlockPrompt" class="Both" displayName="$(string.UnlockPrompt)" explainText="$(string.UnlockPrompt_Help)" presentation="$(presentation.UnlockPrompt)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <enum id="UnlockPrompt" valueName="UnlockPrompt" required="true">
+          <item displayName="$(string.UnlockPrompt_SelectAccount)"><value><string>select_account</string></value></item>
+          <item displayName="$(string.UnlockPrompt_Login)"><value><string>login</string></value></item>
+          <item displayName="$(string.UnlockPrompt_None)"><value><string>none</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="AutoLockMinutes" class="Both" displayName="$(string.AutoLockMinutes)" explainText="$(string.AutoLockMinutes_Help)" presentation="$(presentation.AutoLockMinutes)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <decimal id="AutoLockMinutes" valueName="AutoLockMinutes" minValue="0" maxValue="1440" required="true" />
+      </elements>
+    </policy>
+    <policy name="ClipboardSeconds" class="Both" displayName="$(string.ClipboardSeconds)" explainText="$(string.ClipboardSeconds_Help)" presentation="$(presentation.ClipboardSeconds)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <decimal id="ClipboardSeconds" valueName="ClipboardSeconds" minValue="0" maxValue="600" required="true" />
+      </elements>
+    </policy>
+    <policy name="RequirePin" class="Both" displayName="$(string.RequirePin)" explainText="$(string.RequirePin_Help)" key="Software\Policies\Keevault" valueName="RequirePin">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="UpdateMode" class="Both" displayName="$(string.UpdateMode)" explainText="$(string.UpdateMode_Help)" presentation="$(presentation.UpdateMode)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <enum id="UpdateMode" valueName="UpdateMode" required="true">
+          <item displayName="$(string.UpdateMode_Off)"><value><string>off</string></value></item>
+          <item displayName="$(string.UpdateMode_Auto)"><value><string>auto</string></value></item>
+          <item displayName="$(string.UpdateMode_Ask)"><value><string>ask</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="Language" class="Both" displayName="$(string.Language)" explainText="$(string.Language_Help)" presentation="$(presentation.Language)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <elements>
+        <enum id="Language" valueName="Language" required="true">
+          <item displayName="$(string.Language_Auto)"><value><string>auto</string></value></item>
+          <item displayName="$(string.Language_De)"><value><string>de</string></value></item>
+          <item displayName="$(string.Language_En)"><value><string>en</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+  </policies>
+</policyDefinitions>

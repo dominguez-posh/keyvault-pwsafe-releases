@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<policyDefinitionResources xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" revision="1.0" schemaVersion="1.0" xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions">
+  <displayName>Keevault</displayName>
+  <description>Richtlinien für Keevault, den Passwort- und Passkey-Manager für Azure Key Vault.</description>
+  <resources>
+    <stringTable>
+      <string id="Keevault">Keevault</string>
+      <string id="SUPPORTED_Keevault_0_6_2">Keevault 0.6.2 oder neuer</string>
+      <string id="Vaults">Tresore automatisch verbinden</string>
+      <string id="Vaults_Help">Diese Azure Key Vaults erscheinen bei allen betroffenen Benutzern nach der Anmeldung automatisch in Keevault (Kennzeichnung „Richtlinie“).
+
+Name: Anzeigename des Tresors, z. B. „Team IT“.
+Wert: Adresse des Key Vaults, z. B. https://kv-team-it.vault.azure.net – optional mit Tenant-ID nach einem Semikolon: https://kv-kunde.vault.azure.net;00000000-0000-0000-0000-000000000000
+
+Wer einen Tresor tatsächlich öffnen darf, regelt Azure: Weisen Sie den Benutzern bzw. einer Entra-ID-Gruppe auf dem Key Vault die Rolle „Key Vault Secrets User“ (lesen) oder „Key Vault Secrets Officer“ (lesen und schreiben) zu.
+
+Computer- und Benutzerrichtlinie werden zusammengeführt.</string>
+      <string id="TenantId">Verzeichnis (Tenant) für die Anmeldung</string>
+      <string id="TenantId_Help">Tenant-ID oder Domäne (z. B. contoso.onmicrosoft.com), in dem sich Keevault anmeldet. Nicht konfiguriert: das Standardverzeichnis des Kontos.</string>
+      <string id="ClientId">Eigene App-Registrierung (Client-ID)</string>
+      <string id="ClientId_Help">Anwendungs-ID einer eigenen App-Registrierung, falls die Organisation den Standard-Client per bedingtem Zugriff sperrt. Nicht konfiguriert: Standard-Anmeldung ohne eigene App-Registrierung.</string>
+      <string id="UnlockPrompt">Entsperren</string>
+      <string id="UnlockPrompt_Help">Wie Keevault beim Entsperren nach dem Konto fragt.</string>
+      <string id="UnlockPrompt_SelectAccount">Konto bestätigen (Standard)</string>
+      <string id="UnlockPrompt_Login">Immer neu anmelden (Passwort/MFA)</string>
+      <string id="UnlockPrompt_None">Ohne Rückfrage, wenn möglich (Single Sign-on)</string>
+      <string id="AutoLockMinutes">Automatisch sperren nach (Minuten)</string>
+      <string id="AutoLockMinutes_Help">Keevault sperrt sich nach so vielen Minuten ohne Eingabe am Computer. 0 = nur beim Sperren des Computers.</string>
+      <string id="ClipboardSeconds">Zwischenablage leeren nach (Sekunden)</string>
+      <string id="ClipboardSeconds_Help">Kopierte Passwörter werden nach so vielen Sekunden aus der Zwischenablage entfernt. 0 = nie.</string>
+      <string id="RequirePin">App-PIN verpflichtend</string>
+      <string id="RequirePin_Help">Aktiviert: Benutzer müssen eine App-PIN festlegen, die beim Entsperren zusätzlich abgefragt wird.</string>
+      <string id="UpdateMode">Updates</string>
+      <string id="UpdateMode_Help">Updates der per-Benutzer-Installation (EXE) von keevault.de. MSI- und MSIX-Installationen werden immer über die Softwareverteilung aktualisiert.</string>
+      <string id="UpdateMode_Off">Aus – nur manuell suchen</string>
+      <string id="UpdateMode_Auto">Automatisch aktuell halten</string>
+      <string id="UpdateMode_Ask">Im Hintergrund laden, beim Start fragen</string>
+      <string id="Language">Sprache</string>
+      <string id="Language_Help">Sprache der Oberfläche.</string>
+      <string id="Language_Auto">Wie Windows</string>
+      <string id="Language_De">Deutsch</string>
+      <string id="Language_En">Englisch</string>
+    </stringTable>
+    <presentationTable>
+      <presentation id="Vaults">
+        <listBox refId="VaultsList">Tresore (Name = Anzeigename, Wert = Key-Vault-Adresse)</listBox>
+      </presentation>
+      <presentation id="TenantId">
+        <textBox refId="TenantId"><label>Tenant-ID oder Domäne</label></textBox>
+      </presentation>
+      <presentation id="ClientId">
+        <textBox refId="ClientId"><label>Anwendungs-ID (Client-ID)</label></textBox>
+      </presentation>
+      <presentation id="UnlockPrompt">
+        <dropdownList refId="UnlockPrompt" noSort="true" defaultItem="0">Entsperren</dropdownList>
+      </presentation>
+      <presentation id="AutoLockMinutes">
+        <decimalTextBox refId="AutoLockMinutes" defaultValue="15">Minuten</decimalTextBox>
+      </presentation>
+      <presentation id="ClipboardSeconds">
+        <decimalTextBox refId="ClipboardSeconds" defaultValue="30">Sekunden</decimalTextBox>
+      </presentation>
+      <presentation id="UpdateMode">
+        <dropdownList refId="UpdateMode" noSort="true" defaultItem="0">Updates</dropdownList>
+      </presentation>
+      <presentation id="Language">
+        <dropdownList refId="Language" noSort="true" defaultItem="0">Sprache</dropdownList>
+      </presentation>
+    </presentationTable>
+  </resources>
+</policyDefinitionResources>
