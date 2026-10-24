@@ -76,6 +76,11 @@ export function accessFromPermissions(permissions) {
     read: allowed(permissions, 'Microsoft.KeyVault/vaults/secrets/getSecret/action', true),
     write: allowed(permissions, 'Microsoft.KeyVault/vaults/secrets/setSecret/action', true),
     manage: allowed(permissions, 'Microsoft.Authorization/roleAssignments/write', false),
+    // Key Vault Administrator: data rights on keys and certificates too (Secrets Officer only has secrets).
+    // Admins decide which vault functions everyone else may use (vault settings).
+    admin: allowed(permissions, 'Microsoft.KeyVault/vaults/secrets/setSecret/action', true)
+      && allowed(permissions, 'Microsoft.KeyVault/vaults/keys/create/action', true)
+      && allowed(permissions, 'Microsoft.KeyVault/vaults/certificates/create/action', true),
   };
 }
 

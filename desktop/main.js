@@ -13,8 +13,8 @@ import { hashPin, verifyPin, PinGuard, MIN_PIN_LENGTH } from './pin.js';
 import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.js';
 import { totpCode } from '../extension/core/totp.js';
 import { BrowserBridge, registerNativeHost, unregisterNativeHost } from './bridge.js';
-import { VaultSession, MemoryStore } from '../extension/core/session.js';
-import { buildInvite, parseInvite } from '../extension/core/azure.js';
+import { VaultSession, MemoryStore, POLICY_LABELS } from '../extension/core/session.js';
+import { buildInvite, parseInvite, ROLES } from '../extension/core/azure.js';
 import { vaultHost, KV_SCOPE } from '../extension/core/keyvault.js';
 import { SAMPLE_CSV } from '../extension/core/import-sample.js';
 import { mapLimit, decodeJwtPayload } from '../extension/core/util.js';
@@ -23,7 +23,8 @@ import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
 import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
-import { CERT_MAX_BYTES } from '../extension/core/model.js';
+import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth } from '../extension/core/model.js';
+import { itemsToCsv } from '../extension/core/export.js';
 import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -226,6 +227,20 @@ async function rememberTenants() {
     return { ...c, tenantId };
   });
   if (changed) config.update({ containers });
+}
+
+/**
+ * Vault settings: Key Vault administrators may do everything; everyone else only what an admin enabled
+ * (Key Vault vaults only – file vaults have their own roles). → container
+ */
+async function requireFeature(containerId, feature) {
+  const c = await vault.container(containerId);
+  if (c.kind !== 'keyvault' || c.access?.admin) return c;
+  const p = await vault.policy(containerId);
+  if (!p?.features[feature]) {
+    throw new Error(t('Diese Funktion hat ein Admin des Tresors nicht freigeschaltet: {feature}', { feature: t(POLICY_LABELS[feature]) }));
+  }
+  return c;
 }
 
 async function containerResource(containerId) {
@@ -585,7 +600,9 @@ const api = {
     for (const c of containers) {
       let count = index[c.id]?.items.length ?? null;
       if (c.kind === 'file' && !c.locked && !c.error) count = (await files.summaries(c.id)).length;
-      out.push({ ...c, count, error: c.error || index[c.id]?.error || null });
+      // Vault settings decide which functions non-admins see (null: file vault or not readable).
+      const policy = opened && c.kind === 'keyvault' && !c.error ? (await vault.policy(c.id).catch(() => null))?.features ?? null : null;
+      out.push({ ...c, count, policy, error: c.error || index[c.id]?.error || null });
     }
     return {
       ownApp: entraSettings(settings).ownApp,
@@ -700,7 +717,10 @@ const api = {
   restoreVersion: (containerId, id, version) => vault.restoreVersion(containerId, id, version),
   trash: (containerId) => vault.trash(containerId),
   restore: (containerId, id) => vault.restore(containerId, id),
-  purge: (containerId, id) => vault.purge(containerId, id),
+  async purge(containerId, id) {
+    await requireFeature(containerId, 'purge');
+    return vault.purge(containerId, id);
+  },
 
   // Key Vault containers
   async addContainer(input, name) {
@@ -768,6 +788,48 @@ const api = {
     };
   },
   /** Owner of a vault without a data role (e.g. Owner on the subscription): grant yourself access. */
+  /** Vault settings for the dialog: { admin, canBecomeAdmin, features, updated, updatedBy } */
+  async policyState(containerId) {
+    const c = await vault.container(containerId);
+    const p = await vault.policy(containerId);
+    return { admin: !!c.access?.admin, canBecomeAdmin: !c.access?.admin && !!c.access?.manage, ...p };
+  },
+  async setPolicy(containerId, features) {
+    const c = await vault.container(containerId);
+    if (!c.access?.admin) throw new Error(t('Nur Key Vault-Administratoren können die Tresor-Einstellungen ändern.'));
+    const r = await vault.setPolicy(containerId, features);
+    changed();
+    return r;
+  },
+  /** Whoever may assign roles (Manage) can make themselves Key Vault Administrator. */
+  async makeMeAdmin(containerId) {
+    const azure = await vault.azureForId(containerId);
+    await azure.assignRole(await containerResource(containerId), (await azure.me()).id, 'User', ROLES.kvAdministrator);
+    await new Promise((r) => setTimeout(r, demo ? 0 : 8000));
+    const discoverError = await refreshAll();
+    changed();
+    return { ...(await api.state()), discoverError };
+  },
+  /** CSV export of a vault's entries – only when an admin enabled it in the vault settings. */
+  async exportItems(containerId) {
+    requireOpen();
+    const c = await requireFeature(containerId, 'export');
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      title: t('Einträge exportieren'),
+      defaultPath: `${String(c.name || 'Tresor').replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.csv`,
+      filters: [{ name: 'CSV', extensions: ['csv'] }],
+    });
+    if (canceled || !filePath) return null;
+    const list = (await vault.summaries()).filter((s) => s.containerId === containerId);
+    let done = 0;
+    const items = await mapLimit(list, 4, async (s) => {
+      const item = await vault.getItem(containerId, s.id, { fresh: true });
+      send({ type: 'progress', done: ++done, total: list.length });
+      return item;
+    });
+    await fs.writeFile(filePath, itemsToCsv(items), 'utf8');
+    return { filePath, count: items.length };
+  },
   async grantMyself(containerId, level = 'write') {
     const azure = await vault.azureForId(containerId);
     await azure.addMember(await containerResource(containerId), await azure.me(), level);
@@ -979,6 +1041,7 @@ const api = {
    * allow (everyone sees it), in any case for this app.
    */
   async renameContainer(containerId, name) {
+    await requireFeature(containerId, 'rename');
     const clean = String(name || '').trim();
     if (!clean) throw new Error(t('Bitte einen Namen eingeben'));
     const c = await vault.container(containerId);
@@ -1021,6 +1084,7 @@ const api = {
     return r;
   },
   async enableProtection(containerId, { password, passkeyLabel }) {
+    await requireFeature(containerId, 'protection');
     const c = await vault.container(containerId);
     const passkey = passkeyLabel ? await registerPasskey(c.name, passkeyLabel) : null;
     const r = await vault.enableProtection(containerId, { password, passkey }, (done, total) => send({ type: 'progress', done, total }));
@@ -1034,6 +1098,7 @@ const api = {
     return vault.updateProtection(containerId, { type: 'addPasskey', passkey });
   },
   disableProtection: async (containerId) => {
+    await requireFeature(containerId, 'protection');
     const r = await vault.disableProtection(containerId, (done, total) => send({ type: 'progress', done, total }));
     changed();
     return r;
@@ -1154,14 +1219,17 @@ const api = {
   },
   containerLogo: (containerId) => vault.containerLogo(containerId),
   async setContainerLogo(containerId, dataUrl) {
+    await requireFeature(containerId, 'logo');
     await vault.setContainerLogo(containerId, dataUrl);
     changed();
   },
   async addFolder(containerId, folderPath) {
+    await requireFeature(containerId, 'folders');
     await vault.addFolder(containerId, folderPath);
     changed();
   },
   async removeFolder(containerId, folderPath) {
+    await requireFeature(containerId, 'folders');
     await vault.removeFolder(containerId, folderPath);
     changed();
   },
@@ -1171,6 +1239,7 @@ const api = {
    */
   async renameFolder(containerId, from, to) {
     requireOpen();
+    await requireFeature(containerId, 'folders');
     const clean = (p) => String(p || '').split('/').map((x) => x.trim()).filter(Boolean).join('/');
     const src = clean(from);
     const dst = clean(to);
@@ -1178,6 +1247,10 @@ const api = {
     if (dst === src) return { moved: 0, errors: [] };
     if (dst.startsWith(`${src}/`)) throw new Error(t('Ein Ordner kann nicht in sich selbst verschoben werden'));
     const map = (p) => (p === src ? dst : p.startsWith(`${src}/`) ? clean(`${dst}/${p.slice(src.length + 1)}`) : p);
+    // Nothing may end up deeper than the allowed folder levels – checked before anything changes.
+    const inTree = (p) => p === src || p.startsWith(`${src}/`);
+    const treePaths = [...(await vault.folders(containerId)), ...(await vault.summaries()).filter((s) => s.containerId === containerId).map((s) => s.folder || '')];
+    for (const p of treePaths.filter(inTree)) requireFolderDepth(map(p));
     // Explicit (possibly empty) folders: add the new paths, then drop the old tree.
     for (const f of await vault.folders(containerId)) {
       if ((f === src || f.startsWith(`${src}/`)) && map(f)) await vault.addFolder(containerId, map(f));
@@ -1264,6 +1337,9 @@ const api = {
   },
   async importItems(containerId, items) {
     requireOpen();
+    await requireFeature(containerId, 'import');
+    // At most three folder levels: deeper source folders are cut ("A/B/C/D" → "A/B/C").
+    items = items.map((i) => ({ ...i, folder: limitFolderDepth(i.folder) }));
     const errors = [];
     let done = 0;
     await mapLimit(items, 4, async (item) => {
@@ -1590,6 +1666,31 @@ function runSmokeTest() {
       } catch (e) {
         errors.push(`bridge flow: ${e.message}`);
       }
+      // Vault settings: a non-admin may only use what an admin enabled; folders at most three levels.
+      try {
+        const kvc = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error);
+        const stored = await vault.store.get('containers');
+        const entry = stored.find((c) => c.id === kvc.id);
+        const asAdmin = entry.access;
+        const setAdmin = async (admin) => {
+          entry.access = { ...asAdmin, admin };
+          await vault.store.set('containers', stored);
+        };
+        await setAdmin(false);
+        const blocked = await api.renameContainer(kvc.id, 'Nicht erlaubt').then(() => false, (e) => /nicht freigeschaltet/.test(e.message));
+        if (!blocked) errors.push('vault settings: rename not blocked for non-admin');
+        if (await api.setPolicy(kvc.id, { rename: true }).then(() => true, () => false)) errors.push('vault settings: non-admin could change the settings');
+        await setAdmin(true);
+        await api.setPolicy(kvc.id, { rename: true });
+        await setAdmin(false);
+        await api.renameContainer(kvc.id, kvc.name);
+        if (await api.addFolder(kvc.id, 'Gesperrt').then(() => true, () => false)) errors.push('vault settings: folders not blocked for non-admin');
+        await setAdmin(true);
+        await api.setPolicy(kvc.id, {});
+        if (await api.addFolder(kvc.id, 'A/B/C/D').then(() => true, () => false)) errors.push('folders: a fourth level was accepted');
+      } catch (e) {
+        errors.push(`vault settings: ${e.message}`);
+      }
       // Licensing: request code per vault, free limit shown.
       try {
         const kvc = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error);
@@ -1767,6 +1868,7 @@ function runSmokeTest() {
         await js('[...document.querySelectorAll("dialog[open] .option-card")].find((b) => /Datei-Tresor|file vault/i.test(b.textContent))?.click()');
       }
       if (view === 'backup') await menuAction('backup');
+      if (view === 'vault-settings') await menuAction('vault-settings');
       if (view === 'restore') await menuAction('restore');
       if (view === 'add') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');

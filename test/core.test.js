@@ -79,9 +79,28 @@ test('vault URLs and invites', () => {
 
 test('ARM permissions → access level', () => {
   const officer = [{ actions: ['Microsoft.KeyVault/vaults/*/read'], dataActions: ['Microsoft.KeyVault/vaults/secrets/*'], notDataActions: [] }];
-  assert.deepEqual(accessFromPermissions(officer), { read: true, write: true, manage: false });
+  assert.deepEqual(accessFromPermissions(officer), { read: true, write: true, manage: false, admin: false });
   const user = [{ actions: [], dataActions: ['Microsoft.KeyVault/vaults/secrets/getSecret/action', 'Microsoft.KeyVault/vaults/secrets/readMetadata/action'] }];
-  assert.deepEqual(accessFromPermissions(user), { read: true, write: false, manage: false });
+  assert.deepEqual(accessFromPermissions(user), { read: true, write: false, manage: false, admin: false });
   const owner = [{ actions: ['*'], notActions: [], dataActions: [] }];
-  assert.deepEqual(accessFromPermissions(owner), { read: false, write: false, manage: true });
+  assert.deepEqual(accessFromPermissions(owner), { read: false, write: false, manage: true, admin: false });
+});
+
+test('Key Vault Administrator is recognized from the permissions (Secrets Officer is not)', async () => {
+  const { accessFromPermissions } = await import('../extension/core/azure.js');
+  const officer = accessFromPermissions([{ actions: [], dataActions: ['Microsoft.KeyVault/vaults/secrets/*'] }]);
+  const admin = accessFromPermissions([{ actions: ['Microsoft.Authorization/*/read'], dataActions: ['Microsoft.KeyVault/vaults/*'] }]);
+  assert.equal(officer.write, true);
+  assert.equal(officer.admin, false);
+  assert.equal(admin.admin, true);
+});
+
+test('CSV export: quoting, card fields, BOM', async () => {
+  const { itemsToCsv } = await import('../extension/core/export.js');
+  const csv = itemsToCsv([{ type: 'login', title: 'A, "B"', username: 'u', password: 'p', urls: ['https://a'], notes: 'x\ny', fields: [] },
+    { type: 'card', title: 'Visa', urls: [], fields: [], card: { holder: 'Kim', number: '4111', expiry: '12/28', cvc: '1', pin: '2' } }]);
+  assert.ok(csv.startsWith('﻿folder,favorite,type,name'));
+  assert.ok(csv.includes('"A, ""B"""'));
+  assert.ok(csv.includes('"x\ny"'));
+  assert.ok(csv.includes(',Kim,4111,12/28,1,2,'));
 });

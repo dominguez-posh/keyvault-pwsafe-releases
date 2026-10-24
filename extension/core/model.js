@@ -52,6 +52,23 @@ export function normalizeFolder(path) {
   return String(path || '').split('/').map((p) => p.trim()).filter(Boolean).join('/');
 }
 
+// At most three folder levels ("Kunden/Contoso/VPN") – deeper structures get confusing.
+export const MAX_FOLDER_DEPTH = 3;
+export const folderDepth = (path) => (normalizeFolder(path) ? normalizeFolder(path).split('/').length : 0);
+/** Imports: deeper paths are cut to the allowed depth ("A/B/C/D" → "A/B/C"). */
+export const limitFolderDepth = (path) => normalizeFolder(path).split('/').filter(Boolean).slice(0, MAX_FOLDER_DEPTH).join('/');
+
+export class FolderTooDeepError extends Error {
+  constructor(path) {
+    super(t('Höchstens {max} Ordnerebenen sind möglich („{path}“ hat {depth}).', { max: MAX_FOLDER_DEPTH, path, depth: folderDepth(path) }));
+    this.name = 'FolderTooDeepError';
+  }
+}
+
+export function requireFolderDepth(path) {
+  if (folderDepth(path) > MAX_FOLDER_DEPTH) throw new FolderTooDeepError(normalizeFolder(path));
+}
+
 export function normalizeItem(input = {}) {
   const type = ITEM_TYPES[input.type] ? input.type : 'login';
   const urls = (Array.isArray(input.urls) ? input.urls : str(input.urls).split(/\r?\n/))

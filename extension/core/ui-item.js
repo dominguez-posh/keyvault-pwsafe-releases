@@ -172,7 +172,13 @@ export function itemForm(item, ctx) {
     totp.type = totp.type === 'password' ? 'text' : 'password';
     revealTotp.replaceChildren(icon(totp.type === 'password' ? 'eye' : 'eyeOff'));
   });
-  const folder = h('input', { name: 'folder', value: it.folder || (ctx.isNew && ctx.defaultFolder) || '', placeholder: t('optional, z. B. Kunden/Contoso'), list: 'folder-options' });
+  const startFolder = it.folder || (ctx.isNew && ctx.defaultFolder) || '';
+  // folderFree false: the vault's admin has not enabled creating folders – choose among existing ones only.
+  const folder = ctx.folderFree === false
+    ? h('select', { name: 'folder' },
+      h('option', { value: '' }, t('Ohne Ordner')),
+      ...[...new Set([...(ctx.folders || []), startFolder].filter(Boolean))].sort().map((f) => h('option', { value: f, selected: f === startFolder }, f)))
+    : h('input', { name: 'folder', value: startFolder, placeholder: t('optional, z. B. Kunden/Contoso'), list: 'folder-options' });
   const folderOptions = h('datalist', { id: 'folder-options' }, ...(ctx.folders || []).map((f) => h('option', { value: f })));
   const favorite = h('input', { type: 'checkbox', name: 'favorite', checked: it.favorite });
   let icon64 = it.icon;

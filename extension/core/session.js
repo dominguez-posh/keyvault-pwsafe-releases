@@ -11,7 +11,7 @@ import { itemMatchesHost } from './match.js';
 import { filterPasskeys } from './webauthn.js';
 import { mapLimit, sleep, truncateBytes } from './util.js';
 import { t } from './i18n.js';
-import { normalizeFolder } from './model.js';
+import { normalizeFolder, requireFolderDepth } from './model.js';
 import { FREE_LIMIT, LicenseLimitError, requestCode, verifyLicense } from './license.js';
 import { isImageDataUrl } from './image.js';
 import {
@@ -31,6 +31,22 @@ export const CONTAINER_FORMAT = 'kvpwsafe-container';
 const CONTAINER_TYPE = 'application/vnd.kvpwsafe.container+json; v=1';
 const LOGO_TYPE = 'application/vnd.kvpwsafe.logo; v=1';
 const FOLDERS_TYPE = 'application/vnd.kvpwsafe.folders+json; v=1';
+
+// Vault settings of the admins (Key Vault Administrator): which functions everyone else may use. Restrictive by
+// default – everything off until an admin turns it on. Enforced by the app; Azure roles still apply on top.
+export const POLICY_SECRET = 'pws-policy';
+const POLICY_TYPE = 'application/vnd.kvpwsafe.policy+json; v=1';
+export const POLICY_FEATURES = ['folders', 'rename', 'logo', 'import', 'export', 'protection', 'purge'];
+export const DEFAULT_POLICY = Object.fromEntries(POLICY_FEATURES.map((f) => [f, false]));
+export const POLICY_LABELS = {
+  folders: 'Ordner anlegen, umbenennen und löschen',
+  rename: 'Tresor umbenennen',
+  logo: 'Logo des Tresors ändern',
+  import: 'Einträge importieren',
+  export: 'Einträge exportieren (unverschlüsselt, CSV)',
+  protection: 'Zusätzlichen Schutz ein- oder ausschalten',
+  purge: 'Einträge endgültig aus dem Papierkorb löschen',
+};
 
 export class ConflictError extends Error {
   constructor() {
@@ -399,10 +415,48 @@ export class VaultSession {
 
   async addFolder(containerId, path) {
     const c = await this.container(containerId);
+    requireFolderDepth(path);
     if (c.kind !== 'keyvault') return this.adapter(c).addFolder(containerId, path);
     const clean = normalizeFolder(path);
     if (!clean) throw new Error(t('Bitte einen Ordnernamen eingeben'));
     return this.writeFolders(c, [...(await this.folders(containerId)), clean]);
+  }
+
+  // ---------------------------------------------------------------- vault settings (admins)
+
+  /** { features: { folders, rename, … }, updated, updatedBy } – defaults when nothing is stored (Key Vault only). */
+  async policy(containerId) {
+    const c = await this.container(containerId);
+    if (c.kind !== 'keyvault') return null;
+    const cached = this.policyCache?.get(containerId);
+    if (cached && Date.now() - cached.at < 60_000) return cached.value;
+    let stored = {};
+    try {
+      stored = JSON.parse((await this.kv(c).getSecret(POLICY_SECRET)).value);
+    } catch (e) {
+      if (e.status !== 404 && !(e instanceof SyntaxError)) throw e;
+    }
+    const value = {
+      features: { ...DEFAULT_POLICY, ...Object.fromEntries(POLICY_FEATURES.map((f) => [f, stored.features?.[f] === true])) },
+      updated: stored.updated || '',
+      updatedBy: stored.updatedBy || '',
+    };
+    (this.policyCache ||= new Map()).set(containerId, { at: Date.now(), value });
+    return value;
+  }
+
+  async setPolicy(containerId, features) {
+    const c = await this.container(containerId);
+    if (c.kind !== 'keyvault') throw new Error(t('Tresor-Einstellungen gibt es nur für Tresore in Azure Key Vault'));
+    const doc = {
+      v: 1,
+      features: Object.fromEntries(POLICY_FEATURES.map((f) => [f, features?.[f] === true])),
+      updated: new Date().toISOString(),
+      updatedBy: await this.actor(),
+    };
+    await this.kv(c).setSecret(POLICY_SECRET, JSON.stringify(doc), { contentType: POLICY_TYPE, tags: { kvpwsafe: 'policy' } });
+    this.policyCache?.delete(containerId);
+    return this.policy(containerId);
   }
 
   async removeFolder(containerId, path) {
@@ -699,6 +753,7 @@ export class VaultSession {
 
   async saveItem(containerId, item, { expectedVersion } = {}) {
     const c = await this.container(containerId);
+    requireFolderDepth(item.folder);
     const actor = await this.actor();
     if (!item.id) await this.requireLicenseForNew(c);
     if (c.kind !== 'keyvault') return this.adapter(c).saveItem(containerId, item, { expectedVersion, actor });

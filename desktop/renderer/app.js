@@ -7,6 +7,7 @@ import { ACCESS_LEVELS } from '../../extension/core/azure.js';
 import { setLanguage, t, LANGUAGES } from '../../extension/core/i18n.js';
 import { pickImage, LOGO_MAX_CHARS } from '../../extension/core/image.js';
 import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
+import { MAX_FOLDER_DEPTH } from '../../extension/core/model.js';
 
 async function call(method, ...args) {
   const r = await window.pwsafe.invoke(method, args);
@@ -615,7 +616,8 @@ function renderList() {
           { action: 'new-card', icon: 'card', label: t('Kreditkarte'), onClick: () => newItem('card') },
           { action: 'new-certificate', icon: 'certificate', label: t('Zertifikat'), onClick: () => newItem('certificate') },
           container ? '-' : null,
-          container ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
+          container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
+            ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
         ]);
       } }, icon('plus'), t('Neu'))),
     container?.error ? notice(container.error.status !== 403 ? container.error.message
@@ -869,7 +871,7 @@ function logoDialog(c) {
 
 /** Functions of a folder (right-click in the list). */
 function folderActions(c, folder, count, open) {
-  const canWrite = writable(c);
+  const canWrite = writable(c) && featureAllowed(c, 'folders');
   const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '';
   const reloadFolders = async () => {
     explicitFolders.set(c.id, await call('folders', c.id));
@@ -877,7 +879,8 @@ function folderActions(c, folder, count, open) {
   };
   return [
     { action: 'open-folder', icon: 'folder', label: t('Öffnen'), onClick: () => open(folder) },
-    { action: 'subfolder', icon: 'folder-plus', label: t('Neuer Unterordner'), disabled: !canWrite, onClick: () => newFolderDialog(c, `${folder}/`) },
+    folder.split('/').length < MAX_FOLDER_DEPTH
+      ? { action: 'subfolder', icon: 'folder-plus', label: t('Neuer Unterordner'), disabled: !canWrite, onClick: () => newFolderDialog(c, `${folder}/`) } : null,
     { action: 'rename-folder', icon: 'edit', label: t('Umbenennen'), disabled: !canWrite, onClick: () => renameFolderDialog(c, folder) },
     '-',
     { action: 'delete-folder', icon: 'trash', label: t('Löschen'), danger: true, disabled: !canWrite, onClick: async () => {
@@ -1038,15 +1041,24 @@ async function refreshContainer(c, button) {
 }
 
 /** All functions of a container (right-click menu in the sidebar). */
+/**
+ * Vault settings: Key Vault admins may use every function; everyone else only what an admin enabled (restrictive
+ * default). File vaults have their own roles and are not affected. The desktop main process enforces the same.
+ */
+const featureAllowed = (c, feature) => c.kind !== 'keyvault' || !!c.access?.admin || c.policy?.[feature] === true;
+
 function containerActions(c) {
   const isFile = c.kind === 'file';
   const ready = !c.error && !c.locked;
   const canWrite = ready && c.access?.write !== false;
+  const may = (feature) => featureAllowed(c, feature);
   const protection = c.secure
     ? { action: 'members', icon: 'users', label: t('Benutzer und Freigabe'), disabled: !!c.error, onClick: () => (c.locked ? toast(t('Zuerst entsperren')) : membersDialog(c)) }
     : isFile || c.protected
       ? { action: 'protection', icon: 'shield', label: t('Schutz und Benutzer'), disabled: !!c.error, onClick: () => (c.locked ? toast(t('Zuerst entsperren')) : manageDialog(c, protectCtx, () => reloadAll())) }
-      : { action: 'protection', icon: 'shield', label: t('Zusätzlich schützen (Masterpasswort/Passkey)'), disabled: !canWrite, onClick: () => enableDialog(c, protectCtx, () => reloadAll()) };
+      : may('protection') ? { action: 'protection', icon: 'shield', label: t('Zusätzlich schützen (Masterpasswort/Passkey)'), disabled: !canWrite, onClick: () => enableDialog(c, protectCtx, () => reloadAll()) } : null;
+  const settings = !isFile && (c.access?.admin || c.access?.manage)
+    ? { action: 'vault-settings', icon: 'settings', label: t('Tresor-Einstellungen (Admin)'), disabled: !!c.error, onClick: () => vaultSettingsDialog(c) } : null;
   return [
     { action: 'refresh', icon: 'refresh', label: t('Aktualisieren'), disabled: c.locked && !c.error, onClick: () => refreshContainer(c) },
     '-',
@@ -1054,11 +1066,13 @@ function containerActions(c) {
     protection,
     isFile && !c.secure && ready ? { action: 'migrate', icon: 'key', label: t('In abgesichertes Format umwandeln (nur Passkey)'), onClick: () => migrateDialog(c) } : null,
     c.secure ? { action: 'changelog', icon: 'clock', label: t('Änderungsprotokoll'), disabled: !ready, onClick: () => changelogDialog(c) } : null,
+    settings,
     '-',
-    { action: 'folder', icon: 'folder-plus', label: t('Neuer Ordner'), disabled: !canWrite, onClick: () => newFolderDialog(c) },
-    { action: 'logo', icon: 'image', label: t('Logo des Tresors'), disabled: !canWrite, onClick: () => logoDialog(c) },
-    { action: 'rename', icon: 'edit', label: t('Umbenennen'), disabled: !!c.error || (isFile && !ready), onClick: () => renameContainerDialog(c) },
-    { action: 'import', icon: 'upload', label: t('Importieren'), disabled: !canWrite, onClick: () => openImport(c) },
+    may('folders') ? { action: 'folder', icon: 'folder-plus', label: t('Neuer Ordner'), disabled: !canWrite, onClick: () => newFolderDialog(c) } : null,
+    may('logo') ? { action: 'logo', icon: 'image', label: t('Logo des Tresors'), disabled: !canWrite, onClick: () => logoDialog(c) } : null,
+    may('rename') ? { action: 'rename', icon: 'edit', label: t('Umbenennen'), disabled: !!c.error || (isFile && !ready), onClick: () => renameContainerDialog(c) } : null,
+    may('import') ? { action: 'import', icon: 'upload', label: t('Importieren'), disabled: !canWrite, onClick: () => openImport(c) } : null,
+    !isFile && may('export') ? { action: 'export', icon: 'download', label: t('Einträge exportieren (CSV)'), disabled: !ready, onClick: () => exportDialog(c) } : null,
     { action: 'trash', icon: 'trash', label: t('Papierkorb'), disabled: !ready, onClick: () => trashDialog(c) },
     { action: 'license', icon: 'key', label: t('Lizenz'), disabled: !ready, onClick: () => licenseDialog(c) },
     isFile ? null : { action: 'backup', icon: 'download', label: t('Backup erstellen (Owner)'), disabled: !!c.error, onClick: () => backupDialog(c) },
@@ -1080,6 +1094,79 @@ function containerActions(c) {
       await reloadAll();
     } },
   ];
+}
+
+// ---------------------------------------------------------------- vault settings (Key Vault administrators)
+
+const POLICY_ORDER = ['folders', 'rename', 'logo', 'import', 'export', 'protection', 'purge'];
+const POLICY_TEXT = {
+  folders: 'Ordner anlegen, umbenennen und löschen',
+  rename: 'Tresor umbenennen',
+  logo: 'Logo des Tresors ändern',
+  import: 'Einträge importieren',
+  export: 'Einträge exportieren (unverschlüsselt, CSV)',
+  protection: 'Zusätzlichen Schutz ein- oder ausschalten',
+  purge: 'Einträge endgültig aus dem Papierkorb löschen',
+};
+
+async function vaultSettingsDialog(c) {
+  let state;
+  try {
+    state = await call('policyState', c.id);
+  } catch (e) {
+    return toast(e.message, 'error');
+  }
+  if (!state.admin) {
+    // Manage (may assign roles) but not admin: offer to take the Key Vault Administrator role.
+    return modal(t('Tresor-Einstellungen'), h('div', {},
+      h('p', {}, t('Die Tresor-Einstellungen ändern nur Personen mit der Azure-Rolle „Key Vault-Administrator“ auf diesem Key Vault.')),
+      state.canBecomeAdmin ? notice(t('Du darfst Rollen vergeben und kannst dir die Rolle selbst geben. Sie gilt nach ein paar Minuten.'), 'info') : null), [
+      { label: t('Abbrechen') },
+      state.canBecomeAdmin ? { label: t('Mir die Admin-Rolle geben'), primary: true, onClick: async () => {
+        await call('makeMeAdmin', c.id);
+        toast(t('Rolle vergeben – nach dem Aktualisieren stehen die Einstellungen bereit'));
+        await reloadAll();
+        return true;
+      } } : null,
+    ].filter(Boolean));
+  }
+  const boxes = Object.fromEntries(POLICY_ORDER.map((f) => [f, h('input', { type: 'checkbox', checked: !!state.features?.[f] })]));
+  modal(t('Tresor-Einstellungen – {name}', { name: c.name }), h('div', {},
+    h('p', {}, t('Lege fest, welche Funktionen alle anderen in diesem Tresor nutzen dürfen. Admins (Key Vault-Administrator) dürfen immer alles. Standard: alles aus.')),
+    h('div', { class: 'policy-list' }, ...POLICY_ORDER.map((f) => h('label', { class: 'inline policy-row' }, boxes[f], t(POLICY_TEXT[f])))),
+    notice(t('Unabhängig davon gelten die Azure-Rollen: Wer nur „Lesen“ hat, kann auch freigeschaltete Funktionen nicht nutzen, die Schreibrechte brauchen.'), 'info'),
+    state.updatedBy ? h('p', { class: 'muted small' }, t('Zuletzt geändert {date} von {user}', { date: formatDateTime(state.updated), user: state.updatedBy })) : null), [
+    { label: t('Abbrechen') },
+    { label: t('Speichern'), primary: true, onClick: async () => {
+      await call('setPolicy', c.id, Object.fromEntries(POLICY_ORDER.map((f) => [f, boxes[f].checked])));
+      toast(t('Tresor-Einstellungen gespeichert'));
+      await reloadAll();
+      return true;
+    } },
+  ]);
+}
+
+async function exportDialog(c) {
+  const progress = progressLine();
+  const body = h('div', {},
+    h('div', { class: 'danger-box' },
+      h('h3', {}, t('⚠ Unverschlüsselter Export')),
+      h('p', {}, t('Die CSV-Datei enthält alle Passwörter von „{name}“ im Klartext. Jeder, der die Datei bekommt, kann sie lesen.', { name: c.name })),
+      h('ul', {},
+        h('li', {}, t('Nur auf verschlüsselten Laufwerken speichern und nach Gebrauch löschen.')),
+        h('li', {}, t('Nicht per E-Mail versenden und nicht in Cloud-Ordnern ablegen.')),
+        h('li', {}, t('Zertifikatsdateien sind nicht enthalten, nur ihre Passwörter.')))));
+  const { dialog } = modal(t('Einträge exportieren'), body, [
+    { label: t('Abbrechen') },
+    { label: t('Speicherort wählen und exportieren'), danger: true, onClick: async () => {
+      body.append(progress.el);
+      const r = await call('exportItems', c.id);
+      if (!r) return false;
+      toast(t('{count} Einträge exportiert: {path}', { count: r.count, path: r.filePath }));
+      return true;
+    } },
+  ]);
+  dialog.addEventListener('close', progress.stop);
 }
 
 // ---------------------------------------------------------------- encrypted backup / restore (subscription owners)
@@ -1382,9 +1469,12 @@ function renderEditor() {
   const targets = writableContainers();
   const folderTarget = isNew ? ui.containerId : item.containerId;
   const knownFolders = [...new Set([...(explicitFolders.get(folderTarget) || []), ...items.filter((i) => i.containerId === folderTarget).map((i) => i.folder).filter(Boolean)])].sort();
+  const folderContainer = st.containers.find((c) => c.id === folderTarget);
   const form = itemForm(item, {
     isNew,
     folders: knownFolders,
+    // Without the "folders" function only existing folders can be chosen (no new ones by typing).
+    folderFree: !folderContainer || featureAllowed(folderContainer, 'folders'),
     typeFixed: isNew,
     defaultFolder: ui.containerId ? ui.folder : '',
     containers: isNew ? targets : st.containers.map((c) => ({ id: c.id, name: c.name })),
@@ -2093,7 +2183,7 @@ function trashDialog(container) {
           toast(err.message, 'error');
         }
       } }, t('Wiederherstellen')),
-      h('button', { type: 'button', class: 'btn small danger', onclick: async () => {
+      !featureAllowed(container, 'purge') ? null : h('button', { type: 'button', class: 'btn small danger', onclick: async () => {
         if (!(await confirmDialog(t('Endgültig löschen'), t('„{title}“ endgültig löschen? Das lässt sich nicht rückgängig machen.', { title: e.title }), { confirmLabel: t('Endgültig löschen'), danger: true }))) return;
         try {
           await call('purge', container.id, e.id);

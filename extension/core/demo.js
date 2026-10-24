@@ -92,7 +92,8 @@ export function createDemoBackend() {
       return json(200, { value: [{ tenantId: '00000000-0000-0000-0000-000000000000', displayName: 'Contoso', defaultDomain: 'contoso.com' }] });
     }
     if (url.pathname.endsWith('/providers/Microsoft.Authorization/permissions')) {
-      return json(200, { value: [{ actions: ['*'], dataActions: ['Microsoft.KeyVault/vaults/secrets/*'] }] });
+      // The demo user is Key Vault Administrator (vault settings available).
+      return json(200, { value: [{ actions: ['*'], dataActions: ['Microsoft.KeyVault/vaults/*'] }] });
     }
     if (url.pathname.includes('/providers/Microsoft.Authorization/roleAssignments') && method === 'GET') {
       const scope = url.pathname.split('/providers/Microsoft.Authorization/')[0];

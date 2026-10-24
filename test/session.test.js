@@ -325,3 +325,33 @@ test('credit card and certificate entries: stored completely, lists show only la
   // A certificate that does not fit into one Key Vault secret is refused.
   await assert.rejects(session.saveItem(cid, { type: 'certificate', title: 'Zu groß', cert: { fileName: 'big.pfx', data: Buffer.alloc(20000, 1).toString('base64') } }), /zu groß/);
 });
+
+test('vault settings: restrictive by default, stored by admins, not listed as an entry', async () => {
+  const { kv, session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  const { DEFAULT_POLICY, POLICY_FEATURES } = await import('../extension/core/session.js');
+  const p0 = await session.policy(cid);
+  assert.deepEqual(p0.features, DEFAULT_POLICY);
+  assert.ok(POLICY_FEATURES.every((f) => p0.features[f] === false), 'everything off by default');
+  const p1 = await session.setPolicy(cid, { export: true, rename: true, unknown: true });
+  assert.equal(p1.features.export, true);
+  assert.equal(p1.features.rename, true);
+  assert.equal(p1.features.folders, false);
+  assert.equal(p1.updatedBy, 'alice@contoso.com');
+  assert.ok(!('unknown' in p1.features), 'only known functions');
+  assert.equal(kv.secrets.get('pws-policy').at(-1).tags.kvpwsafe, 'policy');
+  await session.saveItem(cid, { title: 'A', password: 'x' });
+  assert.equal((await session.refreshIndex())[cid].items.length, 1, 'policy secret is no entry');
+});
+
+test('folders: at most three levels', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  const { limitFolderDepth, folderDepth } = await import('../extension/core/model.js');
+  await session.addFolder(cid, 'Kunden/Contoso/VPN');
+  await assert.rejects(session.addFolder(cid, 'Kunden/Contoso/VPN/Alt'), /Höchstens 3 Ordnerebenen/);
+  await session.saveItem(cid, { title: 'ok', folder: 'A/B/C' });
+  await assert.rejects(session.saveItem(cid, { title: 'zu tief', folder: 'A/B/C/D' }), /Höchstens 3 Ordnerebenen/);
+  assert.equal(limitFolderDepth(' A / B /C/D/E'), 'A/B/C');
+  assert.equal(folderDepth(''), 0);
+});
