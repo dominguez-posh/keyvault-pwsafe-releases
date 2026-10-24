@@ -16,7 +16,9 @@
 param(
     [Parameter(Mandatory)] [ValidateSet('Install', 'Uninstall')] [string] $Action,
     [ValidateSet('User', 'Machine')] [string] $Scope = 'Machine',
-    [string] $CertificatePath
+    [string] $CertificatePath,
+    # Machine: leave the browser policy alone (the company sets ExtensionInstallForcelist itself) – MSI: KV_NO_POLICY=1
+    [switch] $SkipExtensionPolicy
 )
 
 $ErrorActionPreference = 'Continue'
@@ -71,7 +73,7 @@ if ($Scope -eq 'Machine') {
                 $store.Close()
             }
         }
-        foreach ($key in $Policies) {
+        foreach ($key in $(if ($SkipExtensionPolicy) { @() } else { $Policies })) {
             Step "Erweiterung per Richtlinie ($key)" {
                 if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
                 $entries = Get-ForcelistEntries $key
@@ -89,7 +91,7 @@ if ($Scope -eq 'Machine') {
         }
     }
     else {
-        foreach ($key in $Policies) {
+        foreach ($key in $(if ($SkipExtensionPolicy) { @() } else { $Policies })) {
             Step "Richtlinie entfernen ($key)" {
                 foreach ($e in (Get-ForcelistEntries $key | Where-Object { $_.Value -like "$ExtensionId*" })) { Remove-ItemProperty -Path $key -Name $e.Name }
             }

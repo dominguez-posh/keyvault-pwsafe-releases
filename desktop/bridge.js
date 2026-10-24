@@ -12,6 +12,12 @@ import { promisify } from 'node:util';
 export const HOST_NAME = 'com.kvpwsafe.desktop';
 const run = promisify(execFile);
 
+// Program to start from outside the app (browser launcher, passkey provider). The MSIX's Keevault.exe under
+// WindowsApps can't be started directly from outside the package, only via its execution alias.
+export const launchPath = () => (process.windowsStore
+  ? path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'keevault.exe')
+  : process.execPath);
+
 export function pipePath(userData) {
   if (process.platform === 'win32') return `\\\\.\\pipe\\kvpwsafe-${os.userInfo().username.replace(/[^\w.-]/g, '_')}`;
   return path.join(userData, 'bridge.sock');
@@ -87,7 +93,7 @@ export async function registerNativeHost({ userData, extensionIds }) {
   let launcher;
   if (process.platform === 'win32') {
     launcher = path.join(dir, 'host.cmd');
-    await fs.writeFile(launcher, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${process.execPath}" "${script}" %*\r\n`);
+    await fs.writeFile(launcher, `@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"${launchPath()}" "${script}" %*\r\n`);
   } else {
     launcher = path.join(dir, 'host.sh');
     await fs.writeFile(launcher, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });

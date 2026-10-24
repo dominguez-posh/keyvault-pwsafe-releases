@@ -12,7 +12,7 @@ import { FileContainers } from './files.js';
 import { hashPin, verifyPin, PinGuard, MIN_PIN_LENGTH } from './pin.js';
 import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.js';
 import { totpCode } from '../extension/core/totp.js';
-import { BrowserBridge, registerNativeHost, unregisterNativeHost } from './bridge.js';
+import { BrowserBridge, launchPath, registerNativeHost, unregisterNativeHost } from './bridge.js';
 import { VaultSession, MemoryStore, POLICY_LABELS } from '../extension/core/session.js';
 import { buildInvite, parseInvite, ROLES } from '../extension/core/azure.js';
 import { vaultHost, KV_SCOPE } from '../extension/core/keyvault.js';
@@ -567,7 +567,7 @@ async function applyBrowserIntegration() {
   if (!demo) {
     if (s.browserIntegration) await registerNativeHost({ userData: app.getPath('userData'), extensionIds: s.extensionIds });
     else await unregisterNativeHost();
-    if (s.windowsProvider) await rememberDesktopCommand(process.execPath, app.isPackaged ? '' : `"${appRoot}"`).catch(() => {});
+    if (s.windowsProvider) await rememberDesktopCommand(launchPath(), app.isPackaged ? '' : `"${appRoot}"`).catch(() => {});
   }
   if ((s.browserIntegration || s.windowsProvider) && !demo) {
     if (!bridge) {
