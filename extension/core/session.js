@@ -165,9 +165,10 @@ export class VaultSession {
   }
 
   /** Discovery in the default tenant plus (desktop) every other tenant the account belongs to, silently. */
-  async discoverAll() {
+  /** tenants=false: only the home tenant (fast start; other tenants follow in a second run). */
+  async discoverAll({ tenants: otherTenants = true } = {}) {
     const found = [...(await this.azure.discoverContainers())];
-    if (!this.multiTenant) return found;
+    if (!this.multiTenant || !otherTenants) return found;
     let tenants = [];
     try {
       tenants = await this.azure.listTenants();
@@ -224,7 +225,11 @@ export class VaultSession {
   }
 
   /** Rebuilds the Key Vault container list from configured entries (policy, manual) and ARM discovery. */
-  async refreshContainers({ configured = [], hidden = [], discover = true } = {}) {
+  /**
+   * tenants=false: discovery in the home tenant only; access=false: no role check per vault (refreshAccess() later).
+   * Both make the first view after unlocking fast; the desktop app runs the full refresh right after in the background.
+   */
+  async refreshContainers({ configured = [], hidden = [], discover = true, tenants = true, access = true } = {}) {
     const map = new Map();
     const learned = (await this.store.get('vaultTenants')) || {};
     const add = (c, source) => {
@@ -252,7 +257,7 @@ export class VaultSession {
     let discoverError = null;
     if (discover) {
       try {
-        for (const c of await this.discoverAll()) add(c, 'discovered');
+        for (const c of await this.discoverAll({ tenants })) add(c, 'discovered');
       } catch (e) {
         discoverError = e.message;
       }
@@ -261,7 +266,7 @@ export class VaultSession {
       .filter((c) => !(hidden.includes(c.id) && c.sources.every((s) => s === 'discovered')))
       .sort((a, b) => a.name.localeCompare(b.name));
     await mapLimit(list, 4, async (c) => {
-      if (!c.resourceId) return;
+      if (!c.resourceId || !access) return;
       try {
         c.access = await this.azureFor(c).myAccess(c.resourceId);
       } catch (e) {

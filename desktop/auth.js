@@ -4,7 +4,8 @@
 // The token cache is encrypted with the OS key store (DPAPI on Windows) via Electron safeStorage.
 
 import { PublicClientApplication, InteractionRequiredAuthError } from '@azure/msal-node';
-import { safeStorage, shell, net } from 'electron';
+import { safeStorage, shell } from 'electron';
+import { secureFetch } from './secure-net.js';
 import fs from 'node:fs/promises';
 import { KV_SCOPE } from '../extension/core/keyvault.js';
 import { ARM_SCOPE } from '../extension/core/azure.js';
@@ -27,9 +28,9 @@ const page = (title, text) => `<!doctype html><html lang="${getLanguage()}"><met
 <div style="text-align:center"><h1 style="font-weight:600">${title}</h1><p>${text}</p></div></body></html>`;
 
 // MSAL traffic over Chromium's network stack (Windows certificate store and system proxy, unaffected by
-// NODE_TLS_REJECT_UNAUTHORIZED) instead of Node's https module.
+// NODE_TLS_REJECT_UNAUTHORIZED) instead of Node's https module – in the in-memory session (secure-net.js).
 async function send(url, options = {}, method = 'GET', timeout) {
-  const res = await net.fetch(url, {
+  const res = await secureFetch(url, {
     method,
     headers: options.headers,
     body: method === 'POST' ? options.body : undefined,
@@ -163,7 +164,14 @@ export class Auth {
     return !!brokerPlugin && !this.brokerFailed && this.getConfig().signInWindows !== false;
   }
 
-  async interactive(scopes, options = {}) {
+  /** One sign-in window at a time: parallel token requests (Key Vault, ARM, Graph) would each open their own. */
+  interactive(scopes, options = {}) {
+    const run = (this.interactiveQueue || Promise.resolve()).then(() => this.interactiveNow(scopes, options));
+    this.interactiveQueue = run.catch(() => {});
+    return run;
+  }
+
+  async interactiveNow(scopes, options = {}) {
     await brokerReady;
     this.onInteractive?.(true);
     try {
@@ -278,6 +286,13 @@ export class Auth {
       if (!isInteractionRequired(e) || silentOnly) throw e;
       if (tenantId && tenantId !== this.account.tenantId) throw new TenantSignInError(tenantId);
       try {
+        // Another sign-in may be running or just done: wait for it, then try silently once more – usually enough.
+        await this.interactiveQueue;
+        try {
+          return await this.pca().acquireTokenSilent({ account: this.account, scopes: [scope], authority });
+        } catch (again) {
+          if (!isInteractionRequired(again)) throw again;
+        }
         return await this.interactive([scope], { loginHint: this.account.username, authority });
       } catch (err) {
         if (tenantId && NOT_IN_TENANT.test(String(err.errorMessage || err.message))) throw notInTenant(tenantId);

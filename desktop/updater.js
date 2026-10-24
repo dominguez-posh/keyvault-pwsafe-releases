@@ -36,7 +36,7 @@ export class Updater {
   /**
    * mode(): current setting; onState(state): every change (renderer); ask(question) → Promise<boolean> (dialog);
    * isIdle(): app locked/in the tray – a downloaded update may be installed right away in mode "auto";
-   * beforeInstall(): called right before the app quits for the installation; fetch: net.fetch.
+   * beforeInstall(): called right before the app quits for the installation; fetch: secureFetch (in memory).
    */
   constructor({ mode, onState, ask, isIdle, beforeInstall, fetch }) {
     Object.assign(this, { mode, onState, ask, isIdle, beforeInstall, fetch });

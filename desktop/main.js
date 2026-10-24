@@ -14,6 +14,7 @@ import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.j
 import { totpCode } from '../extension/core/totp.js';
 import { BrowserBridge, launchPath, registerNativeHost, unregisterNativeHost } from './bridge.js';
 import { Updater, UPDATE_MODES } from './updater.js';
+import { secureFetch, purgeDiskCaches } from './secure-net.js';
 import { VaultSession, MemoryStore, POLICY_LABELS } from '../extension/core/session.js';
 import { buildInvite, parseInvite, ROLES } from '../extension/core/azure.js';
 import { vaultHost, KV_SCOPE } from '../extension/core/keyvault.js';
@@ -51,9 +52,13 @@ if (demo) {
   process.env.KVPWSAFE_CLIENT_ID = 'demo';
 }
 
-if (!smokeTest && !app.requestSingleInstanceLock()) app.quit();
+const primaryInstance = smokeTest || app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
 // Tests use virtual authenticators only: never route WebAuthn to the Windows API (no OS dialogs during tests).
 if (smokeTest) app.commandLine.appendSwitch('disable-features', 'WebAuthenticationUseNativeWinApi');
+// No HTTP cache on disk at all (the app only loads its own files); Azure traffic runs in memory (secure-net.js).
+app.commandLine.appendSwitch('disable-http-cache');
+if (primaryInstance) purgeDiskCaches();
 
 class DemoAuth {
   account = null;
@@ -106,7 +111,8 @@ function newSession() {
     getToken: (scope, opts) => auth.getToken(scope, opts),
     store: new MemoryStore(),
     // Chromium network stack: Windows certificate store, system proxy, unaffected by NODE_TLS_REJECT_UNAUTHORIZED.
-    fetch: demo?.fetch || ((url, init) => net.fetch(url, init)),
+    // In-memory session: Key Vault responses never reach a disk cache.
+    fetch: demo?.fetch || secureFetch,
     actor,
     adapters: { file: files },
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.
@@ -206,14 +212,31 @@ function configuredContainers() {
   ];
 }
 
-async function refreshAll() {
+/**
+ * quick (after unlocking): home tenant and entries first, so the app is usable at once; vaults of other tenants and
+ * the role check per vault follow in the background and show up by themselves ("changed").
+ */
+async function refreshAll({ quick = false } = {}) {
   await files.load();
   if (!signedIn()) return null;
-  const { discoverError } = await vault.refreshContainers({ configured: configuredContainers(), hidden: config.get().hiddenContainers });
+  const options = { configured: configuredContainers(), hidden: config.get().hiddenContainers };
+  const { discoverError } = await vault.refreshContainers(quick ? { ...options, tenants: false, access: false } : options);
   await vault.refreshIndex();
-  await vault.refreshAccess().catch(() => {});
+  if (quick) completeInBackground(vault, options);
+  else await vault.refreshAccess().catch(() => {});
   rememberTenants().catch(() => {});
   return discoverError;
+}
+
+function completeInBackground(session, options) {
+  (async () => {
+    await session.refreshContainers(options);
+    const index = await session.index();
+    const missing = (await session.containers()).filter((c) => c.kind === 'keyvault' && !index[c.id]).map((c) => c.id);
+    if (missing.length) await session.refreshIndex(missing);
+    // Locked or signed out meanwhile: the result belongs to an old session.
+    if (session === vault && opened) changed();
+  })().catch(() => {});
 }
 
 /** Tenants learned for hand-added vaults go into the settings, so the next start asks the right tenant at once. */
@@ -714,7 +737,7 @@ const api = {
     opened = true;
     if (!smokeTest && !demo) warmUpAutoType();
     applyShortcuts();
-    const discoverError = await refreshAll();
+    const discoverError = await refreshAll({ quick: true });
     changed();
     return { ...(await api.state()), discoverError };
   },
@@ -722,7 +745,7 @@ const api = {
     await auth.unlock(config.get().unlockPrompt);
     win?.show();
     win?.focus();
-    const discoverError = await refreshAll();
+    const discoverError = await refreshAll({ quick: true });
     changed();
     return { ...(await api.state()), discoverError };
   },
@@ -1607,7 +1630,7 @@ app.whenReady().then(async () => {
     // Nobody working in the app: locked, or only in the tray.
     isIdle: () => !opened || !win?.isVisible(),
     beforeInstall: () => { quitting = true; },
-    fetch: (url, init) => net.fetch(url, init),
+    fetch: secureFetch,
   });
   updater.start();
   if (smokeTest) runSmokeTest();
