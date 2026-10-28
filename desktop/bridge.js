@@ -10,6 +10,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 export const HOST_NAME = 'com.kvpwsafe.desktop';
+// Firefox identifies extensions by their gecko ID (manifest browser_specific_settings), not by an origin.
+export const GECKO_ID = 'keevault@keevault.de';
 const run = promisify(execFile);
 
 // Program to start from outside the app (browser launcher, passkey provider). The MSIX's Keevault.exe under
@@ -37,7 +39,7 @@ const { spawn } = require('child_process');
 const PIPE = __PIPE__;
 const LAUNCH = __LAUNCH__;
 const RETRY_MS = 1500;
-const origin = process.argv.find((a) => a.startsWith('chrome-extension://')) || '';
+const origin = process.argv.find((a) => a.startsWith('chrome-extension://')) || process.argv.find((a) => /^[\w.-]+@[\w.-]+$/.test(a)) || '';
 let socket = null;
 let state = 'unknown';
 let input = Buffer.alloc(0);
@@ -128,6 +130,10 @@ function browserDirs() {
 }
 
 const REGISTRY = ['HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts', 'HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts'];
+const FIREFOX_REGISTRY = 'HKCU\\Software\\Mozilla\\NativeMessagingHosts';
+const firefoxDir = () => (process.platform === 'darwin'
+  ? path.join(os.homedir(), 'Library/Application Support/Mozilla/NativeMessagingHosts')
+  : path.join(os.homedir(), '.mozilla/native-messaging-hosts'));
 
 /** Writes host script, launcher and manifest and registers them for Edge and Chrome (current user only). */
 export async function registerNativeHost({ userData, extensionIds, launch }) {
@@ -152,21 +158,28 @@ export async function registerNativeHost({ userData, extensionIds, launch }) {
   };
   const manifestPath = path.join(dir, `${HOST_NAME}.json`);
   await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  // Firefox: same host, own manifest format (allowed_extensions with gecko IDs).
+  const firefoxManifest = { name: HOST_NAME, description: 'Keevault', path: launcher, type: 'stdio', allowed_extensions: [GECKO_ID] };
+  const firefoxManifestPath = path.join(dir, `${HOST_NAME}.firefox.json`);
+  await fs.writeFile(firefoxManifestPath, JSON.stringify(firefoxManifest, null, 2));
   if (process.platform === 'win32') {
     for (const key of REGISTRY) await run('reg', ['add', `${key}\\${HOST_NAME}`, '/ve', '/t', 'REG_SZ', '/d', manifestPath, '/f'], { windowsHide: true });
+    await run('reg', ['add', `${FIREFOX_REGISTRY}\\${HOST_NAME}`, '/ve', '/t', 'REG_SZ', '/d', firefoxManifestPath, '/f'], { windowsHide: true }).catch(() => {});
   } else {
     for (const d of browserDirs()) {
       await fs.mkdir(d, { recursive: true });
       await fs.writeFile(path.join(d, `${HOST_NAME}.json`), JSON.stringify(manifest, null, 2));
     }
+    await fs.mkdir(firefoxDir(), { recursive: true });
+    await fs.writeFile(path.join(firefoxDir(), `${HOST_NAME}.json`), JSON.stringify(firefoxManifest, null, 2));
   }
 }
 
 export async function unregisterNativeHost() {
   if (process.platform === 'win32') {
-    for (const key of REGISTRY) await run('reg', ['delete', `${key}\\${HOST_NAME}`, '/f'], { windowsHide: true }).catch(() => {});
+    for (const key of [...REGISTRY, FIREFOX_REGISTRY]) await run('reg', ['delete', `${key}\\${HOST_NAME}`, '/f'], { windowsHide: true }).catch(() => {});
   } else {
-    for (const d of browserDirs()) await fs.rm(path.join(d, `${HOST_NAME}.json`), { force: true });
+    for (const d of [...browserDirs(), firefoxDir()]) await fs.rm(path.join(d, `${HOST_NAME}.json`), { force: true });
   }
 }
 

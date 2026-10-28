@@ -77,9 +77,15 @@ delete storeManifest.key;
 // Stores update their extensions themselves and reject a foreign update URL.
 delete storeManifest.update_url;
 const storeFiles = files.map((f) => (f.name === 'manifest.json' ? { name: f.name, data: Buffer.from(`${JSON.stringify(storeManifest, null, 2)}\n`) } : f));
+// Firefox (MV3): event page instead of a service worker, no offscreen documents, gecko ID for native messaging.
+const firefoxManifest = { ...storeManifest, background: { scripts: [manifest.background.service_worker], type: manifest.background.type || 'module' } };
+firefoxManifest.permissions = (firefoxManifest.permissions || []).filter((p) => p !== 'offscreen');
+firefoxManifest.browser_specific_settings = { gecko: { id: 'keevault@keevault.de', strict_min_version: '128.0' } };
+const firefoxFiles = files.map((f) => (f.name === 'manifest.json' ? { name: f.name, data: Buffer.from(`${JSON.stringify(firefoxManifest, null, 2)}\n`) } : f));
 
 mkdirSync(out, { recursive: true });
 const base = `kvpwsafe-extension-${manifest.version}`;
 writeFileSync(join(out, `${base}.zip`), zip(files));
 writeFileSync(join(out, `${base}-store.zip`), zip(storeFiles));
-console.log(`dist/${base}.zip und dist/${base}-store.zip erstellt (${files.length} Dateien)`);
+writeFileSync(join(out, `${base}-firefox.zip`), zip(firefoxFiles));
+console.log(`dist/${base}.zip, dist/${base}-store.zip und dist/${base}-firefox.zip erstellt (${files.length} Dateien)`);

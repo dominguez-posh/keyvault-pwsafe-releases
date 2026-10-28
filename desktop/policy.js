@@ -22,6 +22,7 @@ const VALUES = {
   ClipboardSeconds: { setting: 'clipboardSeconds', type: 'number' },
   RequirePin: { setting: 'requirePin', type: 'boolean' },
   McpEnabled: { setting: 'mcpEnabled', type: 'boolean' },
+  OfflineMirror: { setting: 'offlineMirror', type: 'boolean' },
 };
 
 const unescape = (s) => s.replace(/\\(["\\])/g, '$1');

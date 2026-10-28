@@ -89,6 +89,9 @@ export function normalizeItem(input = {}) {
     passkeys: (input.passkeys || []).map(normalizePasskey),
     folder: normalizeFolder(input.folder),
     favorite: !!input.favorite,
+    // Expiry date (YYYY-MM-DD) for certificates, service accounts, customer access – reminders in the app.
+    expires: /^\d{4}-\d{2}-\d{2}$/.test(str(input.expires).trim()) ? str(input.expires).trim() : '',
+    passwordChanged: str(input.passwordChanged),
     icon: isImageDataUrl(input.icon, ICON_MAX_CHARS) ? input.icon : '',
     card: normalizeCard(input.card),
     cert: normalizeCert(input.cert),
@@ -148,6 +151,8 @@ export function serializeItem(input, actor = '') {
     cert: item.type === 'certificate' && item.cert.data ? { fileName: item.cert.fileName, data: item.cert.data } : undefined,
     folder: item.folder,
     favorite: item.favorite,
+    expires: item.expires || undefined,
+    passwordChanged: item.passwordChanged || undefined,
     icon: item.icon || undefined,
     created: item.created || now,
     createdBy: item.createdBy || actor,
@@ -174,6 +179,7 @@ export function serializeItem(input, actor = '') {
   if (item.favorite) tags.fav = '1';
   if (item.totp) tags.otp = '1';
   if (item.icon) tags.ic = '1';
+  if (item.expires) tags.exp = item.expires;
   return { value, contentType: CONTENT_TYPE, tags, doc };
 }
 
@@ -195,6 +201,7 @@ export function summaryFromSecret(secret, containerId) {
     favorite: t.fav === '1',
     hasTotp: t.otp === '1',
     hasIcon: t.ic === '1',
+    expires: /^\d{4}-\d{2}-\d{2}$/.test(t.exp || '') ? t.exp : '',
     updated: (secret.attributes?.updated || 0) * 1000,
   };
 }

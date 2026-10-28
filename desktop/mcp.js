@@ -119,8 +119,8 @@ export class McpService {
    * confirmWrite({ agent, action, title, vault, fields }) → boolean; audit({ agent, tool, vault, entry, result });
    * scope(): released vaults/folders (see scopeAllows; without it everything is released).
    */
-  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }) }) {
-    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope });
+  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }) }) {
+    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy });
     this.clients = new Set();
     this.grants = new WeakMap();
   }
@@ -233,6 +233,7 @@ export class McpService {
 
       case 'create_entry':
       case 'update_entry': {
+        if (this.policy(client.agent)?.write === false) throw fail(t('Dieser Agent darf nur lesen (Einstellungen → KI-Agenten).'));
         const c = await this.container(a.vaultId);
         if (c.access?.write === false) throw fail(t('Kein Schreibrecht in diesem Tresor'));
         const v = this.session();

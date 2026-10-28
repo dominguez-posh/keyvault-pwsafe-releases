@@ -1,7 +1,7 @@
 // Keevault desktop app (Electron main process). All network and file access and all keys stay here;
 // the sandboxed renderer only calls the API below through the preload bridge.
 
-import { app, BrowserWindow, ipcMain, shell, clipboard, dialog, powerMonitor, protocol, net, nativeTheme, session, Tray, Menu, nativeImage, globalShortcut, Notification } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, clipboard, dialog, powerMonitor, protocol, net, nativeTheme, session, Tray, Menu, nativeImage, globalShortcut, Notification, safeStorage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -21,6 +21,8 @@ import { buildInvite, parseInvite, ROLES } from '../extension/core/azure.js';
 import { vaultHost, KV_SCOPE } from '../extension/core/keyvault.js';
 import { SAMPLE_CSV } from '../extension/core/import-sample.js';
 import { mapLimit, decodeJwtPayload } from '../extension/core/util.js';
+import { passwordReport, hibpParts, hibpCount } from '../extension/core/health.js';
+import { OfflineMirror, isNetworkError } from './offline.js';
 import { itemMatchesHost } from '../extension/core/match.js';
 import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
@@ -107,13 +109,23 @@ function applyLanguage() {
   setLanguage(setting, app.getLocale());
 }
 
+// Offline read mode: encrypted mirror of the Key Vault answers, replayed without network (offline.js).
+let offline = null;
+let offlineMode = false;
+const offlineMirror = () => (offline ||= new OfflineMirror({
+  dir: app.getPath('userData'),
+  protect: (buf) => safeStorage.encryptString(Buffer.from(buf).toString('base64')),
+  unprotect: (buf) => Buffer.from(safeStorage.decryptString(Buffer.from(buf)), 'base64'),
+}));
+const mirrorWanted = () => !!config.get().offlineMirror && !!config.get().appPin && !demo;
+
 function newSession() {
   vault = new VaultSession({
-    getToken: (scope, opts) => auth.getToken(scope, opts),
+    getToken: offlineMode ? async () => 'offline' : (scope, opts) => auth.getToken(scope, opts),
     store: new MemoryStore(),
     // Chromium network stack: Windows certificate store, system proxy, unaffected by NODE_TLS_REJECT_UNAUTHORIZED.
-    // In-memory session: Key Vault responses never reach a disk cache.
-    fetch: demo?.fetch || secureFetch,
+    // In-memory session: Key Vault responses never reach a disk cache – except the encrypted offline mirror.
+    fetch: demo?.fetch || (offlineMode ? offlineMirror().replay : mirrorWanted() ? offlineMirror().record(secureFetch) : secureFetch),
     actor,
     adapters: { file: files },
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.
@@ -198,8 +210,9 @@ let keptAccount = null;
 async function lockNow() {
   mcp?.revoke();
   if (!opened && !auth.account) return;
-  const keep = !!config.get().appPin && opened;
+  const keep = !!config.get().appPin && opened && !offlineMode;
   keptAccount = auth.account?.homeAccountId || null;
+  offlineMode = false;
   auth.lock();
   files.lockAll();
   if (keep) {
@@ -236,6 +249,7 @@ async function refreshAll({ quick = false } = {}) {
   if (!signedIn()) return null;
   const options = { configured: configuredContainers(), hidden: config.get().hiddenContainers };
   const { discoverError } = await vault.refreshContainers(quick ? { ...options, tenants: false, access: false } : options);
+  if (mirrorWanted()) offlineMirror().setContainers(await vault.containers());
   await vault.refreshIndex();
   if (quick) completeInBackground(vault, options);
   else await vault.refreshAccess().catch(() => {});
@@ -600,18 +614,27 @@ const mcpScriptPath = () => path.join(app.getPath('userData'), 'mcp', 'keevault-
 async function approveAgent(agent) {
   const s = config.get();
   if (!s.mcpEnabled || demo) return false;
-  if (s.approvedAgents.includes(agent)) return true;
+  if (s.approvedAgents.includes(agent)) {
+    const until = s.agentRules?.[agent]?.until;
+    if (!until || Date.parse(until) > Date.now()) return true;
+    // The approval ran out: ask again.
+    config.update({ approvedAgents: s.approvedAgents.filter((x) => x !== agent) });
+  }
   showWindow();
   const r = await dialog.showMessageBox(win, {
     type: 'question',
-    buttons: [t('Erlauben'), t('Ablehnen')],
-    defaultId: 1,
-    cancelId: 1,
+    buttons: [t('Lesen und Schreiben'), t('Nur lesen'), t('Ablehnen')],
+    defaultId: 2,
+    cancelId: 2,
     message: t('KI-Agent „{agent}“ möchte sich mit Keevault verbinden.', { agent }),
-    detail: t('Der Agent darf danach Tresore und Einträge durchsuchen (ohne Passwörter). Passwörter lesen und Einträge ändern muss du jedes Mal bzw. pro Sitzung erlauben. Erlaube das nur für Agenten, die du selbst eingerichtet hast.'),
+    detail: t('Der Agent darf danach Tresore und Einträge durchsuchen (ohne Passwörter). Passwörter lesen und Einträge ändern muss du jedes Mal bzw. pro Sitzung erlauben. Erlaube das nur für Agenten, die du selbst eingerichtet hast.')
+      + '\n\n' + t('„Nur lesen“: der Agent kann keine Einträge anlegen oder ändern. Rechte und Gültigkeit änderst du jederzeit in den Einstellungen.'),
   });
-  if (r.response !== 0) return false;
-  config.update({ approvedAgents: [...config.get().approvedAgents, agent] });
+  if (r.response === 2) return false;
+  config.update({
+    approvedAgents: [...config.get().approvedAgents, agent],
+    agentRules: { ...config.get().agentRules, [agent]: { write: r.response === 0, until: null } },
+  });
   return true;
 }
 
@@ -765,6 +788,8 @@ const api = {
       opened,
       hasFiles: settings.fileContainers.length > 0,
       pinSet: !!settings.appPin,
+      offline: offlineMode,
+      offlineAt: offlineMode ? offline?.at || null : null,
       signInMode: auth.useBroker?.() ? 'windows' : 'browser',
       requirePin: !!settings.requirePin,
       account: auth.account ? { name: auth.account.name, username: auth.account.username, tenantId: auth.account.tenantId } : null,
@@ -799,6 +824,7 @@ const api = {
     if (wait) throw new Error(t('Zu viele falsche Versuche – bitte {seconds} Sekunden warten', { seconds: wait }));
     if (await verifyPin(pin, record)) {
       pinGuard.success();
+      if (mirrorWanted()) await offlineMirror().unlockKey(pin).catch(() => {});
       return true;
     }
     pinGuard.failure();
@@ -810,6 +836,8 @@ const api = {
     const s = config.get();
     if (s.appPin) await api.verifyPin(current);
     pinGuard.consume();
+    if (s.offlineMirror && next) await offlineMirror().rekey(current, next).catch(() => {});
+    if (!next) await offlineMirror().remove().catch(() => {});
     if (next == null) {
       if (s.requirePin) throw new Error(t('Eure Organisation verlangt eine PIN'));
       config.update({ appPin: null });
@@ -825,7 +853,14 @@ const api = {
       // With a PIN the silent sign-in from the encrypted token cache is enough; the Microsoft window only
       // appears when the tenant demands it (e.g. expired MFA). An unlock prompt enforced by policy stays.
       const silent = !!config.get().appPin && !config.get().enforced.includes('unlockPrompt');
-      await auth.unlock(silent ? 'none' : config.get().unlockPrompt);
+      const canOffline = mirrorWanted() && offlineMirror().ready && (await offlineMirror().exists());
+      if (canOffline && !net.isOnline()) return api.unlockOffline();
+      try {
+        await auth.unlock(silent ? 'none' : config.get().unlockPrompt);
+      } catch (e) {
+        if (canOffline && isNetworkError(e)) return api.unlockOffline();
+        throw e;
+      }
       if (!config.get().entraUsed) config.update({ entraUsed: true });
       win?.show();
       win?.focus();
@@ -847,6 +882,20 @@ const api = {
     changed();
     return { ...(await api.state()), discoverError };
   },
+  /** Read-only session from the encrypted mirror (no network): the last state the app has seen. */
+  async unlockOffline() {
+    const mirror = offlineMirror();
+    const info = await mirror.load();
+    offlineMode = true;
+    keptVault = false;
+    newSession();
+    opened = true;
+    applyShortcuts();
+    await vault.refreshContainers({ configured: mirror.containers.map((c) => ({ ...c, source: 'manual' })), discover: false, access: false });
+    await vault.refreshIndex().catch(() => {});
+    changed();
+    return { ...(await api.state()), offlineAt: info.at };
+  },
   async signIn() {
     await auth.unlock(config.get().unlockPrompt);
     win?.show();
@@ -862,6 +911,7 @@ const api = {
     await vault.clear();
     newSession();
     keptVault = false;
+    await offlineMirror().remove().catch(() => {});
     await auth.signOut();
   },
   /** Reloads one container (file from disk, Key Vault from the service). */
@@ -1554,12 +1604,93 @@ const api = {
     enabled: !!config.get().mcpEnabled,
     tools: MCP_TOOLS.map((x) => x.title),
     agents: config.get().approvedAgents,
+    rules: config.get().agentRules || {},
     sessions: mcp?.activeSessions() || [],
     ...mcpClientConfig({ command: launchPath(), script: mcpScriptPath() }),
   }),
   mcpRemoveAgent: (agent) => {
-    config.update({ approvedAgents: config.get().approvedAgents.filter((x) => x !== agent) });
+    const rules = { ...config.get().agentRules };
+    delete rules[agent];
+    config.update({ approvedAgents: config.get().approvedAgents.filter((x) => x !== agent), agentRules: rules });
     mcp?.revoke(agent);
+    return true;
+  },
+  /** Rights of an agent: write yes/no, approval for `days` days (0 = until removed). */
+  mcpAgentRule: (agent, { write, days }) => {
+    const current = config.get().agentRules?.[agent] || { write: true, until: null };
+    const rule = {
+      write: typeof write === 'boolean' ? write : current.write,
+      until: days === undefined ? current.until : (Number(days) > 0 ? new Date(Date.now() + Number(days) * 86_400_000).toISOString() : null),
+    };
+    config.update({ agentRules: { ...config.get().agentRules, [agent]: rule } });
+    if (rule.write === false) mcp?.revoke(agent);
+    return rule;
+  },
+  /** Password health over the given vaults (all open ones when empty); hibp: also ask Have I Been Pwned. */
+  async healthReport({ containerIds = [], hibp = false } = {}) {
+    requireOpen();
+    const wanted = (await vault.summaries()).filter((s) => (!containerIds.length || containerIds.includes(s.containerId)) && s.type !== 'note');
+    const items = [];
+    let skipped = 0;
+    await mapLimit(wanted, 6, async (s) => {
+      try {
+        items.push(await vault.getItem(s.containerId, s.id));
+      } catch {
+        skipped++; // locked (protected) vault or transient error
+      }
+    });
+    if (hibp) {
+      const ranges = new Map(); // prefix → response text (several passwords can share a prefix)
+      await mapLimit(items.filter((i) => i.password), 4, async (i) => {
+        const { prefix, suffix } = await hibpParts(i.password);
+        if (!ranges.has(prefix)) {
+          ranges.set(prefix, secureFetch(`https://api.pwnedpasswords.com/range/${prefix}`, { headers: { 'Add-Padding': 'true', 'User-Agent': 'Keevault' } })
+            .then((res) => (res.ok ? res.text() : Promise.reject(new Error(`HIBP HTTP ${res.status}`)))));
+        }
+        i.pwnedCount = hibpCount(await ranges.get(prefix), suffix);
+      });
+    }
+    return { ...passwordReport(items), skipped, hibp };
+  },
+  /** Who may do what in the Key Vault vaults (role assignments incl. inherited ones) – for audits. */
+  async accessReport() {
+    requireOpen();
+    const rows = [];
+    const containers = (await vault.containers()).filter((c) => c.kind === 'keyvault' && !c.error);
+    await mapLimit(containers, 3, async (c) => {
+      try {
+        const members = await (await vault.azureForId(c.id)).listMembers(await containerResource(c.id));
+        for (const m of members) {
+          rows.push({
+            vault: c.name, vaultUrl: c.vaultUrl, principal: m.displayName, detail: m.detail || '', type: m.principalType || '', level: m.level,
+            roles: m.assignments.map((a) => a.label + (a.inherited ? ` (${t('vererbt')})` : '')),
+          });
+        }
+      } catch (e) {
+        rows.push({ vault: c.name, vaultUrl: c.vaultUrl, error: e.message });
+      }
+    });
+    rows.sort((a, b) => a.vault.localeCompare(b.vault) || (a.principal || '').localeCompare(b.principal || ''));
+    return { created: new Date().toISOString(), by: actor(), rows };
+  },
+  /** Saves a text file (CSV) where the user chooses. */
+  async saveTextFile({ name, text }) {
+    const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('documents'), String(name).replace(/[\\/:*?"<>|]/g, '_')) });
+    if (canceled || !filePath) return false;
+    await fs.writeFile(filePath, String(text), 'utf8');
+    return true;
+  },
+  /** Renders a report page off-screen and saves it as PDF. */
+  async saveReportPdf({ name, html }) {
+    const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('documents'), String(name).replace(/[\\/:*?"<>|]/g, '_')), filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+    if (canceled || !filePath) return false;
+    const page = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, javascript: false } });
+    try {
+      await page.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(String(html))}`);
+      await fs.writeFile(filePath, await page.webContents.printToPDF({ printBackground: true, landscape: true }));
+    } finally {
+      page.destroy();
+    }
     return true;
   },
 
@@ -1602,6 +1733,14 @@ function createTray() {
     { label: t('Passwort-Generator'), click: () => {
       showWindow();
       send({ type: 'generator' });
+    } },
+    { label: t('Passwort-Check'), enabled: opened, click: () => {
+      showWindow();
+      send({ type: 'health' });
+    } },
+    { label: t('Zugriffsbericht'), enabled: opened, click: () => {
+      showWindow();
+      send({ type: 'access' });
     } },
     { label: t('Sperren'), enabled: opened, click: () => lockNow() },
     { label: t('Nach Updates suchen …'), click: () => {
@@ -1739,6 +1878,7 @@ app.whenReady().then(async () => {
     vault: () => (opened ? vault : null),
     confirmRead: confirmAgentRead,
     confirmWrite: confirmAgentWrite,
+    policy: (agent) => config.get().agentRules?.[agent] || { write: true },
     scope: () => {
       const s = config.get();
       const scopes = (Array.isArray(s.mcpScopes) ? s.mcpScopes : []).filter((x) => x && typeof x.vaultId === 'string')
@@ -2107,6 +2247,15 @@ function runSmokeTest() {
       if (view === 'backup') await menuAction('backup');
       if (view === 'vault-settings') await menuAction('vault-settings');
       if (view === 'restore') await menuAction('restore');
+      if (view === 'health') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Passwort-Check|Password check/.test(n.textContent))?.click()');
+      if (view === 'access') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Zugriffsbericht|Access report/.test(n.textContent))?.click()');
+      if (view === 'expiry') {
+        await js('document.querySelector(".list-head .btn.primary")?.click()');
+        await sleep(300);
+        await js('document.querySelector(".context-menu [data-action=new-login]")?.click()');
+        await sleep(400);
+        await js('(() => { const d = document.querySelector(".editor input[name=expires]"); if (d) { d.value = "2026-11-10"; d.dispatchEvent(new Event("input", { bubbles: true })); } })()');
+      }
       if (view === 'add') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');
         await sleep(300);

@@ -6,6 +6,7 @@
     <stringTable>
       <string id="Keevault">Keevault</string>
       <string id="SUPPORTED_Keevault_0_6_2">Keevault 0.6.2 or later</string>
+      <string id="SUPPORTED_Keevault_0_7_0">Keevault 0.7.0 or later</string>
       <string id="Vaults">Connect vaults automatically</string>
       <string id="Vaults_Help">These Azure Key Vaults appear in Keevault for all affected users automatically after sign-in (labeled "Policy").
 
@@ -36,6 +37,12 @@ Computer and user policy are combined.</string>
 Disabled: no AI agents possible, the user cannot switch it on.
 
 Not configured: the user decides (off by default).</string>
+      <string id="OfflineMirror">Allow offline read mode</string>
+      <string id="OfflineMirror_Help">Enabled: users with an app PIN may keep an encrypted mirror of their entries for the road (AES-256-GCM; opening it needs the Windows account AND the PIN). Without a network Keevault then shows the last known state – read only, no changes.
+
+Disabled: no offline mirror, the user cannot switch the function on.
+
+Not configured: the user decides (default: off).</string>
       <string id="UpdateMode">Updates</string>
       <string id="UpdateMode_Help">Updates of the per-user installation (EXE) from keevault.de. MSI and MSIX installations are always updated through software deployment.</string>
       <string id="UpdateMode_Off">Off – check manually only</string>

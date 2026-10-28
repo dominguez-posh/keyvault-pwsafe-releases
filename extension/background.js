@@ -136,6 +136,8 @@ async function broadcast(message) {
 // ---------------------------------------------------------------- clipboard (offscreen document)
 
 async function offscreen(message) {
+  // Firefox has no offscreen documents: clipboard helpers are skipped there (filling itself works).
+  if (!chrome.offscreen) return null;
   const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
   if (!contexts.length) {
     await chrome.offscreen.createDocument({
@@ -161,7 +163,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (!clip) return;
   await chrome.storage.session.remove('clip');
   await offscreen({ cmd: 'clearIf', hash: clip }).catch(() => {});
-  await chrome.offscreen.closeDocument().catch(() => {});
+  await chrome.offscreen?.closeDocument().catch(() => {});
 });
 
 async function copyTotpAfterFill(item) {

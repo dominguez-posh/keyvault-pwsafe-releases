@@ -40,8 +40,12 @@ const DEFAULTS = {
   // What agents may see: 'selected' (only mcpScopes – nothing until released) or 'all' (every vault).
   mcpScope: 'selected',
   mcpScopes: [], // [{ vaultId, folder }] – folder '' = whole vault
+  // Per agent: may it write (create/change), and until when the approval holds (null = until removed).
+  agentRules: {}, // { [agent]: { write: boolean, until: ISO string | null } }
+  // Offline read mode: encrypted mirror of the vault answers (needs the app PIN); off by default, policy can forbid it.
+  offlineMirror: false,
 };
-const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled'];
+const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled', 'offlineMirror'];
 
 function readJson(file) {
   try {

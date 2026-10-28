@@ -113,3 +113,15 @@ body { overflow: hidden; }
 .policy-row { align-items: flex-start; }
 .license-links { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 14px; }
 .snippet { white-space: pre-wrap; word-break: break-all; font-size: 11px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 4px 0; max-height: 170px; overflow: auto; user-select: text; }
+
+/* Reports (password check, access report) and expiry markers */
+.count.warn { color: var(--warn); font-weight: 600; }
+.table { overflow: auto; max-height: 50vh; margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; }
+.table table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table th, .table td { text-align: left; vertical-align: top; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.table th { position: sticky; top: 0; background: var(--surface-2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted); }
+.table td.inline { gap: 4px; flex-wrap: wrap; }
+.table td.row-actions { text-align: right; white-space: nowrap; }
+.notice.ok { display: flex; align-items: center; color: var(--ok, #1a7f37); }
+.badge.expiry { margin-top: 4px; }
+.field-row input[type="date"] { flex: 0 0 170px; }

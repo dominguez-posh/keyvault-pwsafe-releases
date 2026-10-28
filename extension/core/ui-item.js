@@ -6,6 +6,7 @@ import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator
 import { ITEM_TYPES, CERT_MAX_BYTES, normalizeItem, formatCardNumber } from './model.js';
 import { t } from './i18n.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
+import { expiryState } from './health.js';
 
 /**
  * @param {object} item  parsed item
@@ -42,7 +43,8 @@ export function itemDetail(item, ctx) {
       avatar(item.title, 'avatar large', item.icon),
       h('div', { class: 'item-head-text' },
         h('h2', {}, item.favorite ? icon('star', 14) : null, item.title),
-        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type])].filter(Boolean).join(' · ')))),
+        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type])].filter(Boolean).join(' · ')),
+        expiryBadge(item.expires))),
     rows.length ? rows : h('p', { class: 'muted' }, t('Keine Felder')),
     h('div', { class: 'meta muted' }, item.updatedBy
       ? t('Geändert {date} von {user}', { date: formatDateTime(item.updated), user: item.updatedBy })
@@ -50,6 +52,16 @@ export function itemDetail(item, ctx) {
     ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
       type: 'button', class: a.danger ? 'btn danger' : a.primary ? 'btn primary' : 'btn', onclick: a.onClick,
     }, icon(a.icon), a.label))) : null);
+}
+
+/** "Gültig bis" with a warning when the date is near or past. */
+export function expiryBadge(expires) {
+  if (!expires) return null;
+  const state = expiryState(expires);
+  const date = new Date(`${expires}T12:00:00`).toLocaleDateString();
+  if (state === 'expired') return h('span', { class: 'badge danger expiry' }, icon('clock', 11), t('Abgelaufen am {date}', { date }));
+  if (state === 'soon') return h('span', { class: 'badge warn expiry' }, icon('clock', 11), t('Läuft ab am {date}', { date }));
+  return h('span', { class: 'badge expiry' }, icon('clock', 11), t('Gültig bis {date}', { date }));
 }
 
 function textField(label, value, ctx) {
@@ -181,6 +193,7 @@ export function itemForm(item, ctx) {
     : h('input', { name: 'folder', value: startFolder, placeholder: t('optional, z. B. Kunden/Contoso'), list: 'folder-options' });
   const folderOptions = h('datalist', { id: 'folder-options' }, ...(ctx.folders || []).map((f) => h('option', { value: f })));
   const favorite = h('input', { type: 'checkbox', name: 'favorite', checked: it.favorite });
+  const expires = h('input', { type: 'date', name: 'expires', value: it.expires });
   let icon64 = it.icon;
   const iconPreview = h('span', {});
   const iconRemove = h('button', { type: 'button', class: 'btn small', onclick: () => { icon64 = ''; drawIcon(); } }, t('Entfernen'));
@@ -295,6 +308,7 @@ export function itemForm(item, ctx) {
     cardOnly,
     certOnly,
     h('div', { class: 'grid2' }, row(t('Ordner'), h('div', {}, folder, folderOptions)), h('div', { class: 'field' }, h('label', {}, ' '), h('label', { class: 'inline' }, favorite, t('Favorit')))),
+    row(t('Gültig bis (optional)'), h('div', { class: 'field-row' }, expires, h('span', { class: 'muted small' }, t('Erinnerung 30 Tage vorher, z. B. für Zertifikate, Service-Konten, Kundenzugänge')))),
     h('div', { class: 'field' }, h('label', {}, t('Zusätzliche Felder')), fieldsBox,
       h('button', { type: 'button', class: 'btn small', onclick: () => { fields.push({ name: '', value: '', hidden: false }); renderFields(); } }, icon('plus', 14), t('Feld hinzufügen'))),
     row(t('Notizen'), notes),
@@ -334,6 +348,9 @@ export function itemForm(item, ctx) {
       folder: folder.value,
       icon: icon64,
       favorite: favorite.checked,
+      expires: expires.value,
+      // Date of the last password change (for the "old passwords" report).
+      passwordChanged: (login || type === 'certificate') && (login ? password.value : certPassword.value) !== it.password ? new Date().toISOString() : it.passwordChanged,
       notes: notes.value,
       fields,
       passkeys,

@@ -6,6 +6,7 @@
     <stringTable>
       <string id="Keevault">Keevault</string>
       <string id="SUPPORTED_Keevault_0_6_2">Keevault 0.6.2 oder neuer</string>
+      <string id="SUPPORTED_Keevault_0_7_0">Keevault 0.7.0 oder neuer</string>
       <string id="Vaults">Tresore automatisch verbinden</string>
       <string id="Vaults_Help">Diese Azure Key Vaults erscheinen bei allen betroffenen Benutzern nach der Anmeldung automatisch in Keevault (Kennzeichnung „Richtlinie“).
 
@@ -36,6 +37,12 @@ Computer- und Benutzerrichtlinie werden zusammengeführt.</string>
 Deaktiviert: Keine KI-Agenten möglich, der Benutzer kann es nicht einschalten.
 
 Nicht konfiguriert: Der Benutzer entscheidet selbst (ab Werk aus).</string>
+      <string id="OfflineMirror">Offline-Lesemodus erlauben</string>
+      <string id="OfflineMirror_Help">Aktiviert: Benutzer mit App-PIN können einen verschlüsselten Spiegel ihrer Einträge für unterwegs anlegen (AES-256-GCM; zum Öffnen sind Windows-Konto UND PIN nötig). Ohne Netzwerk zeigt Keevault dann den letzten Stand – nur lesen, keine Änderungen.
+
+Deaktiviert: kein Offline-Spiegel, der Benutzer kann die Funktion nicht einschalten.
+
+Nicht konfiguriert: der Benutzer entscheidet (Standard: aus).</string>
       <string id="UpdateMode">Updates</string>
       <string id="UpdateMode_Help">Updates der per-Benutzer-Installation (EXE) von keevault.de. MSI- und MSIX-Installationen werden immer über die Softwareverteilung aktualisiert.</string>
       <string id="UpdateMode_Off">Aus – nur manuell suchen</string>

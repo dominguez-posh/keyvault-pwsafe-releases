@@ -10,6 +10,7 @@
   <supportedOn>
     <definitions>
       <definition name="SUPPORTED_Keevault_0_6_2" displayName="$(string.SUPPORTED_Keevault_0_6_2)" />
+      <definition name="SUPPORTED_Keevault_0_7_0" displayName="$(string.SUPPORTED_Keevault_0_7_0)" />
     </definitions>
   </supportedOn>
   <categories>
@@ -71,6 +72,12 @@
     <policy name="McpEnabled" class="Both" displayName="$(string.McpEnabled)" explainText="$(string.McpEnabled_Help)" key="Software\Policies\Keevault" valueName="McpEnabled">
       <parentCategory ref="Keevault" />
       <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="OfflineMirror" class="Both" displayName="$(string.OfflineMirror)" explainText="$(string.OfflineMirror_Help)" key="Software\Policies\Keevault" valueName="OfflineMirror">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_0" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>

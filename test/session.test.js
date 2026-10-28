@@ -369,3 +369,18 @@ test('lockKeys: index and containers stay, container keys are gone (fast unlock 
   const back = await session.unlockContainer(cid, { password: 'master-password-1' });
   assert.ok(back, 'protected vault opens again with its secret');
 });
+
+test('refreshContainers keeps learned resource ID and rights until the next check replaces them', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  // What refreshAccess() learns for a hand-added vault …
+  const stored = await session.store.get('containers');
+  stored[0].resourceId = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/kv-team';
+  stored[0].access = { admin: true, write: true };
+  await session.store.set('containers', stored);
+  // … survives the quick refresh after unlocking (no role check, no discovery).
+  await session.refreshContainers({ configured: [{ name: 'Team', vaultUrl: 'kv-team' }], discover: false, access: false });
+  const [c] = await session.containers();
+  assert.equal(c.resourceId, stored[0].resourceId, 'resource ID kept');
+  assert.deepEqual(c.access, { admin: true, write: true }, 'rights kept');
+});

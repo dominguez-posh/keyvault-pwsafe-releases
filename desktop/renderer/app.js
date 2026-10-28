@@ -8,6 +8,8 @@ import { setLanguage, t, LANGUAGES, getLanguage, locale } from '../../extension/
 import { pickImage, LOGO_MAX_CHARS } from '../../extension/core/image.js';
 import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
 import { MAX_FOLDER_DEPTH } from '../../extension/core/model.js';
+import { expiryState, expiringEntries, daysUntil } from '../../extension/core/health.js';
+import { healthDialog, accessReportDialog } from './reports.js';
 
 async function call(method, ...args) {
   const r = await window.pwsafe.invoke(method, args);
@@ -125,6 +127,10 @@ window.pwsafe.onEvent((ev) => {
     checkWindowsRequests();
   } else if (ev.type === 'generator') {
     generatorDialog();
+  } else if (ev.type === 'health') {
+    if (st?.opened) healthDialog(reportCtx());
+  } else if (ev.type === 'access') {
+    if (st?.opened) accessReportDialog(reportCtx());
   } else if (ev.type === 'update') {
     for (const fn of updateListeners) fn(ev.state);
   } else if (ev.type === 'checkUpdates') {
@@ -315,8 +321,12 @@ async function loadItems() {
 
 async function reloadAll() {
   st = await call('state');
-  if (!st.opened) return render();
+  if (!st.opened) {
+    expiryReminded = false;
+    return render();
+  }
   await loadItems();
+  expiryReminder();
   if (!root.querySelector('.shell')) return render();
   renderSidebar();
   renderList();
@@ -390,6 +400,7 @@ function renderLocked(error) {
       if (pin) await call('verifyPin', pin.value);
       const r = await call('unlock', { entra: withEntra });
       if (r.discoverError) toast(t('Tresor-Suche: {message}', { message: r.discoverError }), 'error');
+      if (r.offline) toast(t('Kein Netzwerk – Offline-Stand vom {date}, nur lesen', { date: formatDateTime(r.offlineAt) }), 'warn');
       const firstLockedFile = r.containers.find((c) => c.kind === 'file' && c.locked);
       if (!withEntra && firstLockedFile) {
         ui.containerId = firstLockedFile.id;
@@ -487,12 +498,18 @@ function renderSidebar() {
       refresh);
   });
   setChildren(panes.sidebar,
-    h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), 'Keevault'),
+    h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), 'Keevault',
+      st.offline ? h('span', { class: 'badge warn', title: t('Letzter Stand: {date}', { date: formatDateTime(st.offlineAt) }) }, t('Offline – nur lesen')) : null),
     nav('all', t('Alle Einträge'), 'shield', items.length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite).length),
     nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
     h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? containers : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
+    h('div', { class: 'nav-section' }, h('span', {}, t('Werkzeuge'))),
+    h('button', { class: 'nav', onclick: generatorDialog }, icon('key'), h('span', { class: 'nav-label' }, t('Passwort-Generator'))),
+    h('button', { class: 'nav', onclick: () => healthDialog(reportCtx()) }, icon('shield'), h('span', { class: 'nav-label' }, t('Passwort-Check')),
+      expiringEntries(items).length ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiringEntries(items).length) : null),
+    st.signedIn ? h('button', { class: 'nav', onclick: () => accessReportDialog(reportCtx()) }, icon('users'), h('span', { class: 'nav-label' }, t('Zugriffsbericht'))) : null,
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
         await call('signIn');
@@ -571,7 +588,9 @@ function renderList() {
         i.type === 'note' ? h('span', { class: 'badge' }, t('Notiz')) : null,
         i.type === 'card' ? h('span', { class: 'badge', title: t('Kreditkarte') }, icon('card', 11)) : null,
         i.type === 'certificate' ? h('span', { class: 'badge', title: t('Zertifikat') }, icon('certificate', 11)) : null,
-        i.unprotected ? h('span', { class: 'badge warn', title: t('Dieser Eintrag ist nicht verschlüsselt') }, t('unverschlüsselt')) : null),
+        i.unprotected ? h('span', { class: 'badge warn', title: t('Dieser Eintrag ist nicht verschlüsselt') }, t('unverschlüsselt')) : null,
+        expiryState(i.expires) === 'expired' ? h('span', { class: 'badge danger', title: t('Abgelaufen') }, icon('clock', 11), t('abgelaufen'))
+          : expiryState(i.expires) === 'soon' ? h('span', { class: 'badge warn', title: t('Läuft bald ab') }, icon('clock', 11), t('läuft ab')) : null),
       h('div', { class: 'row-sub' }, [i.username || i.hosts[0], container ? null : containerName(i.containerId)].filter(Boolean).join(' · '))));
   }
 
@@ -1086,6 +1105,7 @@ function containerActions(c) {
     c.secure ? { action: 'changelog', icon: 'clock', label: t('Änderungsprotokoll'), disabled: !ready, onClick: () => changelogDialog(c) } : null,
     settings,
     mcpScopeAction(c.id, ''),
+    c.kind === 'keyvault' || c.kind === 'file' ? { action: 'health', icon: 'shield', label: t('Passwort-Check'), disabled: !ready, onClick: () => healthDialog(reportCtx(c.id)) } : null,
     '-',
     may('folders') ? { action: 'folder', icon: 'folder-plus', label: t('Neuer Ordner'), disabled: !canWrite, onClick: () => newFolderDialog(c) } : null,
     may('logo') ? { action: 'logo', icon: 'image', label: t('Logo des Tresors'), disabled: !canWrite, onClick: () => logoDialog(c) } : null,
@@ -2316,6 +2336,41 @@ const mcpScopeAction = (vaultId, folder) => (st.settings.mcpEnabled && st.settin
   ? { action: 'mcp-scope', icon: 'link', label: mcpShared(vaultId, folder) ? t('Freigabe für KI-Agenten aufheben') : t('Für KI-Agenten freigeben'), onClick: () => toggleMcpScope(vaultId, folder) }
   : null);
 
+// ---------------------------------------------------------------- reports (password check, access report)
+
+/** What the report dialogs need from the app. */
+function reportCtx(containerId = null) {
+  return {
+    call,
+    containerId,
+    containerName,
+    openItem: (i) => {
+      ui.view = 'container';
+      ui.containerId = i.containerId;
+      ui.folder = i.folder || '';
+      ui.folderOf = i.containerId;
+      ui.selected = i.key;
+      ui.editing = null;
+      render();
+    },
+  };
+}
+
+let expiryReminded = false;
+
+/** Once per unlock: entries that have expired or expire within 30 days. */
+function expiryReminder() {
+  if (expiryReminded || !st?.opened) return;
+  const due = expiringEntries(items);
+  if (!due.length) return;
+  expiryReminded = true;
+  const expired = due.filter((x) => x.state === 'expired').length;
+  const first = due[0].entry;
+  toast(expired
+    ? t('{expired} Einträge abgelaufen, {soon} laufen bald ab – z. B. „{title}“', { expired, soon: due.length - expired, title: first.title })
+    : t('{soon} Einträge laufen in den nächsten 30 Tagen ab – z. B. „{title}“ in {days} Tagen', { soon: due.length, title: first.title, days: daysUntil(first.expires) }), 'warn');
+}
+
 // ---------------------------------------------------------------- updates
 
 const updateListeners = new Set();
@@ -2409,6 +2464,7 @@ function settingsDialog() {
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
   const mcpEnabled = h('input', { type: 'checkbox', checked: !!s.mcpEnabled, disabled: enforced('mcpEnabled') });
+  const offlineMirror = h('input', { type: 'checkbox', checked: !!s.offlineMirror && st.pinSet, disabled: enforced('offlineMirror') || !st.pinSet });
   const mcpBox = h('div', {});
   const mcpMode = h('select', {},
     h('option', { value: 'selected', selected: s.mcpScope !== 'all' }, t('Nur freigegebene Tresore und Ordner (empfohlen)')),
@@ -2453,7 +2509,14 @@ function settingsDialog() {
         h('div', { class: 'field' }, h('label', {}, t('Erlaubte Agenten')),
           info.agents.length ? h('div', {}, ...info.agents.map((a) => {
             const session = info.sessions.find((x) => x.agent === a);
-            return h('div', { class: 'inline' }, h('span', {}, a), session ? h('span', { class: 'badge accent' }, t('Passwörter freigegeben bis {time}', { time: new Date(session.until).toLocaleTimeString() })) : null,
+            const rule = info.rules?.[a] || { write: true, until: null };
+            const writeSel = h('select', { onchange: async () => { await call('mcpAgentRule', a, { write: writeSel.value === 'rw' }); toast(t('Gespeichert')); } },
+              h('option', { value: 'rw', selected: rule.write !== false }, t('Lesen und Schreiben')), h('option', { value: 'ro', selected: rule.write === false }, t('Nur lesen')));
+            const untilSel = h('select', { onchange: async () => { await call('mcpAgentRule', a, { days: Number(untilSel.value) }); toast(t('Gespeichert')); } },
+              h('option', { value: '0', selected: !rule.until }, t('unbegrenzt')), ...[1, 7, 30, 90].map((d) => h('option', { value: String(d) }, t('{n} Tage', { n: d }))));
+            return h('div', { class: 'inline' }, h('span', {}, a), writeSel, untilSel,
+              rule.until ? h('span', { class: 'badge' }, t('bis {date}', { date: new Date(rule.until).toLocaleDateString() })) : null,
+              session ? h('span', { class: 'badge accent' }, t('Passwörter freigegeben bis {time}', { time: new Date(session.until).toLocaleTimeString() })) : null,
               h('button', { type: 'button', class: 'btn small', onclick: async (e) => {
                 await call('mcpRemoveAgent', a);
                 e.currentTarget.closest('.inline').remove();
@@ -2515,6 +2578,11 @@ function settingsDialog() {
       : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
     st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
       : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
+    h('h3', {}, t('Offline-Lesemodus')),
+    h('label', { class: 'inline' }, offlineMirror, t('Einträge verschlüsselt für unterwegs spiegeln (nur lesen, PIN nötig)')),
+    h('p', { class: 'muted small' }, st.pinSet
+      ? t('Ohne Netzwerk zeigt Keevault den letzten Stand – nur lesen, keine Änderungen. Der Spiegel liegt AES-256-verschlüsselt im Profil; zum Öffnen braucht es dein Windows-Konto und die PIN. Er füllt sich beim nächsten Entsperren mit PIN.')
+      : t('Dafür zuerst eine App-PIN festlegen – sie schützt den Offline-Speicher zusammen mit deinem Windows-Konto.')),
     h('h3', {}, t('KI-Agenten (MCP)')),
     h('label', { class: 'inline' }, mcpEnabled, t('KI-Agenten wie Claude oder GitHub Copilot anbinden (Model Context Protocol)')),
     h('p', { class: 'muted small' }, t('Agenten sehen beim Suchen nur Titel, Benutzer und URL. Passwörter lesen erlaubst du pro Sitzung, Einträge anlegen oder ändern bestätigst du jedes Mal. Löschen ist nicht möglich. Läuft Keevault nicht oder ist gesperrt, bekommt der Agent nichts.')),
@@ -2562,6 +2630,7 @@ function settingsDialog() {
         signInWindows: signInWindows.checked,
         updateMode: updateMode.value,
         mcpEnabled: mcpEnabled.checked,
+        offlineMirror: offlineMirror.checked && st.pinSet,
         mcpScope: mcpMode.value,
         extensionIds: extensionIds.value.split(/[\s,;]+/).filter((x) => /^[a-p]{32}$/.test(x)),
       });
