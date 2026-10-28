@@ -140,7 +140,7 @@ const changedHere = (result) => {
 export async function status() {
   try {
     const s = await snapshot();
-    return { connected: true, version: s.version, opened: !!s.opened };
+    return { connected: true, version: s.version, opened: !!s.opened, pinSet: !!s.pinSet };
   } catch (e) {
     return { connected: false, error: e.message, reason: e.name };
   }
@@ -169,6 +169,8 @@ export const app = {
   refresh: async () => changedHere(await call('refresh', {}, 120_000)),
   focus: () => call('focus'),
   lock: async () => changedHere(await call('lock')),
+  /** Unlocks the app with its PIN (silent sign-in in the app; a Microsoft window only if the tenant insists). */
+  unlockPin: async (pin) => changedHere(await call('unlockPin', { pin }, 120_000)),
   /** Starts the app; the host does that itself, it works while the app is not running. */
   launch() {
     if (!port) connect();

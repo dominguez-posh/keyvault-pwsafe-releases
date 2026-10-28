@@ -117,6 +117,15 @@ async function unlock() {
   return state();
 }
 
+/** Unlock from the popup with the app PIN (the app checks it; wrong PINs count there). */
+async function unlockPin(pin) {
+  await ready;
+  if (demo) return unlock();
+  await app.unlockPin(pin);
+  await broadcast({ type: 'state:changed' });
+  return state();
+}
+
 async function lock() {
   if (demo) {
     await auth.clear();
@@ -594,6 +603,7 @@ const showApp = () => (demo ? null : unlock());
 const pageCommands = {
   state: () => state(),
   unlock: () => unlock(),
+  unlockPin: ({ pin }) => unlockPin(pin),
   lock: () => lock(),
   refresh: async () => {
     await requireOpen();

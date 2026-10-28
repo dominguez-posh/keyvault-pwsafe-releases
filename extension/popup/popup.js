@@ -81,19 +81,28 @@ function renderOffline() {
 }
 
 function renderLocked(error) {
+  // With an app PIN the vault unlocks right here (silent sign-in in the app, no window).
+  const pinSet = !st.demo && !!st.desktop?.pinSet;
+  const pin = pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), 'aria-label': t('PIN') }) : null;
   const button = h('button', { class: 'btn primary', onclick: async () => {
     button.disabled = true;
     try {
-      await call('unlock');
+      if (pin) await call('unlockPin', { pin: pin.value });
+      else await call('unlock');
       if (st.demo) await reload();
     } catch (e) {
       renderLocked(e.message);
     }
-  } }, icon('unlock'), st.demo ? t('Entsperren') : t('In der Desktop-App entsperren'));
+  } }, icon('unlock'), pinSet || st.demo ? t('Entsperren') : t('In der Desktop-App entsperren'));
+  pin?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') button.click();
+  });
   setView(h('div', { class: 'center' }, icon('lock', 40), h('h2', {}, t('Tresor gesperrt')),
-    h('p', { class: 'muted' }, t('Entsperre Keevault in der Desktop-App – danach geht es hier sofort weiter.')),
+    h('p', { class: 'muted' }, pinSet ? t('PIN eingeben – Keevault entsperrt im Hintergrund, ohne Fenster.') : t('Entsperre Keevault in der Desktop-App – danach geht es hier sofort weiter.')),
     error ? h('div', { class: 'notice error' }, error) : null,
+    pin,
     button));
+  setTimeout(() => pin?.focus(), 0);
 }
 
 function matchesSite(s) {

@@ -54,5 +54,5 @@ test('app client: app not running – fails at once, recovers when it is back', 
   assert.ok(Date.now() - started < 1000, 'no waiting for a timeout');
   assert.equal((await status()).connected, false);
   onMessage({ event: 'online' });
-  assert.deepEqual(await status(), { connected: true, version: 'test', opened: true });
+  assert.deepEqual(await status(), { connected: true, version: 'test', opened: true, pinSet: false });
 });

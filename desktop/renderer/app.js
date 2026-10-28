@@ -24,7 +24,7 @@ async function call(method, ...args) {
 
 const root = document.getElementById('app');
 const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { class: 'list-pane' }), detail: h('section', { class: 'detail-pane' }) };
-const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null };
+const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set() };
 const explicitFolders = new Map(); // containerId → created folders (also empty ones)
 const logos = new Map(); // containerId → data URL | null (loaded once per session, refreshed on change)
 const icons = new Map(); // item key → data URL (Key Vault lists only tags; icons are fetched on demand)
@@ -114,6 +114,7 @@ const protectCtx = {
 window.pwsafe.onEvent((ev) => {
   if (ev.type === 'locked') {
     Object.assign(ui, { selected: null, editing: null, editingItem: null });
+    ui.multi.clear();
     items = [];
     render();
   } else if (ev.type === 'changed' && st?.opened) {
@@ -466,6 +467,7 @@ function pinDialog({ forced = false } = {}) {
 function select(next) {
   Object.assign(ui, next, { editing: null });
   if (ui.selected && !visibleItems().some((i) => i.key === ui.selected)) ui.selected = null;
+  for (const k of ui.multi) if (!items.some((i) => i.key === k)) ui.multi.delete(k);
   renderSidebar();
   renderList();
   renderDetail();
@@ -567,14 +569,41 @@ function renderList() {
   function row(i) {
     const draggable = !!container && writable(container);
     return h('li', {
-      class: `row-item ${ui.selected === i.key ? 'active' : ''}`,
+      class: `row-item ${ui.selected === i.key ? 'active' : ''} ${ui.multi.has(i.key) ? 'multi' : ''}`,
+      dataset: { key: i.key },
       oncontextmenu: (e) => contextMenu(e, itemActions(i)),
       draggable: draggable ? 'true' : false,
       ondragstart: draggable ? (e) => {
-        e.dataTransfer.setData(DRAG_TYPE, i.key);
+        // Dragging a selected row takes the whole selection along.
+        const keys = ui.multi.has(i.key) ? [...ui.multi] : [i.key];
+        e.dataTransfer.setData(DRAG_TYPE, keys.join('\n'));
         e.dataTransfer.effectAllowed = 'move';
       } : undefined,
-      onclick: () => {
+      onclick: (e) => {
+      // Shift: range from the last clicked entry; Ctrl: toggle; plain click: single selection.
+      if (e.shiftKey && ui.selected) {
+        const order = [...rowsEl.querySelectorAll('li.row-item[data-key]')].map((el) => el.dataset.key);
+        const a = order.indexOf(ui.selected);
+        const b = order.indexOf(i.key);
+        if (a >= 0 && b >= 0) {
+          if (!ui.multi.size) ui.multi.add(ui.selected);
+          for (const k of order.slice(Math.min(a, b), Math.max(a, b) + 1)) ui.multi.add(k);
+          renderRows();
+          renderDetail();
+          return;
+        }
+      }
+      if (e.ctrlKey || e.metaKey) {
+        if (!ui.multi.size && ui.selected && ui.selected !== i.key) ui.multi.add(ui.selected);
+        if (ui.multi.has(i.key)) ui.multi.delete(i.key);
+        else ui.multi.add(i.key);
+        ui.selected = i.key;
+        ui.editing = null;
+        renderRows();
+        renderDetail();
+        return;
+      }
+      ui.multi.clear();
       ui.selected = i.key;
       ui.editing = null;
       renderRows();
@@ -745,8 +774,9 @@ function dropTarget(folder) {
     ondrop: (e) => {
       e.preventDefault();
       e.currentTarget.classList.remove('drop');
-      const key = e.dataTransfer.getData(DRAG_TYPE);
-      if (key) moveToFolder(key, folder);
+      const keys = e.dataTransfer.getData(DRAG_TYPE).split('\n').filter(Boolean);
+      if (keys.length > 1) moveManyToFolder(keys, folder);
+      else if (keys[0]) moveToFolder(keys[0], folder);
     },
   };
 }
@@ -922,13 +952,31 @@ function folderActions(c, folder, count, open) {
     '-',
     { action: 'delete-folder', icon: 'trash', label: t('Löschen'), danger: true, disabled: !canWrite, onClick: async () => {
       try {
-        if (count) {
-          if (!(await confirmDialog(t('Ordner löschen'), t('„{folder}“ enthält {count} Einträge. Sie und alle Unterordner wandern eine Ebene nach oben ({parent}) – es wird nichts gelöscht.', { folder, count, parent: parent || t('Ohne Ordner') }), { confirmLabel: t('Ordner löschen'), danger: true }))) return;
-          const r = await call('renameFolder', c.id, folder, parent);
-          for (const err of r.errors) toast(err, 'error');
-        } else {
-          await call('removeFolder', c.id, folder);
+        const inside = items.filter((i) => i.containerId === c.id && (i.folder === folder || (i.folder || '').startsWith(`${folder}/`)));
+        if (inside.length) {
+          // First the choice (keep the entries, or delete them too), then a second warning for the destructive one.
+          const choice = await new Promise((resolve) => {
+            modal(t('Ordner löschen'), h('div', {},
+              h('p', {}, t('„{folder}“ enthält {count} Einträge (inklusive Unterordner). Was soll mit ihnen passieren?', { folder, count: inside.length })),
+              h('p', { class: 'muted small' }, t('„Nur Ordner“ verschiebt die Einträge eine Ebene nach oben ({parent}). „Mit Inhalt“ verschiebt sie in den Papierkorb.', { parent: parent || t('Ohne Ordner') }))), [
+              { label: t('Abbrechen'), onClick: () => resolve(null) },
+              { label: t('Nur Ordner löschen'), onClick: () => resolve('keep') },
+              { label: t('Mit Inhalt löschen'), danger: true, onClick: () => resolve('delete') },
+            ]);
+          });
+          if (!choice) return;
+          if (choice === 'delete') {
+            if (!(await confirmDialog(t('Wirklich alle Einträge löschen?'), t('Achtung: {count} Einträge aus „{folder}“ und allen Unterordnern werden in den Papierkorb verschoben. Wiederherstellen ist nur bis zum Ablauf der Aufbewahrungsfrist des Key Vaults möglich – danach sind sie endgültig weg.', { folder, count: inside.length }), { confirmLabel: t('Ja, {count} Einträge löschen', { count: inside.length }), danger: true }))) return;
+            const failed = await deleteMany(inside.map((i) => i.key));
+            if (failed) toast(t('{n} Einträge konnten nicht gelöscht werden', { n: failed }), 'error');
+          } else {
+            const r = await call('renameFolder', c.id, folder, parent);
+            for (const err of r.errors) toast(err, 'error');
+          }
         }
+        await call('removeFolder', c.id, folder).catch(() => {});
+        // Subfolders that only existed as empty folders.
+        for (const f of (explicitFolders.get(c.id) || []).filter((x) => x.startsWith(`${folder}/`))) await call('removeFolder', c.id, f).catch(() => {});
         if (ui.folder === folder || ui.folder.startsWith(`${folder}/`)) ui.folder = parent;
         toast(t('Ordner gelöscht'));
         await reloadFolders();
@@ -1077,6 +1125,40 @@ async function refreshContainer(c, button) {
   if (button) button.disabled = false;
 }
 
+/** Facts about a Key Vault: Azure details, admins, link to the portal. */
+async function infoDialog(c) {
+  const body = h('div', {}, h('p', {}, h('span', { class: 'spinner' }), ' ', t('Informationen werden geladen …')));
+  modal(t('Tresor-Infos: {name}', { name: c.name }), body, [{ label: t('Schließen') }]);
+  let info;
+  try {
+    info = await call('vaultInfo', c.id);
+  } catch (e) {
+    body.replaceChildren(h('p', { class: 'notice' }, e.message));
+    return;
+  }
+  const row = (label, value, extra) => (value ? h('tr', {}, h('th', {}, label), h('td', {}, value, extra || null)) : null);
+  const copyBtn = (text) => iconButton('copy', t('Kopieren'), () => copy(text, t('Kopiert')));
+  const yesNo = (v) => (v ? t('ja') : t('nein'));
+  setChildren(body,
+    h('table', { class: 'info-table' },
+      row(t('Adresse'), c.vaultUrl, copyBtn(c.vaultUrl)),
+      row(t('Einträge'), String(c.count ?? items.filter((i) => i.containerId === c.id).length)),
+      row(t('Erstellt'), info.createdAt ? `${formatDateTime(info.createdAt)}${info.createdBy ? ` · ${info.createdBy}` : ''}` : ''),
+      row(t('Zuletzt geändert'), info.modifiedAt ? `${formatDateTime(info.modifiedAt)}${info.modifiedBy ? ` · ${info.modifiedBy}` : ''}` : ''),
+      row(t('Administratoren'), info.admins.length ? info.admins.map((a) => a.detail ? `${a.displayName} (${a.detail})` : a.displayName).join(', ') : t('keine Datenrolle „Verwalten“ vergeben')),
+      row(t('Tenant'), info.tenantId, copyBtn(info.tenantId)),
+      row(t('Subscription'), info.subscriptionName ? `${info.subscriptionName} (${info.subscriptionId})` : info.subscriptionId),
+      row(t('Ressourcengruppe'), info.resourceGroup),
+      row(t('Region'), info.location),
+      row(t('Berechtigungsmodell'), info.rbac ? t('Azure RBAC') : t('Zugriffsrichtlinien (nicht unterstützt)')),
+      row(t('Papierkorb (Soft Delete)'), `${yesNo(info.softDelete)}${info.retentionDays ? t(', {days} Tage Aufbewahrung', { days: info.retentionDays }) : ''}`),
+      row(t('Schutz vor endgültigem Löschen'), yesNo(info.purgeProtection)),
+      row(t('SKU'), info.sku)),
+    h('div', { class: 'actions' },
+      h('button', { type: 'button', class: 'btn', onclick: () => call('openExternal', info.portalUrl) }, icon('link'), t('Im Azure-Portal öffnen')),
+      h('button', { type: 'button', class: 'btn', onclick: () => copy(info.resourceId, t('Kopiert')) }, icon('copy'), t('Ressourcen-ID kopieren'))));
+}
+
 /** All functions of a container (right-click menu in the sidebar). */
 /**
  * Vault settings: Key Vault admins may use every function; everyone else only what an admin enabled (restrictive
@@ -1105,6 +1187,7 @@ function containerActions(c) {
     c.secure ? { action: 'changelog', icon: 'clock', label: t('Änderungsprotokoll'), disabled: !ready, onClick: () => changelogDialog(c) } : null,
     settings,
     mcpScopeAction(c.id, ''),
+    c.kind === 'keyvault' ? { action: 'info', icon: 'info', label: t('Infos'), disabled: !!c.error, onClick: () => infoDialog(c) } : null,
     c.kind === 'keyvault' || c.kind === 'file' ? { action: 'health', icon: 'shield', label: t('Passwort-Check'), disabled: !ready, onClick: () => healthDialog(reportCtx(c.id)) } : null,
     '-',
     may('folders') ? { action: 'folder', icon: 'folder-plus', label: t('Neuer Ordner'), disabled: !canWrite, onClick: () => newFolderDialog(c) } : null,
@@ -1354,6 +1437,7 @@ function containerBadges(c) {
 
 /** Functions of an entry (right-click in the list). */
 function itemActions(i) {
+  if (ui.multi.size > 1 && ui.multi.has(i.key)) return multiActions();
   const [containerId, id] = splitKey(i.key);
   const c = st.containers.find((x) => x.id === containerId) || {};
   const canWrite = writable(c);
@@ -1383,6 +1467,123 @@ function itemActions(i) {
       await reloadAll();
     } },
   ];
+}
+
+// ---------------------------------------------------------------- several entries at once (Shift/Ctrl)
+
+const multiKeys = () => [...ui.multi].filter((k) => items.some((i) => i.key === k));
+const multiItems = () => multiKeys().map((k) => items.find((i) => i.key === k));
+
+/** Context menu for a selection of several entries. */
+function multiActions() {
+  const list = multiItems();
+  const containerIds = [...new Set(list.map((i) => i.containerId))];
+  const oneVault = containerIds.length === 1;
+  const canWrite = list.every((i) => writable(st.containers.find((c) => c.id === i.containerId) || {}));
+  return [
+    { action: 'multi-folder', icon: 'folder', label: t('{n} Einträge in Ordner verschieben …', { n: list.length }), disabled: !oneVault || !canWrite, onClick: () => folderPickDialog(containerIds[0], list.map((i) => i.key)) },
+    { action: 'multi-move', icon: 'move', label: t('{n} Einträge in anderen Tresor verschieben …', { n: list.length }), disabled: !canWrite, onClick: () => moveManyDialog(list) },
+    '-',
+    { action: 'multi-delete', icon: 'trash', label: t('{n} Einträge löschen', { n: list.length }), danger: true, disabled: !canWrite, onClick: () => deleteManyDialog(list) },
+    '-',
+    { action: 'multi-clear', icon: 'x', label: t('Auswahl aufheben'), onClick: () => { ui.multi.clear(); renderRows(); renderDetail(); } },
+  ];
+}
+
+function renderMultiSelection() {
+  const list = multiItems();
+  const actions = multiActions().filter((a) => a !== '-' && a.action !== 'multi-clear');
+  panes.detail.replaceChildren(h('div', { class: 'placeholder multi-selection' }, icon('check', 40),
+    h('h2', {}, t('{n} Einträge ausgewählt', { n: list.length })),
+    h('p', { class: 'muted small' }, t('Shift+Klick wählt einen Bereich, Strg+Klick einzelne Einträge. Ziehen verschiebt alle in einen Ordner.')),
+    h('ul', { class: 'multi-list' }, ...list.slice(0, 12).map((i) => h('li', {}, i.title)), list.length > 12 ? h('li', { class: 'muted' }, `… +${list.length - 12}`) : null),
+    h('div', { class: 'actions' }, ...actions.map((a) => h('button', { type: 'button', class: a.danger ? 'btn danger' : 'btn', disabled: a.disabled, onclick: a.onClick }, icon(a.icon), a.label)),
+      h('button', { type: 'button', class: 'btn', onclick: () => { ui.multi.clear(); renderRows(); renderDetail(); } }, t('Auswahl aufheben')))));
+  return undefined;
+}
+
+/** Deletes entries one by one (recycle bin); → number of failures. */
+async function deleteMany(keys) {
+  let failed = 0;
+  for (const key of keys) {
+    const [containerId, id] = splitKey(key);
+    try {
+      await call('delete', containerId, id);
+    } catch {
+      failed++;
+    }
+    ui.multi.delete(key);
+    if (ui.selected === key) ui.selected = null;
+  }
+  return failed;
+}
+
+async function deleteManyDialog(list) {
+  if (!(await confirmDialog(t('Einträge löschen'), t('{n} Einträge in den Papierkorb verschieben? Wiederherstellen ist bis zum Ablauf der Aufbewahrungsfrist möglich.', { n: list.length }), { confirmLabel: t('Löschen'), danger: true }))) return;
+  const failed = await deleteMany(list.map((i) => i.key));
+  toast(failed ? t('{n} Einträge konnten nicht gelöscht werden', { n: failed }) : t('{n} Einträge in den Papierkorb verschoben', { n: list.length }), failed ? 'error' : undefined);
+  await reloadAll();
+}
+
+async function moveManyToFolder(keys, folder) {
+  let moved = 0;
+  for (const key of keys) {
+    const item = items.find((i) => i.key === key);
+    if (!item || (item.folder || '') === folder) continue;
+    try {
+      const [containerId, id] = splitKey(key);
+      const full = await call('item', containerId, id);
+      await call('save', containerId, { ...full, folder }, full.version);
+      moved++;
+    } catch (e) {
+      toast(`${item.title}: ${e.message}`, 'error');
+    }
+  }
+  if (moved) toast(t('{n} Einträge verschoben nach {folder}', { n: moved, folder: folder || t('Ohne Ordner') }));
+  await reloadAll();
+}
+
+/** Picks a folder of the vault (existing ones, or a new path) for several entries. */
+function folderPickDialog(containerId, keys) {
+  const known = [...new Set([...(explicitFolders.get(containerId) || []), ...items.filter((i) => i.containerId === containerId).map((i) => i.folder).filter(Boolean)])].sort();
+  const input = h('input', { list: 'folder-pick-options', placeholder: t('optional, z. B. Kunden/Contoso'), value: ui.containerId === containerId ? ui.folder : '' });
+  const options = h('datalist', { id: 'folder-pick-options' }, h('option', { value: '' }), ...known.map((f) => h('option', { value: f })));
+  modal(t('In Ordner verschieben'), h('div', {}, field(t('{n} Einträge verschieben nach', { n: keys.length }), h('div', {}, input, options)),
+    h('p', { class: 'muted small' }, t('Leer lassen für „Ohne Ordner“. Ein neuer Pfad legt den Ordner an.'))), [
+    { label: t('Abbrechen') },
+    { label: t('Verschieben'), primary: true, onClick: () => moveManyToFolder(keys, input.value.split('/').map((x) => x.trim()).filter(Boolean).join('/')) },
+  ]);
+  setTimeout(() => input.focus(), 0);
+}
+
+function moveManyDialog(list) {
+  const targets = writableContainers().filter((c) => !list.every((i) => i.containerId === c.id));
+  if (!targets.length) {
+    toast(t('Kein anderer Tresor mit Schreibrechten'), 'error');
+    return;
+  }
+  const target = h('select', {}, ...targets.map((c) => h('option', { value: c.id }, c.name)));
+  modal(t('Einträge verschieben'), h('div', {},
+    field(t('{n} Einträge verschieben nach', { n: list.length }), target),
+    h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle in den Papierkorb verschoben. Der bisherige Verlauf bleibt in der Quelle.'))), [
+    { label: t('Abbrechen') },
+    { label: t('Verschieben'), primary: true, onClick: async () => {
+      let moved = 0;
+      for (const i of list) {
+        if (i.containerId === target.value) continue;
+        try {
+          await call('move', i.containerId, target.value, i.id);
+          moved++;
+        } catch (e) {
+          toast(`${i.title}: ${e.message}`, 'error');
+        }
+      }
+      ui.multi.clear();
+      ui.selected = null;
+      toast(t('{n} Einträge verschoben', { n: moved }));
+      await reloadAll();
+    } },
+  ]);
 }
 
 /** Copy in the same vault and folder (without passkeys); the copy is selected afterwards. */
@@ -1439,6 +1640,7 @@ async function renderDetail() {
   const pane = panes.detail;
   call('selectItem', ui.selected).catch(() => {});
   if (ui.editing) return renderEditor();
+  if (ui.multi.size > 1) return renderMultiSelection();
   if (!ui.selected) {
     pane.replaceChildren(h('div', { class: 'placeholder' }, icon('shield', 56), h('p', {}, t('Wähle einen Eintrag aus oder lege einen neuen an.'))));
     return undefined;
@@ -2679,6 +2881,18 @@ document.addEventListener('keydown', (e) => {
     typeSelected(e.key.toLowerCase());
   } else if (e.key === 'Escape' && ui.editing) {
     ui.editing = null;
+    renderDetail();
+  } else if (e.key === 'Escape' && ui.multi.size) {
+    ui.multi.clear();
+    renderList();
+    renderDetail();
+  } else if (e.key === 'Delete' && ui.multi.size > 1 && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
+    e.preventDefault();
+    deleteManyDialog(multiItems());
+  } else if (e.ctrlKey && e.key.toLowerCase() === 'a' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
+    e.preventDefault();
+    for (const el of document.querySelectorAll('.list li.row-item[data-key]')) ui.multi.add(el.dataset.key);
+    renderList();
     renderDetail();
   }
 });

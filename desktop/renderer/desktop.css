@@ -128,3 +128,14 @@ body { overflow: hidden; }
 .editor-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .editor-head h2 { margin: 0; }
 .editor-head .actions { margin-top: 0; }
+/* Multi-selection (Shift/Ctrl) */
+.row-item.multi { background: var(--accent-soft); }
+.row-item.multi.active { box-shadow: inset 3px 0 0 var(--accent); }
+.multi-selection .multi-list { list-style: none; margin: 8px 0 16px; padding: 0; max-width: 420px; text-align: left; font-size: 13px; }
+.multi-selection .multi-list li { padding: 3px 0; border-bottom: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.multi-selection .actions { justify-content: center; }
+/* Vault info dialog */
+.info-table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 12px; }
+.info-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 5px 12px 5px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+.info-table td { padding: 5px 0; word-break: break-all; vertical-align: top; }
+.info-table td .icon-btn { margin-left: 6px; vertical-align: middle; }

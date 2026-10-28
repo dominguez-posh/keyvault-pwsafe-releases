@@ -300,6 +300,33 @@ export class AzureClient {
     return { vaultTenant, subscriptionTenant, mismatch: !!vaultTenant && !!subscriptionTenant && vaultTenant !== subscriptionTenant, rbac: v?.properties?.enableRbacAuthorization !== false };
   }
 
+  /** Facts about a vault for the info dialog (ARM resource + subscription name). */
+  async vaultDetails(resourceId) {
+    const v = await this.arm('GET', resourceId, '2023-07-01');
+    const sub = await this.arm('GET', `/subscriptions/${subscriptionOf(resourceId)}`, '2022-12-01').catch(() => null);
+    const p = v?.properties || {};
+    const tenantId = p.tenantId || sub?.tenantId || '';
+    return {
+      resourceId: v.id || resourceId,
+      name: v.name,
+      location: v.location || '',
+      tenantId,
+      subscriptionId: subscriptionOf(resourceId),
+      subscriptionName: sub?.displayName || '',
+      resourceGroup: String(resourceId).split('/')[4] || '',
+      createdAt: v.systemData?.createdAt || '',
+      createdBy: v.systemData?.createdBy || '',
+      modifiedAt: v.systemData?.lastModifiedAt || '',
+      modifiedBy: v.systemData?.lastModifiedBy || '',
+      rbac: p.enableRbacAuthorization !== false,
+      softDelete: p.enableSoftDelete !== false,
+      retentionDays: p.softDeleteRetentionInDays || 0,
+      purgeProtection: !!p.enablePurgeProtection,
+      sku: p.sku?.name || '',
+      portalUrl: `https://portal.azure.com/#@${tenantId}/resource${v.id || resourceId}`,
+    };
+  }
+
   /** Lets the vault trust the tenant of its subscription (Microsoft's procedure after a subscription move). */
   setVaultTenant(resourceId, tenantId) {
     return this.arm('PATCH', resourceId, '2023-07-01', { properties: { tenantId } });

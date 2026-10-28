@@ -547,14 +547,24 @@ async function refreshStaleForBrowser() {
 }
 
 const browserHandlers = {
-  hello: async () => ({ version: app.getVersion(), opened, containers: await browserContainers() }),
+  hello: async () => ({ version: app.getVersion(), opened, pinSet: !!config.get().appPin, containers: await browserContainers() }),
   // Everything the extension lists in one answer, straight from the cache (never waits for Azure when there is a
   // cache); outdated vaults are reloaded afterwards and announced with "changed".
   snapshot: async () => {
-    if (!opened) return { version: app.getVersion(), opened: false, containers: [], summaries: [] };
+    const pinSet = !!config.get().appPin;
+    if (!opened) return { version: app.getVersion(), opened: false, pinSet, containers: [], summaries: [] };
     const summaries = await vault.summaries({ maxAgeMs: Infinity });
     refreshStaleForBrowser().catch(() => {});
-    return { version: app.getVersion(), opened: true, containers: await browserContainers(), summaries };
+    return { version: app.getVersion(), opened: true, pinSet, containers: await browserContainers(), summaries };
+  },
+  // Unlock from the browser with the app PIN: silent sign-in, no window (only once a PIN is set – without one
+  // the app window stays the place to unlock, so nothing on the machine can open the vault without a secret).
+  unlockPin: async ({ pin }) => {
+    if (opened) return true;
+    if (!config.get().appPin) throw new Error(t('Ohne PIN bitte in der Desktop-App entsperren'));
+    await api.verifyPin(String(pin || ''));
+    await api.unlock({ entra: true });
+    return true;
   },
   containers: () => browserContainers(),
   summaries: async () => (opened ? vault.summaries() : []),
@@ -978,6 +988,14 @@ const api = {
     return buildInvite(await vault.container(containerId));
   },
   members: async (containerId) => (await vault.azureForId(containerId)).listMembers(await containerResource(containerId)),
+  /** Info dialog: Azure facts of the vault plus who administers it. */
+  vaultInfo: async (containerId) => {
+    requireOpen();
+    const azure = await vault.azureForId(containerId);
+    const resourceId = await containerResource(containerId);
+    const [details, members] = await Promise.all([azure.vaultDetails(resourceId), azure.listMembers(resourceId).catch(() => [])]);
+    return { ...details, admins: members.filter((m) => m.level === 'manage').map((m) => ({ displayName: m.displayName, detail: m.detail || '' })) };
+  },
   addMember: async (containerId, principal, level) => (await vault.azureForId(containerId)).addMember(await containerResource(containerId), principal, level),
   removeMember: async (containerId, principalId) => (await vault.azureForId(containerId)).removeMember(await containerResource(containerId), principalId),
   /** People picker in the directory of the container's tenant (guests included). */
@@ -2249,6 +2267,16 @@ function runSmokeTest() {
       if (view === 'restore') await menuAction('restore');
       if (view === 'health') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Passwort-Check|Password check/.test(n.textContent))?.click()');
       if (view === 'access') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Zugriffsbericht|Access report/.test(n.textContent))?.click()');
+      if (view === 'multi') {
+        await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Alle Einträge|All entries/.test(n.textContent))?.click()');
+        await sleep(400);
+        await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
+        await sleep(200);
+        await js('document.querySelectorAll(".list li.row-item[data-key]")[2]?.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }))');
+        await sleep(400);
+        const r = await js('JSON.stringify({ multi: document.querySelectorAll(".list li.row-item.multi").length, pane: document.querySelector(".multi-selection h2")?.textContent || "" })');
+        if (!/"multi":3/.test(r)) errors.push(`multi-select: expected 3 selected rows, got ${r}`);
+      }
       if (view === 'expiry') {
         await js('document.querySelector(".list-head .btn.primary")?.click()');
         await sleep(300);
