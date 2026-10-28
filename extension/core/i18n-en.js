@@ -721,6 +721,7 @@ export default {
   'Eine PIN ist gesetzt und wird beim Entsperren abgefragt.': 'A PIN is set and asked when unlocking.',
   'Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.': 'No PIN – anyone at this PC can unlock the app while Windows is signed in.',
   'Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.': 'Tip: with a PIN (in the settings) you unlock without a new Microsoft window – your vaults appear at once.',
+  'Speichern (Strg+S)': 'Save (Ctrl+S)',
   'Zum Ändern zuerst entsperren.': 'Unlock first to change it.',
   'Bitte zuerst die PIN eingeben': 'Please enter the PIN first',
   'Zu viele falsche Versuche – bitte {seconds} Sekunden warten': 'Too many wrong attempts – please wait {seconds} seconds',

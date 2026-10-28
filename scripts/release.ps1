@@ -73,7 +73,7 @@ Copy-Item $msi (Join-Path $root 'release/Keevault.msi') -Force
 Copy-Item $msix (Join-Path $root 'release/Keevault.msix') -Force
 # Public part of the signing certificate: devices must trust it before the MSIX installs (until a purchased one).
 Copy-Item (Join-Path $root 'windows/out/KvPwSafe-Test.cer') (Join-Path $root 'release/Keevault-Zertifikat.cer') -Force
-$assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'))
+$assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'), (Join-Path $root "dist/kvpwsafe-extension-$version-firefox.zip"))
 foreach ($a in $assets) { if (-not (Test-Path $a)) { throw "$a fehlt" } }
 Write-Host "Fertig: $setup" -ForegroundColor Green
 

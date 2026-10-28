@@ -1544,7 +1544,18 @@ function renderEditor() {
       await reloadAll();
     },
   });
-  panes.detail.replaceChildren(h('div', { class: 'editor' }, h('h2', {}, isNew ? t('Neuer Eintrag') : t('Eintrag bearbeiten')), form));
+  // Save and cancel also at the top, so long entries need no scrolling to the buttons at the end.
+  const topSave = h('button', { type: 'button', class: 'btn primary', title: t('Speichern (Strg+S)'), onclick: () => form.requestSubmit() }, icon('check'), t('Speichern'));
+  const topCancel = h('button', { type: 'button', class: 'btn', onclick: () => { ui.editing = null; renderDetail(); } }, t('Abbrechen'));
+  form.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  panes.detail.replaceChildren(h('div', { class: 'editor' },
+    h('div', { class: 'editor-head' }, h('h2', {}, isNew ? t('Neuer Eintrag') : t('Eintrag bearbeiten')), h('div', { class: 'actions' }, topSave, topCancel)),
+    form));
 }
 
 // ---------------------------------------------------------------- dialogs

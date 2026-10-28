@@ -125,3 +125,6 @@ body { overflow: hidden; }
 .notice.ok { display: flex; align-items: center; color: var(--ok, #1a7f37); }
 .badge.expiry { margin-top: 4px; }
 .field-row input[type="date"] { flex: 0 0 170px; }
+.editor-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.editor-head h2 { margin: 0; }
+.editor-head .actions { margin-top: 0; }
