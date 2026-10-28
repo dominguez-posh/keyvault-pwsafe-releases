@@ -232,19 +232,23 @@ export class VaultSession {
   async refreshContainers({ configured = [], hidden = [], discover = true, tenants = true, access = true } = {}) {
     const map = new Map();
     const learned = (await this.store.get('vaultTenants')) || {};
+    // What the last run found out (resource ID looked up for hand-added vaults, the user's rights) stays until
+    // this run replaces it – otherwise admin functions flicker away after every unlock and ARM is asked again.
+    const known = new Map(((await this.store.get('containers')) || []).map((c) => [c.id, c]));
     const add = (c, source) => {
       const vaultUrl = normalizeVaultUrl(c.vaultUrl);
       const id = vaultHost(vaultUrl);
       const prev = map.get(id);
+      const old = known.get(id);
       map.set(id, {
         id,
         vaultUrl,
         name: prev?.sources.includes('manual') && prev.name ? prev.name : c.name || prev?.name || id.split('.')[0],
-        resourceId: c.resourceId || prev?.resourceId || null,
-        tenantId: c.tenantId || prev?.tenantId || learned[id] || null,
-        rbac: c.rbac ?? prev?.rbac ?? null,
+        resourceId: c.resourceId || prev?.resourceId || old?.resourceId || null,
+        tenantId: c.tenantId || prev?.tenantId || old?.tenantId || learned[id] || null,
+        rbac: c.rbac ?? prev?.rbac ?? old?.rbac ?? null,
         sources: [...new Set([...(prev?.sources || []), source])],
-        access: null,
+        access: prev?.access ?? old?.access ?? null,
       });
     };
     for (const c of configured) {
@@ -279,6 +283,14 @@ export class VaultSession {
   }
 
   // ---------------------------------------------------------------- protection of Key Vault containers
+
+  /** Forgets all container keys but keeps containers and index: protected vaults need their passkey again. */
+  async lockKeys() {
+    this.keys.clear();
+    for (const key of await this.store.keys()) {
+      if (key.startsWith('ck:')) await this.store.remove(key);
+    }
+  }
 
   async containerKey(containerId) {
     const raw = await this.store.get(`ck:${containerId}`);

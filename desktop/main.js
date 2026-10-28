@@ -190,13 +190,26 @@ function requirePin() {
   }
 }
 
+// With a PIN the vault data stays in memory while locked (RAM only, never the disk): unlocking shows the entries
+// at once and signs in silently from the encrypted token cache instead of opening a new Microsoft window.
+let keptVault = false;
+let keptAccount = null;
+
 async function lockNow() {
   mcp?.revoke();
   if (!opened && !auth.account) return;
+  const keep = !!config.get().appPin && opened;
+  keptAccount = auth.account?.homeAccountId || null;
   auth.lock();
   files.lockAll();
-  await vault?.clear();
-  newSession();
+  if (keep) {
+    await vault.lockKeys();
+    keptVault = true;
+  } else {
+    await vault?.clear();
+    newSession();
+    keptVault = false;
+  }
   opened = false;
   selectedKey = null;
   lastBackup = null;
@@ -809,15 +822,27 @@ const api = {
   async unlock({ entra = true } = {}) {
     requirePin();
     if (entra) {
-      await auth.unlock(config.get().unlockPrompt);
+      // With a PIN the silent sign-in from the encrypted token cache is enough; the Microsoft window only
+      // appears when the tenant demands it (e.g. expired MFA). An unlock prompt enforced by policy stays.
+      const silent = !!config.get().appPin && !config.get().enforced.includes('unlockPrompt');
+      await auth.unlock(silent ? 'none' : config.get().unlockPrompt);
       if (!config.get().entraUsed) config.update({ entraUsed: true });
       win?.show();
       win?.focus();
     }
-    newSession();
+    // Same account and kept data: show the state from memory at once, refresh in the background (concurrent
+    // edits in the vault stay safe – every save checks the entry's version and reports a conflict).
+    const kept = keptVault && entra && (auth.account?.homeAccountId || null) === keptAccount;
+    keptVault = false;
+    if (!kept) newSession();
     opened = true;
     if (!smokeTest && !demo) warmUpAutoType();
     applyShortcuts();
+    if (kept) {
+      refreshAll({ quick: true }).then(() => { if (opened) changed(); }).catch(() => {});
+      changed();
+      return api.state();
+    }
     const discoverError = await refreshAll({ quick: true });
     changed();
     return { ...(await api.state()), discoverError };
@@ -833,6 +858,10 @@ const api = {
   lock: () => lockNow(),
   async signOut() {
     await lockNow();
+    // Signing out ends the kept session: another account must never see the previous account's data.
+    await vault.clear();
+    newSession();
+    keptVault = false;
     await auth.signOut();
   },
   /** Reloads one container (file from disk, Key Vault from the service). */

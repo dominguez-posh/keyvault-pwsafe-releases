@@ -355,3 +355,17 @@ test('folders: at most three levels', async () => {
   assert.equal(limitFolderDepth(' A / B /C/D/E'), 'A/B/C');
   assert.equal(folderDepth(''), 0);
 });
+
+test('lockKeys: index and containers stay, container keys are gone (fast unlock behind a PIN)', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  await session.saveItem(cid, { title: 'Server', password: 'geheim-1' });
+  await session.enableProtection(cid, { password: 'master-password-1' });
+  assert.ok(await session.containerKey(cid), 'key available while unlocked');
+  await session.lockKeys();
+  assert.equal(await session.containerKey(cid), null, 'container key forgotten');
+  assert.equal((await session.containers()).length, 1, 'containers kept');
+  assert.ok(await session.store.get('index'), 'index kept');
+  const back = await session.unlockContainer(cid, { password: 'master-password-1' });
+  assert.ok(back, 'protected vault opens again with its secret');
+});

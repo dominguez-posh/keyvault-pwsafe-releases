@@ -408,6 +408,7 @@ function renderLocked(error) {
     error ? notice(error) : null,
     h('div', { id: 'windows-waiting', class: 'notice info', hidden: true }, t('Windows wartet auf einen Passkey – entsperre Keevault, um fortzufahren.')),
     pin ? field(t('PIN'), pin) : null,
+    st.pinSet ? null : h('p', { class: 'muted small' }, t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')),
     entra,
     st.hasFiles ? local : null,
     h('div', { class: 'card-links' },
@@ -2509,7 +2510,9 @@ function settingsDialog() {
     h('h3', {}, t('Abtippen (Auto-Type)')),
     field(t('Tastenkürzel, überall in Windows'), autoTypeKeys, t('Eintrag in der App auswählen, ins Zielfeld klicken, Kürzel drücken: U = Benutzername, P = Passwort, O = Einmalcode. Gilt nur, solange die App entsperrt ist; Strg+Umschalt überdeckt in Edge Vorlesen/InPrivate/Favoriten.')),
     h('h3', {}, t('App-PIN')),
-    h('p', { class: 'muted small' }, st.pinSet ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.') : t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')),
+    h('p', { class: 'muted small' }, st.pinSet
+      ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.')
+      : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
     st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
       : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
     h('h3', {}, t('KI-Agenten (MCP)')),
