@@ -112,3 +112,4 @@ body { overflow: hidden; }
 .policy-list { display: grid; gap: 10px; margin: 14px 0; }
 .policy-row { align-items: flex-start; }
 .license-links { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 14px; }
+.snippet { white-space: pre-wrap; word-break: break-all; font-size: 11px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 4px 0; max-height: 170px; overflow: auto; user-select: text; }

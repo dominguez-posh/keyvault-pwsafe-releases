@@ -68,6 +68,12 @@
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>
+    <policy name="McpEnabled" class="Both" displayName="$(string.McpEnabled)" explainText="$(string.McpEnabled_Help)" key="Software\Policies\Keevault" valueName="McpEnabled">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_6_2" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
     <policy name="UpdateMode" class="Both" displayName="$(string.UpdateMode)" explainText="$(string.UpdateMode_Help)" presentation="$(presentation.UpdateMode)" key="Software\Policies\Keevault">
       <parentCategory ref="Keevault" />
       <supportedOn ref="SUPPORTED_Keevault_0_6_2" />

@@ -12,9 +12,10 @@ import { FileContainers } from './files.js';
 import { hashPin, verifyPin, PinGuard, MIN_PIN_LENGTH } from './pin.js';
 import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.js';
 import { totpCode } from '../extension/core/totp.js';
-import { BrowserBridge, launchPath, registerNativeHost, unregisterNativeHost } from './bridge.js';
+import { BrowserBridge, launchPath, pipePath, registerNativeHost, unregisterNativeHost } from './bridge.js';
 import { Updater, UPDATE_MODES } from './updater.js';
 import { secureFetch, purgeDiskCaches } from './secure-net.js';
+import { McpService, MCP_TOOLS, mcpHostScript, mcpClientConfig } from './mcp.js';
 import { VaultSession, MemoryStore, POLICY_LABELS } from '../extension/core/session.js';
 import { buildInvite, parseInvite, ROLES } from '../extension/core/azure.js';
 import { vaultHost, KV_SCOPE } from '../extension/core/keyvault.js';
@@ -190,6 +191,7 @@ function requirePin() {
 }
 
 async function lockNow() {
+  mcp?.revoke();
   if (!opened && !auth.account) return;
   auth.lock();
   files.lockAll();
@@ -476,6 +478,7 @@ async function registerPasskey(containerName, label, exclude = [], attachment) {
 
 async function approveBrowser(origin) {
   const s = config.get();
+  if (origin.startsWith('mcp:')) return approveAgent(origin.slice(4));
   // The Windows provider only relays requests signed by Windows; every operation is confirmed in the app.
   if (origin === WINDOWS_ORIGIN) return !!s.windowsProvider;
   if (s.approvedBrowsers.includes(origin)) return true;
@@ -572,9 +575,79 @@ const windowsHandlers = {
 };
 
 // Browsers and the Windows provider share the pipe but get separate command sets.
+// ---------------------------------------------------------------- AI agents (MCP, see mcp.js)
+
+let mcp = null;
+const mcpScriptPath = () => path.join(app.getPath('userData'), 'mcp', 'keevault-mcp.cjs');
+
+/** Each agent (MCP client name) is allowed once; off unless switched on (or forbidden by policy). */
+async function approveAgent(agent) {
+  const s = config.get();
+  if (!s.mcpEnabled || demo) return false;
+  if (s.approvedAgents.includes(agent)) return true;
+  showWindow();
+  const r = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: [t('Erlauben'), t('Ablehnen')],
+    defaultId: 1,
+    cancelId: 1,
+    message: t('KI-Agent „{agent}“ möchte sich mit Keevault verbinden.', { agent }),
+    detail: t('Der Agent darf danach Tresore und Einträge durchsuchen (ohne Passwörter). Passwörter lesen und Einträge ändern muss du jedes Mal bzw. pro Sitzung erlauben. Erlaube das nur für Agenten, die du selbst eingerichtet hast.'),
+  });
+  if (r.response !== 0) return false;
+  config.update({ approvedAgents: [...config.get().approvedAgents, agent] });
+  return true;
+}
+
+async function confirmAgentRead({ agent, title, vault: vaultName }) {
+  showWindow();
+  const r = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: [t('Für diese Sitzung erlauben'), t('Nur dieses Mal'), t('Ablehnen')],
+    defaultId: 1,
+    cancelId: 2,
+    message: t('KI-Agent „{agent}“ möchte Passwörter lesen.', { agent }),
+    detail: t('Angefragt: „{title}“ im Tresor „{vault}“.\n\n„Für diese Sitzung“: Der Agent darf bis zum Ende seiner Sitzung (höchstens 8 Stunden) oder bis Keevault gesperrt wird Passwörter und Einmalcodes ohne weitere Rückfrage lesen.', { title, vault: vaultName }),
+  });
+  return ['session', 'once', 'deny'][r.response];
+}
+
+async function confirmAgentWrite({ agent, action, title, vault: vaultName, fields }) {
+  showWindow();
+  const r = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: [t('Erlauben'), t('Ablehnen')],
+    defaultId: 0,
+    cancelId: 1,
+    message: action === 'create' ? t('KI-Agent „{agent}“ möchte einen Eintrag anlegen.', { agent }) : t('KI-Agent „{agent}“ möchte einen Eintrag ändern.', { agent }),
+    detail: t('„{title}“ im Tresor „{vault}“\nFelder: {fields}', { title, vault: vaultName, fields: fields.join(', ') }),
+  });
+  return r.response === 0;
+}
+
+/** Log of agent calls (no secret values) in the profile; rotates at 1 MB. */
+async function auditAgent(entry) {
+  const file = path.join(app.getPath('userData'), 'mcp-audit.log');
+  try {
+    if ((await fs.stat(file).catch(() => null))?.size > 1_000_000) await fs.rename(file, `${file}.1`);
+    await fs.appendFile(file, `${JSON.stringify({ t: new Date().toISOString(), ...entry })}\n`);
+  } catch {
+    // Logging must never break the call.
+  }
+}
+
+const mcpHandlers = {
+  hello: async (_msg, client) => {
+    client.agent = client.origin.slice(4);
+    mcp.connect(client);
+    return { version: app.getVersion() };
+  },
+  'mcp:call': ({ tool, args }, client) => mcp.call(client, tool, args),
+};
+
 const bridgeHandlers = new Proxy({}, {
   get: (_target, cmd) => (msg, client) => {
-    const set = client?.origin === WINDOWS_ORIGIN ? windowsHandlers : browserHandlers;
+    const set = client?.origin === WINDOWS_ORIGIN ? windowsHandlers : client?.origin?.startsWith('mcp:') ? mcpHandlers : browserHandlers;
     if (!Object.hasOwn(set, cmd)) throw new Error(`Unknown command ${String(cmd)}`);
     return set[cmd](msg, client);
   },
@@ -631,7 +704,11 @@ async function applyBrowserIntegration() {
     } else await unregisterNativeHost();
     if (s.windowsProvider) await rememberDesktopCommand(launchPath(), app.isPackaged ? '' : `"${appRoot}"`).catch(() => {});
   }
-  if ((s.browserIntegration || s.windowsProvider) && !demo) {
+  if (s.mcpEnabled && !demo) {
+    await fs.mkdir(path.dirname(mcpScriptPath()), { recursive: true });
+    await fs.writeFile(mcpScriptPath(), mcpHostScript(pipePath(app.getPath('userData')), app.getVersion()));
+  }
+  if ((s.browserIntegration || s.windowsProvider || s.mcpEnabled) && !demo) {
     if (!bridge) {
       bridge = new BrowserBridge({ userData: app.getPath('userData'), handlers: bridgeHandlers, approve: approveBrowser });
       await bridge.start();
@@ -694,7 +771,8 @@ const api = {
       if (config.get().updateMode !== 'off') updater?.background();
     }
     if (before.browserIntegration !== s.browserIntegration || before.windowsProvider !== s.windowsProvider
-      || JSON.stringify(before.extensionIds) !== JSON.stringify(s.extensionIds)) await applyBrowserIntegration();
+      || JSON.stringify(before.extensionIds) !== JSON.stringify(s.extensionIds) || before.mcpEnabled !== s.mcpEnabled) await applyBrowserIntegration();
+    if (before.mcpEnabled && !s.mcpEnabled) mcp?.revoke();
     return s;
   },
   /** entra: also sign in to Microsoft Entra ID (Key Vault containers). */
@@ -1440,6 +1518,18 @@ const api = {
   updateState: () => updater?.state || null,
   checkForUpdates: () => updater.check(),
   installUpdate: () => updater.installNow(),
+  mcpInfo: () => ({
+    enabled: !!config.get().mcpEnabled,
+    tools: MCP_TOOLS.map((x) => x.title),
+    agents: config.get().approvedAgents,
+    sessions: mcp?.activeSessions() || [],
+    ...mcpClientConfig({ command: launchPath(), script: mcpScriptPath() }),
+  }),
+  mcpRemoveAgent: (agent) => {
+    config.update({ approvedAgents: config.get().approvedAgents.filter((x) => x !== agent) });
+    mcp?.revoke(agent);
+    return true;
+  },
 
 };
 
@@ -1613,6 +1703,12 @@ app.whenReady().then(async () => {
 
   createWindow();
   if (!smokeTest) createTray();
+  mcp = new McpService({
+    vault: () => (opened ? vault : null),
+    confirmRead: confirmAgentRead,
+    confirmWrite: confirmAgentWrite,
+    audit: auditAgent,
+  });
   updater = new Updater({
     mode: () => (smokeTest ? 'off' : config.get().updateMode),
     onState: (state) => send({ type: 'update', state }),

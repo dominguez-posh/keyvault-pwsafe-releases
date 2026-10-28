@@ -1,6 +1,6 @@
 // Company settings from the registry – set by Group Policy (ADMX in installer/policy) or Intune:
 //   HKLM\SOFTWARE\Policies\Keevault          (computer, wins)  values: TenantId, ClientId, UnlockPrompt, Language,
-//   HKCU\SOFTWARE\Policies\Keevault          (user)            UpdateMode, AutoLockMinutes, ClipboardSeconds, RequirePin
+//   HKCU\SOFTWARE\Policies\Keevault          (user)            UpdateMode, AutoLockMinutes, ClipboardSeconds, RequirePin, McpEnabled
 //   …\Keevault\Vaults                        value name = display name, data = vault URL[;tenant ID]
 // Read with "reg export" (UTF-16 file): exact strings incl. umlauts, no dependency on the console code page.
 
@@ -21,6 +21,7 @@ const VALUES = {
   AutoLockMinutes: { setting: 'autoLockMinutes', type: 'number' },
   ClipboardSeconds: { setting: 'clipboardSeconds', type: 'number' },
   RequirePin: { setting: 'requirePin', type: 'boolean' },
+  McpEnabled: { setting: 'mcpEnabled', type: 'boolean' },
 };
 
 const unescape = (s) => s.replace(/\\(["\\])/g, '$1');

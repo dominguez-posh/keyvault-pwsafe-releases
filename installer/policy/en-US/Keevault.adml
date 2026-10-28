@@ -30,6 +30,12 @@ Computer and user policy are combined.</string>
       <string id="ClipboardSeconds_Help">Copied passwords are removed from the clipboard after this many seconds. 0 = never.</string>
       <string id="RequirePin">Require an app PIN</string>
       <string id="RequirePin_Help">Enabled: users must set an app PIN that is asked for in addition when unlocking.</string>
+      <string id="McpEnabled">Allow AI agents (MCP)</string>
+      <string id="McpEnabled_Help">Enabled: connecting AI agents (Model Context Protocol, e.g. Claude or GitHub Copilot) is switched on. Each agent has to be allowed by the user once; reading passwords and changing entries is confirmed by the user in the app.
+
+Disabled: no AI agents possible, the user cannot switch it on.
+
+Not configured: the user decides (off by default).</string>
       <string id="UpdateMode">Updates</string>
       <string id="UpdateMode_Help">Updates of the per-user installation (EXE) from keevault.de. MSI and MSIX installations are always updated through software deployment.</string>
       <string id="UpdateMode_Off">Off – check manually only</string>

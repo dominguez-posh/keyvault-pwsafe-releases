@@ -34,8 +34,11 @@ const DEFAULTS = {
   extensionIds: ['pbkjijhihclckeeefbepoedgdmajioip'],
   // Updates: off (default, only "Check for updates"), auto (keep up to date), ask (download, ask at next start).
   updateMode: 'off',
+  // AI agents (MCP): off by default; approved MCP client names.
+  mcpEnabled: false,
+  approvedAgents: [],
 };
-const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode'];
+const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled'];
 
 function readJson(file) {
   try {

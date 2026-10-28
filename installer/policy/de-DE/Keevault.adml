@@ -30,6 +30,12 @@ Computer- und Benutzerrichtlinie werden zusammengeführt.</string>
       <string id="ClipboardSeconds_Help">Kopierte Passwörter werden nach so vielen Sekunden aus der Zwischenablage entfernt. 0 = nie.</string>
       <string id="RequirePin">App-PIN verpflichtend</string>
       <string id="RequirePin_Help">Aktiviert: Benutzer müssen eine App-PIN festlegen, die beim Entsperren zusätzlich abgefragt wird.</string>
+      <string id="McpEnabled">KI-Agenten (MCP) erlauben</string>
+      <string id="McpEnabled_Help">Aktiviert: Die Anbindung von KI-Agenten (Model Context Protocol, z. B. Claude oder GitHub Copilot) ist eingeschaltet. Jeder Agent muss vom Benutzer einmal erlaubt werden; Passwörter lesen und Einträge ändern bestätigt der Benutzer in der App.
+
+Deaktiviert: Keine KI-Agenten möglich, der Benutzer kann es nicht einschalten.
+
+Nicht konfiguriert: Der Benutzer entscheidet selbst (ab Werk aus).</string>
       <string id="UpdateMode">Updates</string>
       <string id="UpdateMode_Help">Updates der per-Benutzer-Installation (EXE) von keevault.de. MSI- und MSIX-Installationen werden immer über die Softwareverteilung aktualisiert.</string>
       <string id="UpdateMode_Off">Aus – nur manuell suchen</string>

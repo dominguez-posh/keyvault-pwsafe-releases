@@ -2384,6 +2384,32 @@ function settingsDialog() {
   const autoTypeKeys = h('select', {},
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
+  const mcpEnabled = h('input', { type: 'checkbox', checked: !!s.mcpEnabled, disabled: enforced('mcpEnabled') });
+  const mcpBox = h('div', {});
+  if (s.mcpEnabled) {
+    call('mcpInfo').then((info) => {
+      const snippet = (label, text) => h('div', { class: 'field' }, h('label', {}, label),
+        h('pre', { class: 'snippet' }, text),
+        h('button', { type: 'button', class: 'btn small', onclick: () => navigator.clipboard.writeText(text).then(() => toast(t('Kopiert'))) }, icon('copy', 14), t('Kopieren')));
+      mcpBox.replaceChildren(
+        h('p', { class: 'muted small' }, t('In den KI-Client eintragen – danach den Client neu starten. Beim ersten Zugriff fragt Keevault, ob du den Agenten erlaubst.')),
+        snippet(t('Claude Desktop (claude_desktop_config.json)'), info.claudeDesktop),
+        snippet(t('Claude Code (Befehl im Terminal)'), info.claudeCode),
+        snippet(t('VS Code / GitHub Copilot (.vscode/mcp.json oder Benutzer-mcp.json)'), info.vscode),
+        snippet(t('Andere MCP-Clients (stdio)'), `command: ${info.command}\nargs: ${info.args.join(' ')}\nenv: ELECTRON_RUN_AS_NODE=1`),
+        h('div', { class: 'field' }, h('label', {}, t('Erlaubte Agenten')),
+          info.agents.length ? h('div', {}, ...info.agents.map((a) => {
+            const session = info.sessions.find((x) => x.agent === a);
+            return h('div', { class: 'inline' }, h('span', {}, a), session ? h('span', { class: 'badge accent' }, t('Passwörter freigegeben bis {time}', { time: new Date(session.until).toLocaleTimeString() })) : null,
+              h('button', { type: 'button', class: 'btn small', onclick: async (e) => {
+                await call('mcpRemoveAgent', a);
+                e.currentTarget.closest('.inline').remove();
+                toast(t('Entfernt'));
+              } }, t('Entfernen')));
+          })) : h('p', { class: 'muted small' }, t('Noch kein Agent verbunden.'))),
+      );
+    }, () => {});
+  }
   const updateMode = h('select', { disabled: enforced('updateMode') },
     ...[['off', 'Aus – nur manuell suchen (Standard)'], ['auto', 'Automatisch aktuell halten'], ['ask', 'Im Hintergrund laden, beim Start fragen']]
       .map(([v, l]) => h('option', { value: v, selected: (s.updateMode || 'off') === v }, t(l))));
@@ -2434,6 +2460,10 @@ function settingsDialog() {
     h('p', { class: 'muted small' }, st.pinSet ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.') : t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')),
     st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
       : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
+    h('h3', {}, t('KI-Agenten (MCP)')),
+    h('label', { class: 'inline' }, mcpEnabled, t('KI-Agenten wie Claude oder GitHub Copilot anbinden (Model Context Protocol)')),
+    h('p', { class: 'muted small' }, t('Agenten sehen beim Suchen nur Titel, Benutzer und URL. Passwörter lesen erlaubst du pro Sitzung, Einträge anlegen oder ändern bestätigst du jedes Mal. Löschen ist nicht möglich. Läuft Keevault nicht oder ist gesperrt, bekommt der Agent nichts.')),
+    s.mcpEnabled ? mcpBox : h('p', { class: 'muted small' }, t('Nach dem Einschalten und Speichern erscheinen hier die Einstellungen für deinen KI-Client.')),
     h('h3', {}, t('Updates')),
     st.updateKind === 'msi' || st.updateKind === 'msix'
       ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
@@ -2472,6 +2502,7 @@ function settingsDialog() {
         autoTypeKeys: autoTypeKeys.value,
         signInWindows: signInWindows.checked,
         updateMode: updateMode.value,
+        mcpEnabled: mcpEnabled.checked,
         extensionIds: extensionIds.value.split(/[\s,;]+/).filter((x) => /^[a-p]{32}$/.test(x)),
       });
       if (changedTenant && st.signedIn) await call('switchTenant', tenant.value.trim());

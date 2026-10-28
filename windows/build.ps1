@@ -33,9 +33,10 @@ $tools = Join-Path $out 'tools'
 New-Item -ItemType Directory -Force $out, $tools | Out-Null
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 
-# First dotnet that actually has an SDK (a runtime-only installation may come first on PATH).
-$dotnet = @((Get-Command dotnet -ErrorAction SilentlyContinue)?.Source, (Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe')) |
-    Where-Object { $_ -and (Test-Path $_) -and (& $_ --list-sdks 2>$null) } | Select-Object -First 1
+# First dotnet with an SDK 10 or newer (the project targets net10.0; an older SDK or a runtime-only installation may
+# come first on PATH, e.g. SDK 8 under Program Files).
+$dotnet = @((Get-Command dotnet -ErrorAction SilentlyContinue)?.Source, (Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'), (Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe')) |
+    Where-Object { $_ -and (Test-Path $_) -and ((& $_ --list-sdks 2>$null) | Where-Object { [int]($_ -split '\.')[0] -ge 10 }) } | Select-Object -First 1
 if (-not $dotnet) { throw '.NET SDK 10 nicht gefunden (https://dot.net).' }
 
 Write-Host 'Veröffentliche Passkey-Anbieter …'
