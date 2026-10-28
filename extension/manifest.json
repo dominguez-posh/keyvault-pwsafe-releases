@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Keevault",
   "short_name": "Keevault",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "update_url": "https://github.com/dominguez-posh/keyvault-pwsafe-releases/releases/latest/download/update.xml",
   "description": "__MSG_extDescription__",
   "minimum_chrome_version": "116",

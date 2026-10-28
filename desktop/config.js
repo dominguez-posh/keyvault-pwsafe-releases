@@ -37,6 +37,9 @@ const DEFAULTS = {
   // AI agents (MCP): off by default; approved MCP client names.
   mcpEnabled: false,
   approvedAgents: [],
+  // What agents may see: 'selected' (only mcpScopes – nothing until released) or 'all' (every vault).
+  mcpScope: 'selected',
+  mcpScopes: [], // [{ vaultId, folder }] – folder '' = whole vault
 };
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled'];
 

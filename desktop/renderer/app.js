@@ -898,6 +898,7 @@ function folderActions(c, folder, count, open) {
     folder.split('/').length < MAX_FOLDER_DEPTH
       ? { action: 'subfolder', icon: 'folder-plus', label: t('Neuer Unterordner'), disabled: !canWrite, onClick: () => newFolderDialog(c, `${folder}/`) } : null,
     { action: 'rename-folder', icon: 'edit', label: t('Umbenennen'), disabled: !canWrite, onClick: () => renameFolderDialog(c, folder) },
+    mcpScopeAction(c.id, folder),
     '-',
     { action: 'delete-folder', icon: 'trash', label: t('Löschen'), danger: true, disabled: !canWrite, onClick: async () => {
       try {
@@ -1083,6 +1084,7 @@ function containerActions(c) {
     isFile && !c.secure && ready ? { action: 'migrate', icon: 'key', label: t('In abgesichertes Format umwandeln (nur Passkey)'), onClick: () => migrateDialog(c) } : null,
     c.secure ? { action: 'changelog', icon: 'clock', label: t('Änderungsprotokoll'), disabled: !ready, onClick: () => changelogDialog(c) } : null,
     settings,
+    mcpScopeAction(c.id, ''),
     '-',
     may('folders') ? { action: 'folder', icon: 'folder-plus', label: t('Neuer Ordner'), disabled: !canWrite, onClick: () => newFolderDialog(c) } : null,
     may('logo') ? { action: 'logo', icon: 'image', label: t('Logo des Tresors'), disabled: !canWrite, onClick: () => logoDialog(c) } : null,
@@ -2292,6 +2294,27 @@ function openImport(container) {
   });
 }
 
+// ---------------------------------------------------------------- AI agents: released vaults and folders
+
+const mcpScopes = () => (Array.isArray(st.settings.mcpScopes) ? st.settings.mcpScopes : []);
+const mcpShared = (vaultId, folder) => mcpScopes().some((x) => x.vaultId === vaultId && (x.folder || '') === folder);
+
+async function setMcpScopes(next) {
+  await call('updateSettings', { mcpScopes: next });
+  st.settings.mcpScopes = next;
+}
+
+async function toggleMcpScope(vaultId, folder) {
+  const shared = mcpShared(vaultId, folder);
+  await setMcpScopes(shared ? mcpScopes().filter((x) => !(x.vaultId === vaultId && (x.folder || '') === folder)) : [...mcpScopes(), { vaultId, folder }]);
+  toast(shared ? t('Freigabe für KI-Agenten aufgehoben') : t('Für KI-Agenten freigegeben'));
+}
+
+/** Context menu entry (vault: folder ''), only while agents are on and limited to released areas. */
+const mcpScopeAction = (vaultId, folder) => (st.settings.mcpEnabled && st.settings.mcpScope !== 'all'
+  ? { action: 'mcp-scope', icon: 'link', label: mcpShared(vaultId, folder) ? t('Freigabe für KI-Agenten aufheben') : t('Für KI-Agenten freigeben'), onClick: () => toggleMcpScope(vaultId, folder) }
+  : null);
+
 // ---------------------------------------------------------------- updates
 
 const updateListeners = new Set();
@@ -2386,6 +2409,35 @@ function settingsDialog() {
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
   const mcpEnabled = h('input', { type: 'checkbox', checked: !!s.mcpEnabled, disabled: enforced('mcpEnabled') });
   const mcpBox = h('div', {});
+  const mcpMode = h('select', {},
+    h('option', { value: 'selected', selected: s.mcpScope !== 'all' }, t('Nur freigegebene Tresore und Ordner (empfohlen)')),
+    h('option', { value: 'all', selected: s.mcpScope === 'all' }, t('Alle Tresore, auf die ich Zugriff habe')));
+  const scopeList = h('div', {});
+  const vaultName = (id) => st.containers.find((c) => c.id === id)?.name || id;
+  const drawScopes = () => scopeList.replaceChildren(...(mcpScopes().length ? mcpScopes().map((x) => h('div', { class: 'inline' },
+    icon(x.folder ? 'folder' : 'vault', 14), h('span', {}, x.folder ? `${vaultName(x.vaultId)} / ${x.folder}` : t('{vault} (ganzer Tresor)', { vault: vaultName(x.vaultId) })),
+    h('button', { type: 'button', class: 'btn small', onclick: async () => {
+      await setMcpScopes(mcpScopes().filter((y) => !(y.vaultId === x.vaultId && (y.folder || '') === (x.folder || ''))));
+      drawScopes();
+    } }, t('Entfernen')))) : [h('p', { class: 'muted small' }, t('Noch nichts freigegeben – Agenten sehen keine Einträge.'))]));
+  const scopeVault = h('select', {}, ...st.containers.filter((c) => !c.error).map((c) => h('option', { value: c.id }, c.name)));
+  const scopeFolder = h('select', {});
+  const fillFolders = async () => {
+    const id = scopeVault.value;
+    const paths = new Set([...items.filter((i) => i.containerId === id).map((i) => i.folder), ...(explicitFolders.get(id) || await call('folders', id).catch(() => []))].filter(Boolean));
+    for (const p of [...paths]) p.split('/').forEach((_, n, parts) => paths.add(parts.slice(0, n + 1).join('/')));
+    scopeFolder.replaceChildren(h('option', { value: '' }, t('Ganzer Tresor')), ...[...paths].sort().map((p) => h('option', { value: p }, p)));
+  };
+  scopeVault.addEventListener('change', fillFolders);
+  if (s.mcpEnabled) {
+    fillFolders();
+    drawScopes();
+  }
+  const scopeAdd = h('button', { type: 'button', class: 'btn small', onclick: async () => {
+    if (!scopeVault.value) return;
+    if (!mcpShared(scopeVault.value, scopeFolder.value)) await setMcpScopes([...mcpScopes(), { vaultId: scopeVault.value, folder: scopeFolder.value }]);
+    drawScopes();
+  } }, icon('plus', 14), t('Freigeben'));
   if (s.mcpEnabled) {
     call('mcpInfo').then((info) => {
       const snippet = (label, text) => h('div', { class: 'field' }, h('label', {}, label),
@@ -2463,7 +2515,11 @@ function settingsDialog() {
     h('h3', {}, t('KI-Agenten (MCP)')),
     h('label', { class: 'inline' }, mcpEnabled, t('KI-Agenten wie Claude oder GitHub Copilot anbinden (Model Context Protocol)')),
     h('p', { class: 'muted small' }, t('Agenten sehen beim Suchen nur Titel, Benutzer und URL. Passwörter lesen erlaubst du pro Sitzung, Einträge anlegen oder ändern bestätigst du jedes Mal. Löschen ist nicht möglich. Läuft Keevault nicht oder ist gesperrt, bekommt der Agent nichts.')),
-    s.mcpEnabled ? mcpBox : h('p', { class: 'muted small' }, t('Nach dem Einschalten und Speichern erscheinen hier die Einstellungen für deinen KI-Client.')),
+    s.mcpEnabled ? h('div', {},
+      field(t('Zugriff für KI-Agenten'), mcpMode, t('Freigeben geht auch per Rechtsklick auf einen Tresor oder Ordner. Ein freigegebener Ordner schließt seine Unterordner ein.')),
+      h('div', { class: 'field' }, h('label', {}, t('Freigegeben')), scopeList,
+        h('div', { class: 'inline' }, scopeVault, scopeFolder, scopeAdd)),
+      mcpBox) : h('p', { class: 'muted small' }, t('Nach dem Einschalten und Speichern erscheinen hier die Einstellungen für deinen KI-Client.')),
     h('h3', {}, t('Updates')),
     st.updateKind === 'msi' || st.updateKind === 'msix'
       ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
@@ -2503,6 +2559,7 @@ function settingsDialog() {
         signInWindows: signInWindows.checked,
         updateMode: updateMode.value,
         mcpEnabled: mcpEnabled.checked,
+        mcpScope: mcpMode.value,
         extensionIds: extensionIds.value.split(/[\s,;]+/).filter((x) => /^[a-p]{32}$/.test(x)),
       });
       if (changedTenant && st.signedIn) await call('switchTenant', tenant.value.trim());

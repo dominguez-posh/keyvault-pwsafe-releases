@@ -2,6 +2,7 @@
 // Keevault.exe with ELECTRON_RUN_AS_NODE=1); it relays to the running app over the same named pipe as the browser.
 // The app decides everything:
 //   - each agent is approved once (by its MCP client name), the feature is off by default and can be blocked by policy
+//   - agents only see the released vaults and folders (scope; default: nothing until the user releases something)
 //   - searching shows metadata only (title, user, URL, folder) – never secrets
 //   - reading passwords/one-time codes needs a confirmation in the app, valid for this agent session (max 8 hours)
 //     or only once; locking the app ends all sessions
@@ -10,7 +11,7 @@
 
 import { generatePassword } from '../extension/core/generator.js';
 import { totpCode } from '../extension/core/totp.js';
-import { normalizeItem } from '../extension/core/model.js';
+import { normalizeItem, normalizeFolder } from '../extension/core/model.js';
 import { t } from '../extension/core/i18n.js';
 
 export const SESSION_MS = 8 * 60 * 60_000;
@@ -100,13 +101,26 @@ export const MCP_TOOLS = [
 
 const fail = (message) => Object.assign(new Error(message), { name: 'McpError' });
 
+/**
+ * scope: { all: true } or { all: false, scopes: [{ vaultId, folder }] } – folder '' = whole vault, otherwise the
+ * folder with its subfolders.
+ */
+export function scopeAllows(scope, vaultId, folder) {
+  if (!scope || scope.all) return true;
+  const f = normalizeFolder(folder);
+  return (scope.scopes || []).some((s) => s.vaultId === vaultId && (!s.folder || f === s.folder || f.startsWith(`${s.folder}/`)));
+}
+
+const vaultInScope = (scope, vaultId) => !scope || scope.all || (scope.scopes || []).some((s) => s.vaultId === vaultId);
+
 export class McpService {
   /**
    * vault(): open VaultSession or null (locked); confirmRead({ agent, title, vault }) → 'session' | 'once' | 'deny';
-   * confirmWrite({ agent, action, title, vault, fields }) → boolean; audit({ agent, tool, vault, entry, result }).
+   * confirmWrite({ agent, action, title, vault, fields }) → boolean; audit({ agent, tool, vault, entry, result });
+   * scope(): released vaults/folders (see scopeAllows; without it everything is released).
    */
-  constructor({ vault, confirmRead, confirmWrite, audit }) {
-    Object.assign(this, { vault, confirmRead, confirmWrite, audit });
+  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }) }) {
+    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope });
     this.clients = new Set();
     this.grants = new WeakMap();
   }
@@ -134,9 +148,13 @@ export class McpService {
 
   async container(vaultId) {
     const c = (await this.session().containers()).find((x) => x.id === vaultId);
-    if (!c) throw fail(t('Tresor nicht gefunden'));
+    if (!c || !vaultInScope(this.scope(), c.id)) throw fail(t('Dieser Tresor ist für KI-Agenten nicht freigegeben.'));
     if (c.locked) throw fail(t('Der Tresor ist gesperrt – bitte in der App entsperren.'));
     return c;
+  }
+
+  requireScope(vaultId, folder) {
+    if (!scopeAllows(this.scope(), vaultId, folder)) throw fail(t('Dieser Ordner ist für KI-Agenten nicht freigegeben.'));
   }
 
   async requireRead(client, title, vault) {
@@ -160,17 +178,26 @@ export class McpService {
 
   async run(client, tool, a) {
     switch (tool) {
-      case 'list_vaults':
-        return (await this.session().containers()).map((c) => ({
-          id: c.id, name: c.name, kind: c.kind, locked: !!c.locked, writable: c.access?.write !== false && !c.error, error: c.error?.message || undefined,
-        }));
+      case 'list_vaults': {
+        const scope = this.scope();
+        return (await this.session().containers()).filter((c) => vaultInScope(scope, c.id)).map((c) => {
+          const folders = scope.all ? [] : scope.scopes.filter((s) => s.vaultId === c.id).map((s) => s.folder);
+          return {
+            id: c.id, name: c.name, kind: c.kind, locked: !!c.locked, writable: c.access?.write !== false && !c.error, error: c.error?.message || undefined,
+            // Released area: the whole vault, or only these folders (with subfolders).
+            ...(scope.all || folders.includes('') ? { access: 'whole vault' } : { access: 'folders', folders }),
+          };
+        });
+      }
 
       case 'search_entries': {
         const v = this.session();
         const names = new Map((await v.containers()).map((c) => [c.id, c.name]));
         const q = String(a.query || '').trim().toLowerCase();
         const limit = Math.min(SEARCH_LIMIT, Math.max(1, Number(a.limit) || 25));
+        const scope = this.scope();
         const hits = (await v.summaries())
+          .filter((s) => scopeAllows(scope, s.containerId, s.folder))
           .filter((s) => !a.vaultId || s.containerId === a.vaultId)
           .filter((s) => !q || [s.title, s.username, s.folder, ...(s.hosts || [])].some((x) => String(x || '').toLowerCase().includes(q)))
           .sort((x, y) => x.title.localeCompare(y.title));
@@ -186,6 +213,7 @@ export class McpService {
       case 'get_totp': {
         const c = await this.container(a.vaultId);
         const item = await this.session().getItem(c.id, a.entryId, { fresh: true });
+        this.requireScope(c.id, item.folder);
         await this.requireRead(client, item.title, c.name);
         if (tool === 'get_totp') {
           if (!item.totp) throw fail(t('Kein Einmalcode (TOTP) hinterlegt'));
@@ -209,8 +237,15 @@ export class McpService {
         if (c.access?.write === false) throw fail(t('Kein Schreibrecht in diesem Tresor'));
         const v = this.session();
         const before = tool === 'update_entry' ? await v.getItem(c.id, a.entryId, { fresh: true }) : null;
+        if (before) this.requireScope(c.id, before.folder);
         const patch = {};
         for (const k of ['title', 'username', 'notes', 'folder']) if (typeof a[k] === 'string') patch[k] = a[k];
+        // Only one folder released in this vault: new entries go there unless the agent names a folder.
+        const scope = this.scope();
+        const released = scope.all ? [] : scope.scopes.filter((s) => s.vaultId === c.id).map((s) => s.folder);
+        if (!before && patch.folder === undefined && released.length === 1 && released[0]) patch.folder = released[0];
+        // Neither create outside the released area nor move an entry out of it.
+        this.requireScope(c.id, patch.folder ?? before?.folder ?? '');
         if (typeof a.url === 'string') patch.urls = a.url ? [a.url] : [];
         if (a.generatePassword) patch.password = generatePassword({ length: Number(a.passwordLength) || 24 });
         else if (typeof a.password === 'string') patch.password = a.password;

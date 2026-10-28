@@ -26,7 +26,7 @@ import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
 import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
-import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth } from '../extension/core/model.js';
+import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder } from '../extension/core/model.js';
 import { itemsToCsv } from '../extension/core/export.js';
 import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
 
@@ -1707,6 +1707,12 @@ app.whenReady().then(async () => {
     vault: () => (opened ? vault : null),
     confirmRead: confirmAgentRead,
     confirmWrite: confirmAgentWrite,
+    scope: () => {
+      const s = config.get();
+      const scopes = (Array.isArray(s.mcpScopes) ? s.mcpScopes : []).filter((x) => x && typeof x.vaultId === 'string')
+        .map((x) => ({ vaultId: x.vaultId, folder: normalizeFolder(x.folder || '') }));
+      return { all: s.mcpScope === 'all', scopes };
+    },
     audit: auditAgent,
   });
   updater = new Updater({
@@ -2050,7 +2056,12 @@ function runSmokeTest() {
         if (view === 'members') await menuAction('members');
         if (view === 'changelog') await menuAction('changelog');
       }
-      if (view === 'settings') await js('document.querySelector(".sidebar .icon-btn[title=Einstellungen]")?.click()');
+      if (view === 'settings' || view === 'settings-mcp') await js('document.querySelector(".sidebar .icon-btn[title=Einstellungen]")?.click()');
+      // AI agent section of the settings (scrolled into view).
+      if (view === 'settings-mcp') {
+        await new Promise((r) => setTimeout(r, 600));
+        await js('[...document.querySelectorAll(".modal h3")].find((x) => x.textContent.includes("MCP"))?.scrollIntoView({ block: "start" })');
+      }
       if (view === 'create') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');
         await sleep(300);

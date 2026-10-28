@@ -87,6 +87,44 @@ test('mcp: create/update with confirmation; generated password is stored, not re
   assert.equal(denied.v.saved.length, 0);
 });
 
+test('mcp: scope – only released vaults and folders (with subfolders)', async () => {
+  const v = fakeVault();
+  // Second vault and a nested folder.
+  const containers = v.containers;
+  v.containers = async () => [...(await containers()), { id: 'kv-private', name: 'Privat', kind: 'keyvault', access: { write: true } }];
+  let scope = { all: false, scopes: [] };
+  const asked = [];
+  const mcp = new McpService({ vault: () => v, confirmRead: async () => 'once', confirmWrite: async (x) => { asked.push(x); return true; }, scope: () => scope });
+  const client = { agent: 'claude-ai' };
+  mcp.connect(client);
+
+  assert.deepEqual(await mcp.call(client, 'list_vaults'), [], 'nothing released: the agent sees nothing');
+  assert.equal((await mcp.call(client, 'search_entries', {})).total, 0);
+  await assert.rejects(mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' }), /nicht freigegeben/);
+
+  scope = { all: false, scopes: [{ vaultId: 'kv-team', folder: 'Cloud' }] };
+  const vaults = await mcp.call(client, 'list_vaults');
+  assert.deepEqual(vaults.map((x) => [x.id, x.access, x.folders]), [['kv-team', 'folders', ['Cloud']]]);
+  const found = await mcp.call(client, 'search_entries', {});
+  assert.deepEqual(found.entries.map((e) => e.entryId), ['pws-1'], 'entries outside the folder stay invisible');
+  assert.equal((await mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' })).password, 'S3cret!');
+  await assert.rejects(mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-2' }), /Ordner ist für KI-Agenten nicht freigegeben/);
+  assert.equal((await mcp.call(client, 'search_entries', { vaultId: 'kv-private' })).total, 0, 'unreleased vault: no hits');
+
+  // Creating: without a folder it lands in the only released one; outside is refused; moving out is refused.
+  const created = await mcp.call(client, 'create_entry', { vaultId: 'kv-team', title: 'Neu' });
+  assert.equal(v.saved.at(-1).folder, 'Cloud');
+  assert.ok(created.entryId);
+  await assert.rejects(mcp.call(client, 'create_entry', { vaultId: 'kv-team', title: 'Draußen', folder: 'Privat' }), /nicht freigegeben/);
+  await assert.rejects(mcp.call(client, 'update_entry', { vaultId: 'kv-team', entryId: 'pws-1', folder: 'Anderswo' }), /nicht freigegeben/);
+  await mcp.call(client, 'update_entry', { vaultId: 'kv-team', entryId: 'pws-1', folder: 'Cloud/Azure' });
+  assert.equal(v.saved.at(-1).folder, 'Cloud/Azure', 'subfolders of a released folder are allowed');
+  await assert.rejects(mcp.call(client, 'get_entry', { vaultId: 'kv-private', entryId: 'x' }), /Tresor ist für KI-Agenten nicht freigegeben/);
+
+  scope = { all: false, scopes: [{ vaultId: 'kv-team', folder: '' }] };
+  assert.equal((await mcp.call(client, 'search_entries', {})).total, 2, 'whole vault released');
+});
+
 test('mcp: locked app gives nothing', async () => {
   const { mcp, client } = service({ locked: true });
   await assert.rejects(mcp.call(client, 'list_vaults'), /gesperrt/);
