@@ -233,6 +233,9 @@ async function refreshAll({ quick = false } = {}) {
 function completeInBackground(session, options) {
   (async () => {
     await session.refreshContainers(options);
+    // Vaults without a resource ID (added by hand or by policy) get their role only here – without it the
+    // admin functions (folders, settings) stay hidden.
+    await session.refreshAccess().catch(() => {});
     const index = await session.index();
     const missing = (await session.containers()).filter((c) => c.kind === 'keyvault' && !index[c.id]).map((c) => c.id);
     if (missing.length) await session.refreshIndex(missing);
