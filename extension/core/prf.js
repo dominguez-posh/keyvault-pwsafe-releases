@@ -5,7 +5,8 @@ import { b64uEncode, b64uDecode, randomBytes } from './util.js';
 import { t } from './i18n.js';
 
 function explain(e) {
-  if (e?.name === 'NotAllowedError') return new Error(t('Passkey-Vorgang abgebrochen oder abgelaufen'));
+  // The raw name stays visible in brackets: it is what support needs (e.g. NotAllowedError vs. NotSupportedError).
+  if (e?.name === 'NotAllowedError') return new Error(`${t('Passkey-Vorgang abgebrochen oder abgelaufen')} [${e.name}]`);
   if (e?.name === 'InvalidStateError') return new Error(t('Dieser Passkey ist bereits registriert'));
   if (e?.name === 'SecurityError' || e?.name === 'NotSupportedError') return new Error(t('Passkeys sind hier nicht verfügbar ({message})', { message: e.message }));
   return e;
@@ -68,6 +69,9 @@ export async function registerPrf(rpId, { userName, displayName, excludeCredenti
     return { rpId, credentialId, prfSalt: salt, prfOutput: r.prfOutput, platform };
   } catch (e) {
     if (ext?.enabled) throw e;
-    throw new Error(t('Dieser Passkey unterstützt keine Schlüsselableitung (PRF). Nutze einen FIDO2-Sicherheitsschlüssel, Windows Hello (aktuelles Windows 11) oder ein Smartphone.'));
+    const detail = e?.name ? ` [${e.name}: ${e.message}]` : '';
+    throw new Error((platform
+      ? t('Windows Hello liefert auf diesem Gerät keine Schlüsselableitung (PRF), die Keevault für den Dateischlüssel braucht. Nutze einen FIDO2-Sicherheitsschlüssel, ein Smartphone als Passkey (QR-Code) oder ein Masterpasswort.')
+      : t('Dieser Passkey unterstützt keine Schlüsselableitung (PRF). Nutze einen FIDO2-Sicherheitsschlüssel, Windows Hello (aktuelles Windows 11) oder ein Smartphone.')) + detail);
   }
 }

@@ -384,3 +384,55 @@ test('refreshContainers keeps learned resource ID and rights until the next chec
   assert.equal(c.resourceId, stored[0].resourceId, 'resource ID kept');
   assert.deepEqual(c.access, { admin: true, write: true }, 'rights kept');
 });
+
+test('fast index: unlocking reads the index secrets instead of listing; changes rewrite it; the listing reconciles drift', async () => {
+  const { kv, session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  for (const n of ['Alpha', 'Beta', 'Gamma']) await session.saveItem(cid, { title: n, username: `${n.toLowerCase()}@contoso.com`, password: 'x', folder: 'Kunden' });
+  await session.flushFastIndex();
+  assert.ok(kv.secrets.has('pws-index') && kv.secrets.has('pws-index-00'), 'header and shard written');
+  assert.equal(JSON.parse(kv.secrets.get('pws-index').at(-1).value).count, 3);
+
+  // A second client (fresh session, same vault): the fast path lists nothing.
+  const other = new VaultSession({ getToken: async (scope) => `token-${scope}`, store: new MemoryStore(), fetch: kv.fetch, actor: () => 'bob@contoso.com' });
+  await other.refreshContainers({ configured: [{ name: 'Team', vaultUrl: 'kv-team' }], discover: false });
+  kv.calls.length = 0;
+  const index = await other.refreshIndexFast();
+  assert.equal(index[cid].items.length, 3);
+  assert.ok(index[cid].fast, 'came from the index secrets');
+  assert.ok(!kv.calls.some((c) => c === 'GET /secrets'), `no listing: ${kv.calls.join(', ')}`);
+  assert.deepEqual(index[cid].items.map((i) => i.title).sort(), ['Alpha', 'Beta', 'Gamma']);
+  assert.equal(index[cid].items[0].folder, 'Kunden');
+
+  // Drift: a secret disappears behind the index's back → the fast path still shows it, the listing repairs it.
+  const gone = index[cid].items[0].id;
+  kv.secrets.delete(gone);
+  assert.equal((await other.refreshIndexFast())[cid].items.length, 3, 'index is stale until reconciled');
+  assert.equal((await other.refreshIndex([cid]))[cid].items.length, 2, 'listing wins');
+  await other.flushFastIndex();
+  assert.equal(JSON.parse(kv.secrets.get('pws-index').at(-1).value).count, 2, 'index rewritten after reconcile');
+
+  // Index secrets never show up as entries and are not backed up.
+  assert.ok((await other.summaries()).every((s) => !s.id.startsWith('pws-index')));
+  const backup = await other.backupSecrets(cid);
+  assert.ok(!JSON.stringify(backup).includes('pws-index'), 'derived data stays out of backups');
+});
+
+test('fast index: protected container seals the shards; without the key the fast path reports locked', async () => {
+  const { kv, session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  await session.saveItem(cid, { title: 'Geheim', password: 'x' });
+  await session.enableProtection(cid, { password: 'master-password-1' });
+  await session.flushFastIndex();
+  const shard = kv.secrets.get('pws-index-00').at(-1).value;
+  assert.ok(shard.startsWith('{"kvpwsafe-sealed"'), 'shard is sealed');
+  assert.ok(!shard.includes('Geheim'));
+  const other = new VaultSession({ getToken: async (scope) => `token-${scope}`, store: new MemoryStore(), fetch: kv.fetch, actor: () => 'bob@contoso.com' });
+  await other.refreshContainers({ configured: [{ name: 'Team', vaultUrl: 'kv-team' }], discover: false });
+  const locked = await other.refreshIndexFast();
+  assert.equal(locked[cid].locked, true);
+  assert.equal(locked[cid].items.length, 0);
+  await other.unlockContainer(cid, { password: 'master-password-1' });
+  const open = await other.refreshIndexFast();
+  assert.equal(open[cid].items[0].title, 'Geheim');
+});

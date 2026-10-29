@@ -21,3 +21,14 @@ windows/PasskeyProvider/obj/
 terraform.tfvars
 *.auto.tfvars
 crash.log
+
+# Mobile app (Capacitor): generated files
+mobile/node_modules/
+mobile/www/bundle.js
+mobile/www/core/
+mobile/www/logo.png
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/local.properties
+mobile/android/.idea/

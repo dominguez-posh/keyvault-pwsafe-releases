@@ -1,6 +1,6 @@
 {
   "name": "keyvault-pwsafe",
-  "version": "0.7.3",
+  "version": "0.7.5",
   "description": "Passwort- und Passkey-Tresor auf Azure Key Vault mit Entra-ID-Anmeldung: Desktop-App und Browser-Erweiterung",
   "type": "module",
   "main": "desktop/main.js",
@@ -67,13 +67,27 @@
     },
     "mac": {
       "icon": "desktop/assets/icon.png",
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "Keevault-${version}-mac-${arch}.${ext}",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "artifactName": "Keevault-${version}-mac-${arch}.${ext}"
     },
     "linux": {
       "icon": "desktop/assets/icon.png",
+      "category": "Utility",
+      "maintainer": "Lucas Dominguez <info@keevault.de>",
       "target": [
-        "AppImage"
-      ]
+        "AppImage",
+        "deb"
+      ],
+      "artifactName": "Keevault-${version}-linux-${arch}.${ext}"
     },
     "extraResources": [
       {

@@ -39,8 +39,11 @@
     toPage({ id: d.id, ack: true });
     call('cs:webauthn', { kind: d.kind, options: d.payload, mediation: d.payload?.conditional ? 'conditional' : undefined })
       .then((res) => {
-        if (res.pending) modalRequests.set(res.pending, d.id);
-        else if (res.conditional) {
+        if (res.pending) {
+          modalRequests.set(res.pending, d.id);
+          pendingKinds.set(res.pending, d.kind);
+          passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
+        } else if (res.conditional) {
           conditional = { pageId: d.id, ...res.conditional };
           if (res.conditional.ui) texts = res.conditional.ui;
           if (document.activeElement instanceof HTMLInputElement) onFocus({ target: document.activeElement });
@@ -50,6 +53,7 @@
   });
 
   function abortFromPage(pageId) {
+    passkeyAnim('hide');
     for (const [requestId, pid] of modalRequests) {
       if (pid !== pageId) continue;
       modalRequests.delete(requestId);
@@ -72,8 +76,12 @@
     if (sender.id !== chrome.runtime.id || !msg?.type) return undefined;
     if (msg.type === 'webauthn:result') {
       const pageId = modalRequests.get(msg.requestId);
+      const kind = pendingKinds.get(msg.requestId);
+      pendingKinds.delete(msg.requestId);
       if (pageId) {
         modalRequests.delete(msg.requestId);
+        if (msg.result) passkeyAnim('ok', kind === 'create' ? (texts.passkeyCreated || 'Passkey') : (texts.passkeyOk || 'Passkey'));
+        else passkeyAnim('hide');
         toPage({ id: pageId, result: msg.result, error: msg.error, fallback: msg.fallback });
       }
     } else if (msg.type === 'fill') {
@@ -198,8 +206,31 @@
     button.b.primary { background: #0f6cbd; border-color: #0f6cbd; color: #fff; }
     button.x { position: absolute; top: 8px; right: 8px; border: 0; background: none; font-size: 18px; cursor: pointer; color: #5b6170; }
     .logo { width: 18px; height: 18px; border-radius: 5px; background: #0f6cbd; display: inline-grid; place-items: center; color: #fff; font-size: 11px; }
+    .pk { position: fixed; top: 16px; right: 16px; z-index: 2147483647; display: flex; align-items: center; gap: 12px; padding: 12px 16px 12px 12px;
+      background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.2); font-size: 13px;
+      animation: pk-in .22s cubic-bezier(.2,.8,.2,1); }
+    .pk.hide { animation: pk-out .25s ease forwards; }
+    .pk .disc { position: relative; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+    .pk .ring { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(#0f6cbd 0 25%, #dfe6f3 25% 100%); animation: pk-spin .9s linear infinite;
+      -webkit-mask: radial-gradient(circle, transparent 60%, #000 62%); mask: radial-gradient(circle, transparent 60%, #000 62%); }
+    .pk .glyph { position: relative; width: 22px; height: 22px; color: #0f6cbd; animation: pk-key 1.2s ease-in-out infinite; }
+    .pk .glyph svg { width: 22px; height: 22px; display: block; }
+    .pk .check { display: none; position: relative; width: 22px; height: 22px; }
+    .pk .check svg { width: 22px; height: 22px; display: block; }
+    .pk.ok .ring { animation: none; background: #1f9d55; -webkit-mask: radial-gradient(circle, transparent 60%, #000 62%); mask: radial-gradient(circle, transparent 60%, #000 62%); }
+    .pk.ok .glyph { display: none; }
+    .pk.ok .check { display: block; color: #1f9d55; animation: pk-pop .35s cubic-bezier(.2,.9,.3,1.4); }
+    .pk .pktxt { font-weight: 600; max-width: 260px; }
+    .pk .pksub { color: #5b6170; font-size: 11px; margin-top: 2px; }
+    @keyframes pk-spin { to { transform: rotate(360deg); } }
+    @keyframes pk-key { 0%, 100% { transform: translateY(0) rotate(-8deg); } 50% { transform: translateY(-2px) rotate(8deg); } }
+    @keyframes pk-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    @keyframes pk-in { from { transform: translateY(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
+    @keyframes pk-out { to { transform: translateY(-8px); opacity: 0; } }
     @media (prefers-color-scheme: dark) {
-      .menu, .banner { background: #23252b; color: #eceef2; border-color: #3a3d46; }
+      .menu, .banner, .pk { background: #23252b; color: #eceef2; border-color: #3a3d46; }
+      .pk .ring { background: conic-gradient(#5aa0ff 0 25%, #3a3d46 25% 100%); }
+      .pk .pksub { color: #a6abb8; }
       .entry:hover, .entry:focus { background: #2f3440; }
       .head, .s, .banner .user, button.x { color: #a6abb8; }
       button.b { background: #2b2e36; color: #eceef2; border-color: #464a55; }
@@ -208,6 +239,41 @@
 
   let host = null;
   let root = null;
+  let pk = null; // passkey animation card
+  let pkTimer = null;
+  const pendingKinds = new Map(); // extension request id → 'get' | 'create'
+  const KEY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3M18.5 4.5l3 3"/></svg>';
+  const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+  /** 'wait' (spinning ring around a key) | 'ok' (green check, fades out) | 'hide' */
+  function passkeyAnim(state, text) {
+    clearTimeout(pkTimer);
+    if (state === 'hide') {
+      if (pk) {
+        const gone = pk;
+        gone.classList.add('hide');
+        pkTimer = setTimeout(() => gone.remove(), 260);
+        pk = null;
+      }
+      return;
+    }
+    if (!pk || !pk.isConnected) {
+      pk = el('div', 'pk');
+      const disc = el('div', 'disc');
+      const glyph = el('div', 'glyph');
+      glyph.innerHTML = KEY_SVG;
+      const check = el('div', 'check');
+      check.innerHTML = CHECK_SVG;
+      disc.append(el('div', 'ring'), glyph, check);
+      const txt = el('div', 'txt');
+      txt.append(el('div', 'pktxt'), el('div', 'pksub', 'Keevault'));
+      pk.append(disc, txt);
+      ui().append(pk);
+    }
+    pk.className = `pk ${state}`;
+    pk.querySelector('.pktxt').textContent = text || '';
+    if (state === 'ok') pkTimer = setTimeout(() => passkeyAnim('hide'), 1500);
+  }
   function ui() {
     if (!host || !host.isConnected) {
       host = document.createElement('kvpwsafe-ui');
@@ -348,11 +414,14 @@
     hideMenu();
     const c = conditional;
     if (!c) return;
+    passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
     try {
       const res = await call('cs:webauthnSelect', { requestId: c.requestId, containerId: entry.containerId, itemId: entry.itemId, credentialId: entry.credentialId });
       conditional = null;
+      passkeyAnim('ok', texts.passkeyOk || 'Passkey');
       toPage({ id: c.pageId, result: res.result });
     } catch {
+      passkeyAnim('hide');
       // Request expired; the site can retry.
     }
   }

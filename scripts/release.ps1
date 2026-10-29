@@ -74,6 +74,31 @@ Copy-Item $msix (Join-Path $root 'release/Keevault.msix') -Force
 # Public part of the signing certificate: devices must trust it before the MSIX installs (until a purchased one).
 Copy-Item (Join-Path $root 'windows/out/KvPwSafe-Test.cer') (Join-Path $root 'release/Keevault-Zertifikat.cer') -Force
 $assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'), (Join-Path $root "dist/kvpwsafe-extension-$version-firefox.zip"))
+# Mobile app (preview): the Android debug APK goes along when it was built (mobile/README.md).
+$apk = Join-Path $root 'mobile/android/app/build/outputs/apk/debug/app-debug.apk'
+if (Test-Path $apk) {
+    $mobileVersion = (Get-Content (Join-Path $root 'mobile/package.json') -Raw | ConvertFrom-Json).version
+    $apkTarget = Join-Path $root "release/Keevault-Mobile-$mobileVersion.apk"
+    Copy-Item $apk $apkTarget -Force
+    $assets += $apkTarget
+}
+# macOS/Linux (preview, unsigned): built by the GitHub workflow "Desktop macOS/Linux" and downloaded with
+# `gh run download <id> -D release/ci`; attached when present, plus copies under stable names for the website.
+$ci = Join-Path $root 'release/ci'
+if (Test-Path $ci) {
+    $stable = @{ "Keevault-$version-mac-arm64.dmg" = 'Keevault-mac-arm64.dmg'; "Keevault-$version-mac-x64.dmg" = 'Keevault-mac-x64.dmg';
+                 "Keevault-$version-linux-x86_64.AppImage" = 'Keevault-linux-x86_64.AppImage'; "Keevault-$version-linux-amd64.deb" = 'Keevault-linux-amd64.deb' }
+    foreach ($f in Get-ChildItem $ci -Recurse -File | Where-Object { $_.Name -like "Keevault-$version-*" }) {
+        $target = Join-Path $root "release/$($f.Name)"
+        Copy-Item $f.FullName $target -Force
+        $assets += $target
+        if ($stable.ContainsKey($f.Name)) {
+            $copy = Join-Path $root "release/$($stable[$f.Name])"
+            Copy-Item $f.FullName $copy -Force
+            $assets += $copy
+        }
+    }
+}
 foreach ($a in $assets) { if (-not (Test-Path $a)) { throw "$a fehlt" } }
 Write-Host "Fertig: $setup" -ForegroundColor Green
 
@@ -100,8 +125,15 @@ if ($Publish) {
         git -C $public push origin HEAD
     }
     $commit = (git -C $public rev-parse HEAD).Trim()
+    $notes = "EXE (pro Benutzer), MSI (pro Gerät, GPO/Intune: msiexec /i Keevault.msi /qn) und MSIX (Zertifikat Keevault-Zertifikat.cer vorher vertrauen). Installer mit Passkey-Anbieter und Browser-Erweiterung (Edge/Chrome per Richtlinie)."
+    $previews = @()
+    if ($assets -match 'mac-arm64\.dmg$') { $previews += 'macOS (DMG, unsigniert: „Trotzdem öffnen“)' }
+    if ($assets -match '\.AppImage$') { $previews += 'Linux (AppImage/deb)' }
+    if ($assets -match '\.apk$') { $previews += 'Android (APK, Debug-Build)' }
+    if ($previews) { $notes += " Vorschau: $($previews -join ', ') – siehe https://keevault.de/download.html." }
+    $notes += " Quellcode dieser Version: Tag v$version."
     Invoke-Step "GitHub-Release v$version" {
         # The tag points at exactly the source the installer was built from (verifiable, see README).
-        gh release create "v$version" @assets --repo $publicRepo --target $commit --title "Keevault $version" --notes "EXE (pro Benutzer), MSI (pro Gerät, GPO/Intune: msiexec /i Keevault.msi /qn) und MSIX (Zertifikat Keevault-Zertifikat.cer vorher vertrauen). Installer mit Passkey-Anbieter und Browser-Erweiterung (Edge/Chrome per Richtlinie). Quellcode dieser Version: Tag v$version."
+        gh release create "v$version" @assets --repo $publicRepo --target $commit --title "Keevault $version" --notes $notes
     }
 }

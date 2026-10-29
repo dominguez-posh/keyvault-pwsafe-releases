@@ -117,6 +117,11 @@ export function snapshot() {
     let s;
     try {
       s = await request('snapshot', {}, 60_000);
+      // Big vaults: the rest of the list comes in pages (native messaging allows 1 MB per message).
+      if (s.more) {
+        const pages = Math.ceil(s.more.total / s.more.pageSize);
+        for (let page = 1; page < pages; page++) s.summaries.push(...(await request('summariesPage', { page, pageSize: s.more.pageSize }, 60_000)));
+      }
     } catch (e) {
       if (!/Unknown command/.test(e.message)) throw e;
       // App before 0.5.9.

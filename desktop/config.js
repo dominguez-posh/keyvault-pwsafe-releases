@@ -14,7 +14,8 @@ const DEFAULTS = {
   hiddenContainers: [],
   autoLockMinutes: 15,
   clipboardSeconds: 30,
-  unlockPrompt: 'select_account',
+  // Silent sign-in when the token cache allows it (SSO); the account picker is a convenience, not a factor.
+  unlockPrompt: 'none',
   defaultContainer: '',
   language: 'auto',
   fileContainers: [],

@@ -21,7 +21,10 @@ import {
 export const KEYRING_SECRET = 'pws-keyring';
 const KEYRING_TYPE = 'application/vnd.kvpwsafe.keyring+json; v=1';
 const SEALED_TAGS = ['n', 'u', 'h', 'rp', 'f', 'fav', 'otp', 'ic'];
+import { INDEX_SECRET, INDEX_TYPE, INDEX_TAG, shardName, isIndexSecret, encodeIndex, decodeIndex, sameSummaries } from './fastindex.js';
+
 const SEALED = 'kvpwsafe-sealed';
+const FAST_INDEX_DELAY = 1500; // ms: changes in quick succession become one index write
 const FOLDERS_SECRET = 'pws-folders';
 const LOGO_SECRET = 'pws-logo'; // up to 0.4: logo only; now part of pws-container
 // Marks a Key Vault as password container (unique ID, name, logo). Readable only with data access, so finding
@@ -446,7 +449,7 @@ export class VaultSession {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return null;
     const cached = this.policyCache?.get(containerId);
-    if (cached && Date.now() - cached.at < 60_000) return cached.value;
+    if (cached && Date.now() - cached.at < 10 * 60_000) return cached.value;
     let stored = {};
     try {
       stored = JSON.parse((await this.kv(c).getSecret(POLICY_SECRET)).value);
@@ -576,7 +579,10 @@ export class VaultSession {
       }
       onProgress(++done, items.length);
     });
+    // The plaintext index parts go the way of the plaintext entries; the sealed index follows right away.
+    await this.purgeFastIndex(kv);
     await this.refreshIndex([containerId]);
+    await this.writeFastIndex(containerId).catch(() => {});
     return { recoveryKey, migrated: items.length - failed.length, failed };
   }
 
@@ -621,7 +627,21 @@ export class VaultSession {
     this.keys.delete(containerId);
     await this.dropItemCache(containerId);
     await this.refreshIndex([containerId]);
+    // Readers must not keep seeing a sealed index of a vault that is open again.
+    await this.writeFastIndex(containerId).catch(() => {});
     return { failed };
+  }
+
+  /** Deletes and purges the index secrets (before protection seals them, so no plaintext list stays behind). */
+  async purgeFastIndex(kv) {
+    for (const secret of (await kv.listSecrets()).filter((x) => isIndexSecret(x.name))) {
+      try {
+        await kv.deleteSecret(secret.name);
+        await this.purgeWhenDeleted(kv, secret.name);
+      } catch {
+        // Without purge rights the name stays in the recycle bin; the index is then rebuilt after the retention.
+      }
+    }
   }
 
   // ---------------------------------------------------------------- index (Key Vault) and items
@@ -654,7 +674,13 @@ export class VaultSession {
             items.push({ ...summaryFromSecret({ ...s, tags }, c.id), unprotected: isProtected && !sealed });
           }
         }
-        fresh[c.id] = { items, loadedAt: Date.now(), error: null, protected: isProtected, locked: isProtected && !key };
+        fresh[c.id] = { items, loadedAt: Date.now(), error: null, protected: isProtected, locked: isProtected && !key, fast: false };
+        // Reconcile: what the index secrets claim vs. what the vault really holds.
+        if (!isProtected || key) {
+          const before = (await this.index())[c.id];
+          const known = before && !before.error && !before.locked ? before.items : null;
+          if (!known || !sameSummaries(known, items) || !before.fast && !before.indexed) this.scheduleFastIndex(c.id);
+        }
       } catch (e) {
         fresh[c.id] = { items: [], loadedAt: Date.now(), error: { status: e.status || 0, message: e.message, code: e.code || e.name, tenantId: e.tenantId, detail: e.detail || '' } };
       }
@@ -667,13 +693,106 @@ export class VaultSession {
     });
   }
 
+  /**
+   * Fast path: the index secrets instead of the listing (a few GETs, whatever the size). Containers without an
+   * index, with a damaged one, or protected ones without their key fall back to the full listing.
+   */
+  async refreshIndexFast(containerIds) {
+    const containers = await this.kvContainers();
+    const targets = containerIds ? containers.filter((c) => containerIds.includes(c.id)) : containers;
+    const fresh = {};
+    const slow = [];
+    await mapLimit(targets, 4, async (c) => {
+      try {
+        const entry = await this.loadFastIndex(c);
+        if (entry) fresh[c.id] = entry;
+        else slow.push(c.id);
+      } catch {
+        slow.push(c.id);
+      }
+    });
+    if (Object.keys(fresh).length) {
+      await this.locked(async () => {
+        const index = { ...(await this.index()), ...fresh };
+        await this.store.set('index', index);
+      });
+    }
+    if (slow.length) await this.refreshIndex(slow);
+    return this.index();
+  }
+
+  async loadFastIndex(c) {
+    const kv = this.kv(c);
+    let header;
+    try {
+      header = JSON.parse((await kv.getSecret(INDEX_SECRET)).value);
+    } catch (e) {
+      if (e.status === 404) return null;
+      throw e;
+    }
+    if (header?.v !== 1) return null;
+    const key = header.protected ? await this.containerKey(c.id) : null;
+    if (header.protected && !key) return { items: [], loadedAt: Date.now(), error: null, protected: true, locked: true, fast: true, gen: header.gen };
+    const shards = await mapLimit(Array.from({ length: header.shards }, (_, i) => i), 4, async (i) => {
+      let value = (await kv.getSecret(shardName(i))).value;
+      if (isSealedValue(value)) value = await key.decrypt(JSON.parse(value)[SEALED], `${c.id}/${shardName(i)}`);
+      return value;
+    });
+    const items = await decodeIndex(c.id, header, shards);
+    return { items, loadedAt: Date.now(), error: null, protected: !!header.protected, locked: false, fast: true, gen: header.gen };
+  }
+
+  /** Writes the index secrets from the local index (debounced; skipped without write access or when locked). */
+  scheduleFastIndex(containerId) {
+    this.fastIndexTimers ||= new Map();
+    clearTimeout(this.fastIndexTimers.get(containerId));
+    const timer = setTimeout(() => {
+      this.fastIndexTimers.delete(containerId);
+      this.writeFastIndex(containerId).catch(() => {});
+    }, FAST_INDEX_DELAY);
+    timer.unref?.();
+    this.fastIndexTimers.set(containerId, timer);
+  }
+
+  /** Tests and shutdown: write pending indexes now. */
+  async flushFastIndex() {
+    for (const [id, timer] of this.fastIndexTimers || []) {
+      clearTimeout(timer);
+      this.fastIndexTimers.delete(id);
+      await this.writeFastIndex(id).catch(() => {});
+    }
+  }
+
+  async writeFastIndex(containerId) {
+    const c = await this.container(containerId);
+    if (c.kind !== 'keyvault' || c.access?.write === false) return false;
+    const entry = (await this.index())[containerId];
+    if (!entry || entry.error || entry.locked) return false;
+    const key = entry.protected ? await this.containerKey(containerId) : null;
+    if (entry.protected && !key) return false;
+    const { header, shards } = await encodeIndex(entry.items, { by: await this.actor(), isProtected: !!entry.protected });
+    const kv = this.kv(c);
+    await mapLimit(shards.map((text, i) => [i, text]), 4, async ([i, text]) => {
+      const value = key ? JSON.stringify({ [SEALED]: await key.encrypt(text, `${containerId}/${shardName(i)}`) }) : text;
+      await kv.setSecret(shardName(i), value, { contentType: INDEX_TYPE, tags: { kvpwsafe: INDEX_TAG } });
+    });
+    await kv.setSecret(INDEX_SECRET, JSON.stringify(header), { contentType: INDEX_TYPE, tags: { kvpwsafe: INDEX_TAG } });
+    await this.locked(async () => {
+      const index = await this.index();
+      if (index[containerId]) index[containerId] = { ...index[containerId], indexed: true, gen: header.gen };
+      await this.store.set('index', index);
+    });
+    return true;
+  }
+
   async updateIndex(containerId, change) {
-    return this.locked(async () => {
+    await this.locked(async () => {
       const index = await this.index();
       const entry = index[containerId] || { items: [], loadedAt: Date.now(), error: null };
       index[containerId] = { ...entry, items: change(entry.items) };
       await this.store.set('index', index);
     });
+    this.scheduleFastIndex(containerId);
   }
 
   /** All item summaries; Key Vault indexes older than maxAgeMs are reloaded, adapters are asked live. */
@@ -681,7 +800,7 @@ export class VaultSession {
     let index = await this.index();
     const kv = await this.kvContainers();
     const stale = kv.filter((c) => !index[c.id] || Date.now() - index[c.id].loadedAt > maxAgeMs).map((c) => c.id);
-    if (stale.length) index = await this.refreshIndex(stale);
+    if (stale.length) index = await this.refreshIndexFast(stale);
     const out = kv.flatMap((c) => index[c.id]?.items || []);
     for (const c of await this.adapterContainers()) {
       if (c.locked) continue;
@@ -718,7 +837,10 @@ export class VaultSession {
     const item = await this.decodeBundle(c, bundle);
     const updated = (bundle.attributes?.updated || 0) * 1000;
     await this.store.set(key, { item, updated });
-    if (summary && summary.updated !== updated) await this.refreshIndex([containerId]);
+    if (summary && summary.updated !== updated) {
+      const current = { ...summaryFromSecret({ name: id, tags: serializeItem(item).tags, attributes: { updated: updated / 1000 } }, containerId), unprotected: summary.unprotected };
+      await this.updateIndex(containerId, (list) => list.map((x) => (x.id === id ? current : x)));
+    }
     return item;
   }
 
@@ -839,7 +961,7 @@ export class VaultSession {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') throw new Error(t('Backups gibt es nur für Tresore in Azure Key Vault'));
     const kv = this.kv(c);
-    const list = (await kv.listSecrets()).filter((s) => s.attributes?.enabled !== false && !s.managed);
+    const list = (await kv.listSecrets()).filter((s) => s.attributes?.enabled !== false && !s.managed && !isIndexSecret(s.name));
     let done = 0;
     const secrets = await mapLimit(list, 4, async (s) => {
       const full = await kv.getSecret(s.name);

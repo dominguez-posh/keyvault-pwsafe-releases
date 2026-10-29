@@ -1,0 +1,53 @@
+# macOS and Linux builds of the desktop app on their native runners (unsigned previews). Started by hand
+# (workflow_dispatch) or by a release tag; the artifacts are downloaded locally and attached to the GitHub
+# release by scripts/release.ps1 (the Windows installers and the extension key stay local).
+name: Desktop macOS/Linux
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  mac:
+    name: macOS (arm64 + x64, unsigniert)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --mac --arm64 --x64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mac
+          path: |
+            release/*.dmg
+            release/*-mac-*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux (AppImage + deb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx electron-builder --linux --x64 --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: |
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error

@@ -561,10 +561,37 @@ function renderList() {
   const container = ui.containerId ? st.containers.find((c) => c.id === ui.containerId) : null;
   const title = container ? container.name : { all: t('Alle Einträge'), favorites: t('Favoriten'), passkeys: t('Passkeys') }[ui.view];
   const rowsEl = h('ul', { class: 'list' });
+  let searchTimer = null;
   const search = h('input', { type: 'search', id: 'search', placeholder: t('Suchen (Titel, Benutzer, Website, Ordner)'), value: ui.query, oninput: (e) => {
     ui.query = e.target.value;
-    renderRows();
+    // Debounced: typing into a list of thousands re-renders once, not per keystroke.
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(renderRows, 80);
   } });
+  let chunkObserver = null;
+  const CHUNK = 120;
+  // Large lists are built in slices as the user scrolls: elements or thunks (() => element) that are created on
+  // demand, so 2,000 entries cost as much as 120 until they come into view.
+  function renderChunked(nodes) {
+    chunkObserver?.disconnect();
+    const make = (n) => (typeof n === 'function' ? n() : n);
+    let shown = Math.min(CHUNK, nodes.length);
+    rowsEl.replaceChildren(...nodes.slice(0, shown).map(make));
+    if (shown >= nodes.length) return;
+    const sentinel = h('li', { class: 'row-more', 'aria-hidden': 'true' }, h('span', { class: 'spinner' }));
+    rowsEl.append(sentinel);
+    chunkObserver = new IntersectionObserver((entries) => {
+      if (!entries.some((x) => x.isIntersecting)) return;
+      const next = nodes.slice(shown, shown + CHUNK).map(make);
+      shown += next.length;
+      sentinel.before(...next);
+      if (shown >= nodes.length) {
+        sentinel.remove();
+        chunkObserver.disconnect();
+      }
+    }, { rootMargin: '600px' });
+    chunkObserver.observe(sentinel);
+  }
 
   function row(i) {
     const draggable = !!container && writable(container);
@@ -630,17 +657,17 @@ function renderList() {
       return;
     }
     if (container && !ui.query.trim()) {
-      rowsEl.replaceChildren(...folderRows(container, list, row, renderRows));
+      renderChunked(folderRows(container, list, row, renderRows));
       return;
     }
     if (container && list.some((i) => i.folder)) {
       const groups = new Map();
       for (const i of list) groups.set(i.folder || '', [...(groups.get(i.folder || '') || []), i]);
-      rowsEl.replaceChildren(...[...groups].sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
-        .flatMap(([folder, entries]) => [h('li', { class: 'folder-title' }, folder || t('Ohne Ordner')), ...entries.map(row)]));
+      renderChunked([...groups].sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+        .flatMap(([folder, entries]) => [h('li', { class: 'folder-title' }, folder || t('Ohne Ordner')), ...entries.map((i) => () => row(i))]));
       return;
     }
-    rowsEl.replaceChildren(...list.map(row));
+    renderChunked(list.map((i) => () => row(i)));
   }
 
   if (ui.folderOf !== ui.containerId) {
@@ -840,7 +867,7 @@ function folderRows(container, list, row, rerender) {
         }
       } }, icon('trash', 14)) : null));
   }
-  out.push(...list.filter((i) => (i.folder || '') === cur).map(row));
+  out.push(...list.filter((i) => (i.folder || '') === cur).map((i) => () => row(i)));
   if (out.length === (cur ? 1 : 0)) out.push(h('li', { class: 'empty' }, icon('folder', 32), t('Ordner ist leer')));
   return out;
 }
@@ -1075,15 +1102,35 @@ function generatorDialog() {
 function contextMenu(event, actions) {
   event.preventDefault();
   document.querySelector('.context-menu')?.remove();
-  const menu = h('div', { class: 'context-menu', role: 'menu' }, ...actions.filter(Boolean).map((a) => (a === '-'
-    ? h('div', { class: 'context-sep' })
-    : h('button', {
+  // Entries with "children" open a submenu (hover or click); it stays inside the menu's DOM.
+  const item = (a) => {
+    if (a === '-') return h('div', { class: 'context-sep' });
+    if (a.children) {
+      const sub = h('div', { class: 'context-menu context-sub', role: 'menu' }, ...a.children.filter(Boolean).map(item));
+      const wrap = h('div', { class: 'context-group' });
+      const place = () => sub.classList.toggle('left', wrap.getBoundingClientRect().right + 240 > window.innerWidth);
+      wrap.append(h('button', {
+        type: 'button', role: 'menuitem', 'aria-haspopup': 'true', class: 'has-sub', dataset: { action: a.action || '' },
+        onclick: () => {
+          if (wrap.classList.toggle('open')) place();
+        },
+        onmouseenter: () => {
+          wrap.classList.add('open');
+          place();
+        },
+      }, icon(a.icon, 15), h('span', {}, a.label), icon('caret', 13)), sub);
+      wrap.addEventListener('mouseleave', () => wrap.classList.remove('open'));
+      return wrap;
+    }
+    return h('button', {
       type: 'button', role: 'menuitem', class: a.danger ? 'danger' : '', disabled: a.disabled, dataset: { action: a.action || '' },
       onclick: () => {
         close();
         a.onClick();
       },
-    }, icon(a.icon, 15), h('span', {}, a.label)))));
+    }, icon(a.icon, 15), h('span', {}, a.label));
+  };
+  const menu = h('div', { class: 'context-menu', role: 'menu' }, ...actions.filter(Boolean).map(item));
   const close = () => {
     menu.remove();
     window.removeEventListener('mousedown', outside, true);
@@ -1166,7 +1213,37 @@ async function infoDialog(c) {
  */
 const featureAllowed = (c, feature) => c.kind !== 'keyvault' || !!c.access?.admin || c.policy?.[feature] === true;
 
+// The vault menu keeps every function but folds the rarely used ones into two submenus.
+const VAULT_GROUPS = [
+  { action: 'group-manage', icon: 'settings', label: 'Verwaltung', members: ['vault-settings', 'mcp-scope', 'license', 'info', 'logo', 'rename', 'migrate', 'changelog'] },
+  { action: 'group-data', icon: 'download', label: 'Daten', members: ['import', 'export', 'backup', 'restore', 'trash'] },
+];
+
+function groupMenu(actions) {
+  const out = [];
+  for (const a of actions.filter(Boolean)) {
+    const g = a !== '-' && VAULT_GROUPS.find((x) => x.members.includes(a.action));
+    if (!g) {
+      out.push(a);
+      continue;
+    }
+    let node = out.find((x) => x !== '-' && x.action === g.action);
+    if (!node) {
+      node = { action: g.action, icon: g.icon, label: t(g.label), children: [] };
+      out.push(node);
+    }
+    node.children.push(a);
+  }
+  // No separators at the ends or twice in a row.
+  return out.filter((x, i, arr) => !(x === '-' && (i === 0 || i === arr.length - 1 || arr[i - 1] === '-')));
+}
+
+/** All functions of a container (right-click menu in the sidebar). */
 function containerActions(c) {
+  return groupMenu(containerActionsFlat(c));
+}
+
+function containerActionsFlat(c) {
   const isFile = c.kind === 'file';
   const ready = !c.error && !c.locked;
   const canWrite = ready && c.access?.write !== false;
@@ -2661,7 +2738,7 @@ function settingsDialog() {
   const autoLock = h('input', { type: 'number', min: 0, max: 1440, value: s.autoLockMinutes, disabled: enforced('autoLockMinutes') });
   const clip = h('input', { type: 'number', min: 0, max: 600, value: s.clipboardSeconds, disabled: enforced('clipboardSeconds') });
   const prompt = h('select', { disabled: enforced('unlockPrompt') },
-    ...[['select_account', 'Konto bestätigen (Standard)'], ['login', 'Immer neu anmelden (Passwort/MFA)'], ['none', 'Ohne Rückfrage, wenn möglich (SSO)']]
+    ...[['none', 'Ohne Rückfrage, wenn möglich (SSO, Standard)'], ['select_account', 'Konto bestätigen'], ['login', 'Immer neu anmelden (Passwort/MFA)']]
       .map(([v, l]) => h('option', { value: v, selected: s.unlockPrompt === v }, t(l))));
   const browser = h('input', { type: 'checkbox', checked: s.browserIntegration });
   const windowsProvider = h('input', { type: 'checkbox', checked: s.windowsProvider });
@@ -2867,6 +2944,10 @@ async function typeSelected(what) {
     return toast(e.message, 'error');
   }
 }
+
+// Unexpected errors go to the diagnostics log (Einstellungen → Protokoll), without any secret values.
+window.addEventListener('error', (e) => call('log', { level: 'error', message: e.message, detail: `${e.filename}:${e.lineno}` }).catch(() => {}));
+window.addEventListener('unhandledrejection', (e) => call('log', { level: 'error', message: e.reason?.message || String(e.reason), detail: (e.reason?.stack || '').split(/\r?\n/).slice(0, 3).join(' / ') }).catch(() => {}));
 
 document.addEventListener('keydown', (e) => {
   if (!st?.opened || document.querySelector('dialog[open]')) return;

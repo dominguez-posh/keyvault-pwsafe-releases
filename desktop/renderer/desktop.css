@@ -139,3 +139,10 @@ body { overflow: hidden; }
 .info-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 5px 12px 5px 0; white-space: nowrap; vertical-align: top; width: 1%; }
 .info-table td { padding: 5px 0; word-break: break-all; vertical-align: top; }
 .info-table td .icon-btn { margin-left: 6px; vertical-align: middle; }
+/* Context submenus and sliced list rendering */
+.context-group { position: relative; }
+.context-group > button.has-sub > .icon:last-child { margin-left: auto; opacity: 0.6; }
+.context-sub { display: none; position: absolute; top: -6px; left: 100%; min-width: 230px; }
+.context-group.open > .context-sub { display: block; }
+.context-sub.left { left: auto; right: 100%; }
+.row-more { display: flex; justify-content: center; padding: 10px; list-style: none; }

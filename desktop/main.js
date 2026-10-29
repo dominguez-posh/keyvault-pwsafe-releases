@@ -105,8 +105,10 @@ function cleanEmail(email) {
 }
 
 function applyLanguage() {
+  // --lang=en: screenshots and smoke runs in a fixed language (the setting wins otherwise).
+  const forced = process.argv.find((a) => a.startsWith('--lang='))?.slice('--lang='.length);
   const setting = config.get().language;
-  setLanguage(setting, app.getLocale());
+  setLanguage(forced || setting, app.getLocale());
 }
 
 // Offline read mode: encrypted mirror of the Key Vault answers, replayed without network (offline.js).
@@ -210,6 +212,8 @@ let keptAccount = null;
 async function lockNow() {
   mcp?.revoke();
   if (!opened && !auth.account) return;
+  clearInterval(reconcileTimer);
+  if (opened && !offlineMode) await vault.flushFastIndex().catch(() => {});
   const keep = !!config.get().appPin && opened && !offlineMode;
   keptAccount = auth.account?.homeAccountId || null;
   offlineMode = false;
@@ -250,24 +254,39 @@ async function refreshAll({ quick = false } = {}) {
   const options = { configured: configuredContainers(), hidden: config.get().hiddenContainers };
   const { discoverError } = await vault.refreshContainers(quick ? { ...options, tenants: false, access: false } : options);
   if (mirrorWanted()) offlineMirror().setContainers(await vault.containers());
-  await vault.refreshIndex();
-  if (quick) completeInBackground(vault, options);
-  else await vault.refreshAccess().catch(() => {});
+  // Index secrets first (a few GETs however big the vault); the full listing reconciles in the background.
+  await vault.refreshIndexFast();
+  completeInBackground(vault, quick ? options : null);
   rememberTenants().catch(() => {});
   return discoverError;
 }
 
+/** Periodic reconcile while unlocked: the listing checks the index secrets and repairs drift. */
+const RECONCILE_MS = 30 * 60_000;
+let reconcileTimer = null;
+function scheduleReconcile() {
+  clearInterval(reconcileTimer);
+  reconcileTimer = setInterval(() => {
+    if (opened && !offlineMode && !demo && signedIn()) vault.refreshIndex().then(() => changed()).catch(() => {});
+  }, RECONCILE_MS);
+}
+
 function completeInBackground(session, options) {
   (async () => {
-    await session.refreshContainers(options);
+    if (options) await session.refreshContainers(options);
     // Vaults without a resource ID (added by hand or by policy) get their role only here – without it the
     // admin functions (folders, settings) stay hidden.
     await session.refreshAccess().catch(() => {});
     const index = await session.index();
     const missing = (await session.containers()).filter((c) => c.kind === 'keyvault' && !index[c.id]).map((c) => c.id);
-    if (missing.length) await session.refreshIndex(missing);
+    if (missing.length) await session.refreshIndexFast(missing);
     // Locked or signed out meanwhile: the result belongs to an old session.
     if (session === vault && opened) changed();
+    // Reconcile: the full listing (slow for big vaults, invisible here) checks and repairs the index secrets.
+    if (offlineMode) return;
+    await session.refreshIndex();
+    if (session === vault && opened) changed();
+    scheduleReconcile();
   })().catch(() => {});
 }
 
@@ -536,6 +555,7 @@ const forBrowser = (c) => ({
 const browserContainers = async () => (opened ? (await vault.containers()).map(forBrowser) : []);
 
 const INDEX_MAX_AGE = 5 * 60_000;
+const SNAPSHOT_PAGE = 500;
 let staleRefresh = null;
 
 /** Vaults loaded longer ago than INDEX_MAX_AGE: reload them in the background and report the change. */
@@ -555,7 +575,16 @@ const browserHandlers = {
     if (!opened) return { version: app.getVersion(), opened: false, pinSet, containers: [], summaries: [] };
     const summaries = await vault.summaries({ maxAgeMs: Infinity });
     refreshStaleForBrowser().catch(() => {});
-    return { version: app.getVersion(), opened: true, pinSet, containers: await browserContainers(), summaries };
+    // Native messaging allows 1 MB per message: big lists go in pages (summariesPage).
+    const out = { version: app.getVersion(), opened: true, pinSet, containers: await browserContainers(), summaries: summaries.slice(0, SNAPSHOT_PAGE) };
+    if (summaries.length > SNAPSHOT_PAGE) out.more = { total: summaries.length, pageSize: SNAPSHOT_PAGE };
+    return out;
+  },
+  summariesPage: async ({ page, pageSize }) => {
+    requireOpen();
+    const size = Math.min(Number(pageSize) || SNAPSHOT_PAGE, SNAPSHOT_PAGE);
+    const all = await vault.summaries({ maxAgeMs: Infinity });
+    return all.slice(Number(page) * size, (Number(page) + 1) * size);
   },
   // Unlock from the browser with the app PIN: silent sign-in, no window (only once a PIN is set – without one
   // the app window stays the place to unlock, so nothing on the machine can open the vault without a secret).
@@ -940,7 +969,8 @@ const api = {
   },
   async items() {
     requireOpen();
-    return vault.summaries();
+    refreshStaleForBrowser().catch(() => {});
+    return vault.summaries({ maxAgeMs: Infinity });
   },
   item: (containerId, id, fresh) => vault.getItem(containerId, id, { fresh }),
   save: async (containerId, item, expectedVersion) => {
@@ -1691,6 +1721,18 @@ const api = {
     rows.sort((a, b) => a.vault.localeCompare(b.vault) || (a.principal || '').localeCompare(b.principal || ''));
     return { created: new Date().toISOString(), by: actor(), rows };
   },
+  /** Diagnostics log in the profile (no secret values): renderer errors, passkey failures. Rotates at 1 MB. */
+  async log({ level = 'error', message = '', detail = '' }) {
+    const file = path.join(app.getPath('userData'), 'keevault.log');
+    try {
+      if ((await fs.stat(file).catch(() => null))?.size > 1_000_000) await fs.rename(file, `${file}.1`);
+      await fs.appendFile(file, `${new Date().toISOString()} ${level} ${String(message).slice(0, 500)}${detail ? ` | ${String(detail).slice(0, 1500)}` : ''}
+`);
+    } catch {
+      // Logging must never fail the app.
+    }
+    return true;
+  },
   /** Saves a text file (CSV) where the user chooses. */
   async saveTextFile({ name, text }) {
     const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath('documents'), String(name).replace(/[\\/:*?"<>|]/g, '_')) });
@@ -1887,6 +1929,14 @@ app.whenReady().then(async () => {
     const minutes = Number(config.get().autoLockMinutes) || 0;
     if (opened && minutes > 0 && powerMonitor.getSystemIdleTime() >= minutes * 60) lockNow();
   }, 30_000);
+  // Pending index writes (debounced) go out before the app quits.
+  let flushedBeforeQuit = false;
+  app.on('before-quit', (e) => {
+    if (flushedBeforeQuit || !opened || offlineMode || demo) return;
+    e.preventDefault();
+    flushedBeforeQuit = true;
+    vault.flushFastIndex().catch(() => {}).finally(() => app.quit());
+  });
   powerMonitor.on('lock-screen', () => lockNow());
   powerMonitor.on('suspend', () => lockNow());
 
@@ -2067,7 +2117,7 @@ function runSmokeTest() {
           await vault.store.set('containers', stored);
         };
         await setAdmin(false);
-        const blocked = await api.renameContainer(kvc.id, 'Nicht erlaubt').then(() => false, (e) => /nicht freigeschaltet/.test(e.message));
+        const blocked = await api.renameContainer(kvc.id, 'Nicht erlaubt').then(() => false, (e) => /nicht freigeschaltet|not enabled/.test(e.message));
         if (!blocked) errors.push('vault settings: rename not blocked for non-admin');
         if (await api.setPolicy(kvc.id, { rename: true }).then(() => true, () => false)) errors.push('vault settings: non-admin could change the settings');
         await setAdmin(true);

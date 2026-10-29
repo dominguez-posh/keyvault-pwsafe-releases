@@ -1,0 +1,13 @@
+{
+  "appId": "de.keevault.app",
+  "appName": "Keevault",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    }
+  }
+}
