@@ -10,6 +10,7 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import updaterPkg from 'electron-updater';
+import { verifyManifest, parseManifest } from './update-verify.js';
 
 const { autoUpdater } = updaterPkg;
 export const UPDATE_MODES = ['off', 'auto', 'ask'];
@@ -74,17 +75,31 @@ export class Updater {
     if (this.mode() === 'auto') this.timer = setInterval(() => this.background(), INTERVAL);
   }
 
-  /** Newest version on the server → { version } (null if none newer). */
+  /** latest.yml with latest.yml.sig from the server, verified against the embedded key → { version, sha512, url }. */
+  async signedManifest() {
+    const [manifest, signature] = await Promise.all(['latest.yml', 'latest.yml.sig'].map(async (name) => {
+      const res = await this.fetch(`${FEED}/${name}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status} (${name})`);
+      return res.text();
+    }));
+    if (!verifyManifest(manifest, signature)) throw new Error('Update-Manifest nicht verifizierbar – Signatur ungültig.');
+    return parseManifest(manifest);
+  }
+
+  /** Newest version on the server → { version } (null if none newer). Unsigned or altered manifests are rejected. */
   async latest() {
+    const signed = await this.signedManifest();
+    if (!signed.version || compareVersions(signed.version, app.getVersion()) <= 0) return null;
     if (this.kind === 'nsis') {
-      const r = await autoUpdater.checkForUpdates();
-      const version = r?.updateInfo?.version;
-      return version && compareVersions(version, app.getVersion()) > 0 ? { version } : null;
+      // electron-updater reads the manifest itself and later checks the download against its hash: that manifest
+      // has to be the signed one (same version, same installer hash), otherwise nothing is downloaded.
+      const info = (await autoUpdater.checkForUpdates())?.updateInfo;
+      const sha512 = info?.files?.[0]?.sha512 || info?.sha512;
+      if (!info || info.version !== signed.version || !signed.sha512 || sha512 !== signed.sha512) {
+        throw new Error('Update-Manifest stimmt nicht mit der signierten Fassung überein.');
+      }
     }
-    const res = await this.fetch(`${FEED}/latest.yml`, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const version = /^version:\s*(\S+)/m.exec(await res.text())?.[1];
-    return version && compareVersions(version, app.getVersion()) > 0 ? { version } : null;
+    return { version: signed.version };
   }
 
   /** Background run (auto/ask): look, download quietly; installing follows in downloaded(). */

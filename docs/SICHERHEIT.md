@@ -100,6 +100,28 @@ Erweiterungs-IDs startbar. Die Named Pipe lässt andere Benutzer nicht schreiben
 der Desktop-App einmal erlaubt werden. Gegen Schadsoftware, die als derselbe Benutzer läuft, schützt das – wie
 bei jedem Passwortmanager – nicht.
 
+## Updates und Programmintegrität
+
+- **Signierte Update-Manifeste:** Neue Versionen erfährt die App nur über `latest.yml`, das beim Release mit einem
+  Ed25519-Schlüssel signiert wird, der ausschließlich auf dem Build-Rechner liegt (`latest.yml.sig`). Ein Manifest
+  ohne gültige Signatur, mit veränderter Version oder verändertem Installer-Hash wird verworfen – auch wenn Website
+  oder GitHub-Konto kompromittiert wären. Der SHA-512-Hash des Installers aus dem signierten Manifest wird nach dem
+  Download verglichen; ältere Versionen werden nie angeboten.
+- **Electron-Fuses:** Die installierte App ignoriert `NODE_OPTIONS` und `--inspect`, verschlüsselt Cookies und lädt
+  ihren Code nur aus dem Archiv `app.asar`, dessen Hash im Programm hinterlegt ist (Windows, macOS) – ein verändertes
+  Archiv startet nicht. Der Node-Modus bleibt an, weil Browser-Host und MCP-Host die App so starten.
+- **Renderer-Härtung:** `contextIsolation` und `sandbox` an, kein `nodeIntegration`, strikte Content-Security-Policy,
+  keine Navigation und keine neuen Fenster, als einzige Berechtigung `clipboard-sanitized-write`, externe Links nur
+  über `http(s)`.
+- **Netz:** Entra ID, Key Vault, Resource Manager, Graph, HIBP und Updates laufen über eine Chromium-Session nur im
+  Arbeitsspeicher (`no-store`), nicht über Nodes `https`-Modul – Umgebungsvariablen wie
+  `NODE_TLS_REJECT_UNAUTHORIZED` haben keine Wirkung.
+- **App-PIN:** PBKDF2 mit 310.000 Runden; ab dem fünften Fehlversuch wächst die Wartezeit bis auf 15 Minuten, und der
+  Zähler überlebt einen Neustart der App – auch für das Entsperren aus dem Browser.
+- **Mobile-Vorschau:** Das Refresh-Token liegt nur mit einem PIN-abgeleiteten Schlüssel (PBKDF2 310.000 Runden,
+  AES-GCM) in den App-Einstellungen, ohne Android-Backup; eine Bindung an Keystore/Secure Enclave folgt vor der
+  Store-Veröffentlichung.
+
 ## Windows-Passkey-Anbieter
 
 - Windows signiert jede Anfrage an den Anbieter; der Anbieter prüft die Signatur mit dem Schlüssel, den Windows bei

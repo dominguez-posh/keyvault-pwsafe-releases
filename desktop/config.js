@@ -23,6 +23,7 @@ const DEFAULTS = {
   windowsProvider: false,
   windowsProviderHint: false,
   appPin: null,
+  pinGuard: null, // wrong PIN attempts { failures, blockedUntil } – survives a restart
   requirePin: false,
   trayHintShown: false,
   autoTypeKeys: 'CommandOrControl+Shift',

@@ -23,12 +23,23 @@ export async function verifyPin(pin, record) {
   return hash.length === expected.length && crypto.timingSafeEqual(hash, expected);
 }
 
-/** Wrong attempts: from the 5th on, a growing wait (30 s, 60 s, … up to 15 min). */
+/**
+ * Wrong attempts: from the 5th on, a growing wait (30 s, 60 s, … up to 15 min). The caller persists toJSON() so a
+ * restart of the app does not reset the counter (the PIN check is also reachable from the browser extension).
+ */
 export class PinGuard {
-  constructor() {
-    this.failures = 0;
-    this.blockedUntil = 0;
+  constructor(state) {
     this.okUntil = 0;
+    this.restore(state);
+  }
+
+  restore(state) {
+    this.failures = Number(state?.failures) || 0;
+    this.blockedUntil = Number(state?.blockedUntil) || 0;
+  }
+
+  toJSON() {
+    return { failures: this.failures, blockedUntil: this.blockedUntil };
   }
 
   waitSeconds() {

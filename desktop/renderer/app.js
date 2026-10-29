@@ -10,16 +10,26 @@ import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
 import { MAX_FOLDER_DEPTH } from '../../extension/core/model.js';
 import { expiryState, expiringEntries, daysUntil } from '../../extension/core/health.js';
 import { healthDialog, accessReportDialog } from './reports.js';
+import * as progress from './progress.js';
+
+// Calls that can take a moment show the progress card bottom right (progress.js); the main process reports
+// done/total under the same id where it knows them. Dialogs with their own inline progress are not listed.
+const SLOW_CALLS = { unlock: 'Entsperren …', refresh: 'Aktualisieren …', healthReport: 'Passwort-Check …', accessReport: 'Zugriffsbericht …', vaultInfo: 'Tresor-Infos werden geladen …', checkForUpdates: 'Suche nach Updates …' };
 
 async function call(method, ...args) {
-  const r = await window.pwsafe.invoke(method, args);
-  if (!r.ok) {
-    const e = new Error(r.error.message);
-    e.name = r.error.name;
-    e.status = r.error.status;
-    throw e;
+  const end = SLOW_CALLS[method] ? progress.begin(method, t(SLOW_CALLS[method])) : null;
+  try {
+    const r = await window.pwsafe.invoke(method, args);
+    if (!r.ok) {
+      const e = new Error(r.error.message);
+      e.name = r.error.name;
+      e.status = r.error.status;
+      throw e;
+    }
+    return r.result;
+  } finally {
+    end?.();
   }
-  return r.result;
 }
 
 const root = document.getElementById('app');
@@ -123,6 +133,7 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'link') {
     addContainerDialog(ev.url);
   } else if (ev.type === 'progress') {
+    progress.onEvent(ev);
     for (const fn of progressListeners) fn(ev);
   } else if (ev.type === 'windows-request') {
     checkWindowsRequests();
@@ -133,6 +144,7 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'access') {
     if (st?.opened) accessReportDialog(reportCtx());
   } else if (ev.type === 'update') {
+    progress.fromUpdate(ev.state);
     for (const fn of updateListeners) fn(ev.state);
   } else if (ev.type === 'checkUpdates') {
     updateDialog();
@@ -1582,15 +1594,22 @@ function renderMultiSelection() {
 /** Deletes entries one by one (recycle bin); → number of failures. */
 async function deleteMany(keys) {
   let failed = 0;
-  for (const key of keys) {
-    const [containerId, id] = splitKey(key);
-    try {
-      await call('delete', containerId, id);
-    } catch {
-      failed++;
+  let done = 0;
+  const end = progress.begin('deleteMany', t('Einträge werden gelöscht …'));
+  try {
+    for (const key of keys) {
+      const [containerId, id] = splitKey(key);
+      try {
+        await call('delete', containerId, id);
+      } catch {
+        failed++;
+      }
+      ui.multi.delete(key);
+      if (ui.selected === key) ui.selected = null;
+      progress.set('deleteMany', ++done, keys.length);
     }
-    ui.multi.delete(key);
-    if (ui.selected === key) ui.selected = null;
+  } finally {
+    end();
   }
   return failed;
 }
@@ -1604,17 +1623,24 @@ async function deleteManyDialog(list) {
 
 async function moveManyToFolder(keys, folder) {
   let moved = 0;
-  for (const key of keys) {
-    const item = items.find((i) => i.key === key);
-    if (!item || (item.folder || '') === folder) continue;
-    try {
-      const [containerId, id] = splitKey(key);
-      const full = await call('item', containerId, id);
-      await call('save', containerId, { ...full, folder }, full.version);
-      moved++;
-    } catch (e) {
-      toast(`${item.title}: ${e.message}`, 'error');
+  let done = 0;
+  const end = progress.begin('moveMany', t('Einträge werden verschoben …'));
+  try {
+    for (const key of keys) {
+      progress.set('moveMany', ++done, keys.length);
+      const item = items.find((i) => i.key === key);
+      if (!item || (item.folder || '') === folder) continue;
+      try {
+        const [containerId, id] = splitKey(key);
+        const full = await call('item', containerId, id);
+        await call('save', containerId, { ...full, folder }, full.version);
+        moved++;
+      } catch (e) {
+        toast(`${item.title}: ${e.message}`, 'error');
+      }
     }
+  } finally {
+    end();
   }
   if (moved) toast(t('{n} Einträge verschoben nach {folder}', { n: moved, folder: folder || t('Ohne Ordner') }));
   await reloadAll();

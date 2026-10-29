@@ -603,6 +603,17 @@ export default {
   'Abgesicherte Datei': 'Secured file',
   'Aktualisieren': 'Refresh',
   'Aktualisiert': 'Refreshed',
+  // progress card (desktop/renderer/progress.js)
+  'Entsperren …': 'Unlocking …',
+  'Aktualisieren …': 'Refreshing …',
+  'Passwort-Check …': 'Password check …',
+  'Zugriffsbericht …': 'Access report …',
+  'Tresor-Infos werden geladen …': 'Loading vault details …',
+  'Suche nach Updates …': 'Checking for updates …',
+  'Einträge werden gelöscht …': 'Deleting entries …',
+  'Einträge werden verschoben …': 'Moving entries …',
+  'Tresore werden abgeglichen …': 'Reconciling vaults …',
+  'Update wird geladen …': 'Downloading update …',
   'Eintrag wurde inzwischen geändert': 'Entry was changed meanwhile',
   '„{title}“ wurde nach dem Öffnen von {who} geändert ({when}). Deine Änderungen sind noch nicht gespeichert.':
     '“{title}” was changed by {who} after you opened it ({when}). Your changes are not saved yet.',

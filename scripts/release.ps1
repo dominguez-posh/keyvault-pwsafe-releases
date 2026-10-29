@@ -34,6 +34,8 @@ Invoke-Step 'Passkey-Anbieter (MSIX)' { & ./windows/build.ps1 -Version "$version
 Invoke-Step 'Erweiterung (ZIP)' { npm run ext:pack }
 Invoke-Step 'Erweiterung (CRX + update.xml)' { node scripts/pack-crx.mjs }
 Invoke-Step 'Installer (EXE + MSIX)' { npx electron-builder --win nsis appx --publish never }
+# The app only accepts update manifests signed with update-key.pem (desktop/update-verify.js).
+Invoke-Step 'Update-Manifest signieren (Ed25519)' { node scripts/update-key.mjs sign release/latest.yml }
 Invoke-Step 'Installer für Administratoren (MSI)' { node scripts/build-msi.mjs }
 Invoke-Step 'MSIX signieren' {
     # Same certificate as the passkey provider (CN=KeyVault PwSafe Test, CurrentUser\My) – replace with a purchased
@@ -73,7 +75,7 @@ Copy-Item $msi (Join-Path $root 'release/Keevault.msi') -Force
 Copy-Item $msix (Join-Path $root 'release/Keevault.msix') -Force
 # Public part of the signing certificate: devices must trust it before the MSIX installs (until a purchased one).
 Copy-Item (Join-Path $root 'windows/out/KvPwSafe-Test.cer') (Join-Path $root 'release/Keevault-Zertifikat.cer') -Force
-$assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'), (Join-Path $root "dist/kvpwsafe-extension-$version-firefox.zip"))
+$assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), (Join-Path $root 'release/latest.yml.sig'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'), (Join-Path $root "dist/kvpwsafe-extension-$version-firefox.zip"))
 # Mobile app (preview): the Android debug APK goes along when it was built (mobile/README.md).
 $apk = Join-Path $root 'mobile/android/app/build/outputs/apk/debug/app-debug.apk'
 if (Test-Path $apk) {

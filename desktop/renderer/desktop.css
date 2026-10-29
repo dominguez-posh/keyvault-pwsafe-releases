@@ -137,6 +137,18 @@ body { overflow: hidden; }
 /* Vault info dialog */
 .info-table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 12px; }
 .info-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 5px 12px 5px 0; white-space: nowrap; vertical-align: top; width: 1%; }
+/* Progress card bottom right (progress.js), above the version label */
+.progress-toast { position: fixed; right: 18px; bottom: 28px; z-index: 900; width: 260px; padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 12px; opacity: 0; transform: translateY(8px); transition: opacity .18s ease, transform .18s ease; pointer-events: none; }
+.progress-toast.show { opacity: 1; transform: none; }
+.progress-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+.progress-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-count { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.progress-track { position: relative; height: 4px; border-radius: 2px; background: var(--accent-soft); overflow: hidden; }
+.progress-fill { height: 100%; width: 0; border-radius: 2px; background: var(--accent); transition: width .25s ease; }
+.progress-toast.indeterminate .progress-fill { width: 40%; transition: none; animation: progress-slide 1.3s ease-in-out infinite; }
+.progress-toast.done .progress-fill { background: var(--success); }
+@keyframes progress-slide { from { transform: translateX(-110%); } to { transform: translateX(260%); } }
+@media (prefers-reduced-motion: reduce) { .progress-toast.indeterminate .progress-fill { animation-duration: 2.6s; } }
 .info-table td { padding: 5px 0; word-break: break-all; vertical-align: top; }
 .info-table td .icon-btn { margin-left: 6px; vertical-align: middle; }
 /* Context submenus and sliced list rendering */

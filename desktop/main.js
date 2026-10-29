@@ -39,6 +39,9 @@ const SERVED = ['desktop/renderer', 'desktop/assets', 'desktop/passkey', 'extens
 const RP_ID = 'localhost';
 const missingFiles = [];
 const smokeTest = process.argv.includes('--smoke-test');
+// Smoke runs are headless: an uncaught error must end the run, not open Electron's error dialog on the desktop
+// (Electron only shows it when nobody else listens).
+if (smokeTest) process.on('uncaughtException', (e) => { console.error(`SMOKE FAIL (main process): ${e?.stack || e}`); process.exit(1); });
 const screenshot = process.argv.find((a) => a.startsWith('--screenshot='))?.slice('--screenshot='.length);
 const demo = process.argv.includes('--demo') ? createDemoBackend() : null;
 
@@ -193,7 +196,7 @@ async function printHtml(html) {
   }
 }
 
-const pinGuard = new PinGuard();
+const pinGuard = new PinGuard(); // counter restored from the settings once config exists (app ready)
 
 /** Unlocking needs a freshly verified PIN once one is set. */
 function requirePin() {
@@ -282,9 +285,16 @@ function completeInBackground(session, options) {
     if (missing.length) await session.refreshIndexFast(missing);
     // Locked or signed out meanwhile: the result belongs to an old session.
     if (session === vault && opened) changed();
-    // Reconcile: the full listing (slow for big vaults, invisible here) checks and repairs the index secrets.
+    // Reconcile: the full listing (slow for big vaults) checks and repairs the index secrets; the window shows
+    // it as a small progress card, nothing is blocked meanwhile.
     if (offlineMode) return;
-    await session.refreshIndex();
+    const shown = session === vault && opened;
+    if (shown) send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …') });
+    try {
+      await session.refreshIndex();
+    } finally {
+      if (shown) send({ type: 'progress', id: 'reconcile', end: true });
+    }
     if (session === vault && opened) changed();
     scheduleReconcile();
   })().catch(() => {});
@@ -863,10 +873,12 @@ const api = {
     if (wait) throw new Error(t('Zu viele falsche Versuche – bitte {seconds} Sekunden warten', { seconds: wait }));
     if (await verifyPin(pin, record)) {
       pinGuard.success();
+      if (config.get().pinGuard) config.update({ pinGuard: null });
       if (mirrorWanted()) await offlineMirror().unlockKey(pin).catch(() => {});
       return true;
     }
     pinGuard.failure();
+    config.update({ pinGuard: pinGuard.toJSON() });
     throw new Error(pinGuard.waitSeconds() ? t('Falsche PIN – bitte {seconds} Sekunden warten', { seconds: pinGuard.waitSeconds() }) : t('Falsche PIN'));
   },
   /** { current?, next } – next null removes the PIN (not when the organization requires one). */
@@ -875,7 +887,8 @@ const api = {
     const s = config.get();
     if (s.appPin) await api.verifyPin(current);
     pinGuard.consume();
-    if (s.offlineMirror && next) await offlineMirror().rekey(current, next).catch(() => {});
+    // A mirror that cannot be re-keyed would stay readable with the old PIN: better none at all.
+    if (s.offlineMirror && next) await offlineMirror().rekey(current, next).catch(() => offlineMirror().remove().catch(() => {}));
     if (!next) await offlineMirror().remove().catch(() => {});
     if (next == null) {
       if (s.requirePin) throw new Error(t('Eure Organisation verlangt eine PIN'));
@@ -1680,12 +1693,14 @@ const api = {
     const wanted = (await vault.summaries()).filter((s) => (!containerIds.length || containerIds.includes(s.containerId)) && s.type !== 'note');
     const items = [];
     let skipped = 0;
+    let done = 0;
     await mapLimit(wanted, 6, async (s) => {
       try {
         items.push(await vault.getItem(s.containerId, s.id));
       } catch {
         skipped++; // locked (protected) vault or transient error
       }
+      send({ type: 'progress', id: 'healthReport', done: ++done, total: wanted.length });
     });
     if (hibp) {
       const ranges = new Map(); // prefix → response text (several passwords can share a prefix)
@@ -1705,7 +1720,9 @@ const api = {
     requireOpen();
     const rows = [];
     const containers = (await vault.containers()).filter((c) => c.kind === 'keyvault' && !c.error);
+    let done = 0;
     await mapLimit(containers, 3, async (c) => {
+      send({ type: 'progress', id: 'accessReport', done, total: containers.length });
       try {
         const members = await (await vault.azureForId(c.id)).listMembers(await containerResource(c.id));
         for (const m of members) {
@@ -1717,6 +1734,7 @@ const api = {
       } catch (e) {
         rows.push({ vault: c.name, vaultUrl: c.vaultUrl, error: e.message });
       }
+      send({ type: 'progress', id: 'accessReport', done: ++done, total: containers.length });
     });
     rows.sort((a, b) => a.vault.localeCompare(b.vault) || (a.principal || '').localeCompare(b.principal || ''));
     return { created: new Date().toISOString(), by: actor(), rows };
@@ -1875,6 +1893,7 @@ app.on('web-contents-created', (_event, contents) => {
 
 app.whenReady().then(async () => {
   config = new Config();
+  pinGuard.restore(config.get().pinGuard);
   applyLanguage();
   auth = demo ? new DemoAuth() : new Auth({
     cachePath: path.join(app.getPath('userData'), 'msal-cache.bin'),
@@ -2315,6 +2334,11 @@ function runSmokeTest() {
       if (view === 'backup') await menuAction('backup');
       if (view === 'vault-settings') await menuAction('vault-settings');
       if (view === 'restore') await menuAction('restore');
+      if (view === 'progress') {
+        // Progress card bottom right as during a background reconcile (screenshot only).
+        send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …'), done: 1234, total: 2000 });
+        await sleep(600);
+      }
       if (view === 'health') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Passwort-Check|Password check/.test(n.textContent))?.click()');
       if (view === 'access') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Zugriffsbericht|Access report/.test(n.textContent))?.click()');
       if (view === 'multi') {
