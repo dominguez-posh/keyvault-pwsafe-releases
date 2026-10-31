@@ -7,6 +7,7 @@
       <string id="Keevault">Keevault</string>
       <string id="SUPPORTED_Keevault_0_6_2">Keevault 0.6.2 oder neuer</string>
       <string id="SUPPORTED_Keevault_0_7_0">Keevault 0.7.0 oder neuer</string>
+      <string id="SUPPORTED_Keevault_0_7_10">Keevault 0.7.10 oder neuer</string>
       <string id="Vaults">Tresore automatisch verbinden</string>
       <string id="Vaults_Help">Diese Azure Key Vaults erscheinen bei allen betroffenen Benutzern nach der Anmeldung automatisch in Keevault (Kennzeichnung „Richtlinie“).
 
@@ -48,6 +49,26 @@ Nicht konfiguriert: der Benutzer entscheidet (Standard: aus).</string>
       <string id="UpdateMode_Off">Aus – nur manuell suchen</string>
       <string id="UpdateMode_Auto">Automatisch aktuell halten</string>
       <string id="UpdateMode_Ask">Beim Start prüfen und Update anbieten</string>
+      <string id="SelfUpdate">Selbst-Update der App erlauben</string>
+      <string id="SelfUpdate_Help">Nicht konfiguriert oder aktiviert (Standard): Keevault prüft beim Start auf eine neue Version und bietet sie an; Details regelt die Richtlinie „Updates“.
+
+Deaktiviert: Keevault lädt und installiert nie selbst ein Update – auch nicht über „Jetzt nach Updates suchen“. Die App zeigt nur an, dass eine neuere Version existiert. Verteilen Sie die Updates dann per Softwareverteilung (MSI/MSIX oder EXE).
+
+Betrifft nur die EXE-Installation pro Benutzer; MSI und MSIX aktualisieren sich nie selbst.</string>
+      <string id="DefaultVault">Standard-Tresor für neue Einträge</string>
+      <string id="DefaultVault_Help">Adresse des Key Vaults, in dem neue Einträge standardmäßig gespeichert werden, z. B. https://kv-team-it.vault.azure.net. Der Tresor sollte auch über „Tresore automatisch verbinden“ vorgegeben sein. Benutzer können den Standard dann nicht mehr ändern.</string>
+      <string id="BrowserIntegration">Datei-Tresore in der Browser-Erweiterung</string>
+      <string id="BrowserIntegration_Help">Aktiviert: Die App registriert den Native-Messaging-Host für Edge, Chrome und Firefox, damit die Browser-Erweiterung auch Datei-Tresore nutzen kann. Deaktiviert: keine Registrierung, die Erweiterung sieht nur Key-Vault-Tresore. Nicht konfiguriert: Benutzerentscheidung (Standard: an).</string>
+      <string id="ExtensionIds">Erlaubte Erweiterungs-IDs</string>
+      <string id="ExtensionIds_Help">IDs der Browser-Erweiterungen (32 Buchstaben a–p), die mit der App sprechen dürfen, durch Komma getrennt. Nur nötig, wenn Sie eine eigene Erweiterungs-ID verteilen; Standard ist die ID der veröffentlichten Keevault-Erweiterung.</string>
+      <string id="WindowsProvider">Keevault als Passkey-Anbieter in Windows</string>
+      <string id="WindowsProvider_Help">Aktiviert: Keevault erscheint im Windows-Passkey-Dialog (Windows 11). Deaktiviert: der Passkey-Anbieter wird nicht registriert. Nicht konfiguriert: Benutzerentscheidung (Standard: an).</string>
+      <string id="SignInWindows">Anmeldung im Windows-Dialog</string>
+      <string id="SignInWindows_Help">Aktiviert: Die Microsoft-Anmeldung läuft über den Windows-Anmeldedialog (WAM, wie PowerShell oder Azure CLI) – Single Sign-on mit dem Windows-Konto. Deaktiviert: Anmeldung im Browser.</string>
+      <string id="McpScope">Zugriff für KI-Agenten (MCP)</string>
+      <string id="McpScope_Help">Welche Tresore KI-Agenten sehen dürfen, wenn „KI-Agenten (MCP) erlauben“ aktiviert ist: nur die vom Benutzer freigegebenen Tresore und Ordner (empfohlen) oder alle Tresore, auf die der Benutzer Zugriff hat.</string>
+      <string id="McpScope_Selected">Nur freigegebene Tresore und Ordner</string>
+      <string id="McpScope_All">Alle Tresore des Benutzers</string>
       <string id="Language">Sprache</string>
       <string id="Language_Help">Sprache der Oberfläche.</string>
       <string id="Language_Auto">Wie Windows</string>
@@ -75,6 +96,15 @@ Nicht konfiguriert: der Benutzer entscheidet (Standard: aus).</string>
       </presentation>
       <presentation id="UpdateMode">
         <dropdownList refId="UpdateMode" noSort="true" defaultItem="0">Updates</dropdownList>
+      </presentation>
+      <presentation id="DefaultVault">
+        <textBox refId="DefaultVault"><label>Key-Vault-Adresse</label></textBox>
+      </presentation>
+      <presentation id="ExtensionIds">
+        <textBox refId="ExtensionIds"><label>Erweiterungs-IDs (durch Komma getrennt)</label></textBox>
+      </presentation>
+      <presentation id="McpScope">
+        <dropdownList refId="McpScope" noSort="true" defaultItem="0">Zugriff</dropdownList>
       </presentation>
       <presentation id="Language">
         <dropdownList refId="Language" noSort="true" defaultItem="0">Sprache</dropdownList>

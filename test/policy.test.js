@@ -16,6 +16,10 @@ test('policy: .reg export → settings and vaults', () => {
 "UpdateMode"="auto"
 "AutoLockMinutes"=dword:0000001e
 "RequirePin"=dword:00000001
+"SelfUpdate"=dword:00000000
+"ExtensionIds"="pbkjijhihclckeeefbepoedgdmajioip, abcdefghijklmnopabcdefghijklmnop;nicht-gueltig"
+"DefaultVault"="https://KV-Team-Ops.vault.azure.net/"
+"McpScope"="all"
 "Unknown"="ignored"
 
 [${ROOT}\\Vaults]
@@ -25,7 +29,11 @@ test('policy: .reg export → settings and vaults', () => {
 "Kaputt"="https://evil.example.com/"
 `;
   const { settings, containers } = policyFromKeys(parseRegExport(text), ROOT);
-  assert.deepEqual(settings, { tenantId: 'contoso.onmicrosoft.com', updateMode: 'auto', autoLockMinutes: 30, requirePin: true });
+  assert.deepEqual(settings, {
+    tenantId: 'contoso.onmicrosoft.com', updateMode: 'auto', autoLockMinutes: 30, requirePin: true,
+    selfUpdate: false, extensionIds: ['pbkjijhihclckeeefbepoedgdmajioip', 'abcdefghijklmnopabcdefghijklmnop'], defaultContainer: 'kv-team-ops.vault.azure.net', mcpScope: 'all',
+  });
+  assert.deepEqual(policyFromKeys(parseRegExport(`[${ROOT}]\n"DefaultVault"="https://evil.example.com"\n`), ROOT).settings, {}, 'default vault must be a Key Vault address');
   const byUrl = (a, b) => a.vaultUrl.localeCompare(b.vaultUrl);
   assert.deepEqual(containers.sort(byUrl), [
     { name: 'Team Ops', vaultUrl: 'https://kv-team-ops.vault.azure.net/' },

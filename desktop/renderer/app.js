@@ -2731,6 +2731,13 @@ function expiryReminder() {
 
 const updateListeners = new Set();
 
+/** Why this installation does not update itself ('' when it does): MSI/MSIX package, or policy SelfUpdate=0. */
+function managedUpdateHint(kind) {
+  if (kind === 'managed') return t('Updates verteilt deine IT (Richtlinie SelfUpdate). Die App installiert nichts selbst.');
+  if (kind === 'msi' || kind === 'msix') return t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.');
+  return '';
+}
+
 /** Release notes from the signed manifest (CHANGELOG section) as a list; "- " lines are items, others plain text. */
 function releaseNotes(notes) {
   const text = notesForLanguage(notes, getLanguage());
@@ -2754,7 +2761,7 @@ async function updateDialog(offered) {
   const { close } = modal(offered ? t('Update verfügbar') : t('Updates'), body, [{ label: offered ? t('Später') : t('Schließen') }]);
   const draw = (s) => {
     if (!s) return;
-    const managed = s.kind === 'msi' || s.kind === 'msix';
+    const managed = !!managedUpdateHint(s.kind);
     if (s.status === 'checking') return body.replaceChildren(h('p', {}, h('span', { class: 'spinner' }), ' ', t('Suche nach Updates …')));
     if (s.status === 'error') return body.replaceChildren(notice(t('Update fehlgeschlagen: {message}', { message: s.error })));
     if (s.status === 'downloading') {
@@ -2768,7 +2775,7 @@ async function updateDialog(offered) {
         h('p', {}, t('Version {version} ist verfügbar (installiert: {current}).', { version: s.version, current: s.current })),
         ...(notes ? [notes] : []),
         managed
-          ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
+          ? h('p', { class: 'muted small' }, managedUpdateHint(s.kind))
           : h('p', { class: 'muted small' }, t('Keevault lädt das Update von keevault.de, installiert es und startet neu. Deine Daten bleiben unverändert.')),
         managed
           ? h('button', { type: 'button', class: 'btn', onclick: () => openUrl('https://keevault.de/download.html') }, icon('external', 14), t('Download-Seite öffnen'))
@@ -2829,8 +2836,8 @@ function settingsDialog() {
   const prompt = h('select', { disabled: enforced('unlockPrompt') },
     ...[['none', 'Ohne Rückfrage, wenn möglich (SSO, Standard)'], ['select_account', 'Konto bestätigen'], ['login', 'Immer neu anmelden (Passwort/MFA)']]
       .map(([v, l]) => h('option', { value: v, selected: s.unlockPrompt === v }, t(l))));
-  const browser = h('input', { type: 'checkbox', checked: s.browserIntegration });
-  const windowsProvider = h('input', { type: 'checkbox', checked: s.windowsProvider });
+  const browser = h('input', { type: 'checkbox', checked: s.browserIntegration, disabled: enforced('browserIntegration') });
+  const windowsProvider = h('input', { type: 'checkbox', checked: s.windowsProvider, disabled: enforced('windowsProvider') });
   const windowsStatus = h('div', { class: 'muted small' }, h('span', { class: 'spinner' }));
   call('windowsProviderStatus').then((w) => windowsStatus.replaceChildren(!w.supported ? t('Nur unter Windows 11 verfügbar.')
     : !w.installed ? t('Nicht installiert – windows/Install-PasskeyProvider.ps1 ausführen (siehe README).')
@@ -2838,14 +2845,14 @@ function settingsDialog() {
         : w.registered ? t('Installiert, aber in Windows noch nicht aktiviert (Einstellungen → Konten → Passkeys → Erweiterte Optionen).')
           : t('Installiert, aber noch nicht bei Windows registriert.')), () => windowsStatus.replaceChildren());
   const extensionIds = h('input', { value: s.extensionIds.join(', '), disabled: enforced('extensionIds') });
-  const signInWindows = h('input', { type: 'checkbox', checked: s.signInWindows !== false });
+  const signInWindows = h('input', { type: 'checkbox', checked: s.signInWindows !== false, disabled: enforced('signInWindows') });
   const autoTypeKeys = h('select', {},
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
   const mcpEnabled = h('input', { type: 'checkbox', checked: !!s.mcpEnabled, disabled: enforced('mcpEnabled') });
   const offlineMirror = h('input', { type: 'checkbox', checked: !!s.offlineMirror && st.pinSet, disabled: enforced('offlineMirror') || !st.pinSet });
   const mcpBox = h('div', {});
-  const mcpMode = h('select', {},
+  const mcpMode = h('select', { disabled: enforced('mcpScope') },
     h('option', { value: 'selected', selected: s.mcpScope !== 'all' }, t('Nur freigegebene Tresore und Ordner (empfohlen)')),
     h('option', { value: 'all', selected: s.mcpScope === 'all' }, t('Alle Tresore, auf die ich Zugriff habe')));
   const scopeList = h('div', {});
@@ -2930,14 +2937,14 @@ function settingsDialog() {
   };
   call('machineSetupStatus').then(drawMachine, () => {});
   const section = (title, ...children) => h('div', { class: 'settings-section' }, h('h3', {}, title), ...children);
-  const managed = st.updateKind === 'msi' || st.updateKind === 'msix';
+  const managed = !!managedUpdateHint(st.updateKind);
   // Five tabs instead of one long page: everyday settings first, integrations and agents further right.
   modal(t('Einstellungen'), tabbed('settings', [
     { label: t('Allgemein'), content: [
       field(t('Sprache'), language),
       section(t('Updates'),
         managed
-          ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
+          ? h('p', { class: 'muted small' }, managedUpdateHint(st.updateKind))
           : field(t('Automatische Updates'), updateMode, t('„Automatisch“ installiert neue Versionen, sobald die App gesperrt ist oder beendet wird. Die Updates kommen von keevault.de.')),
         h('button', { type: 'button', class: 'btn small', onclick: () => updateDialog() }, icon('download', 14), t('Jetzt nach Updates suchen'))),
       s.enforced.length ? h('p', { class: 'muted small' }, t('Ausgegraute Werte sind über kvpwsafe.config.json vorgegeben.')) : null,

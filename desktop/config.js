@@ -36,6 +36,8 @@ const DEFAULTS = {
   extensionIds: ['pbkjijhihclckeeefbepoedgdmajioip'],
   // Updates: ask (default: check at start, offer the new version in the app), auto (keep up to date), off (manual only).
   updateMode: 'ask',
+  // Policy SelfUpdate=0: the app never checks or installs updates itself (IT distributes them) – not a user setting.
+  selfUpdate: true,
   // AI agents (MCP): off by default; approved MCP client names.
   mcpEnabled: false,
   approvedAgents: [],
@@ -47,7 +49,8 @@ const DEFAULTS = {
   // Offline read mode: encrypted mirror of the vault answers (needs the app PIN); off by default, policy can forbid it.
   offlineMirror: false,
 };
-const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled', 'offlineMirror'];
+const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled', 'offlineMirror',
+  'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];
 
 function readJson(file) {
   try {

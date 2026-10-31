@@ -30,6 +30,14 @@ $ClipboardSeconds = $null     # z. B. 30
 $RequirePin       = $null     # $true | $false
 $UpdateMode       = ''        # off | auto | ask
 $Language         = ''        # auto | de | en
+# ab 0.7.10
+$SelfUpdate       = $null     # $false = App installiert nie selbst Updates (IT verteilt sie); $true/$null = erlaubt
+$DefaultVault     = ''        # z. B. 'https://kv-team-it.vault.azure.net' (Standard-Tresor für neue Einträge)
+$BrowserIntegration = $null   # $true | $false – Datei-Tresore in der Browser-Erweiterung
+$WindowsProvider  = $null     # $true | $false – Keevault als Passkey-Anbieter in Windows
+$SignInWindows    = $null     # $true | $false – Anmeldung im Windows-Dialog (WAM) statt im Browser
+$McpScope         = ''        # selected | all – Zugriff für KI-Agenten
+$ExtensionIds     = ''        # z. B. 'pbkjijhihclckeeefbepoedgdmajioip,abc…' (nur bei eigener Erweiterungs-ID)
 # ------------------------------------------------------------------
 
 $ErrorActionPreference = 'Stop'
@@ -66,7 +74,15 @@ Set-Text 'UpdateMode' $UpdateMode
 Set-Text 'Language' $Language
 Set-Number 'AutoLockMinutes' $AutoLockMinutes
 Set-Number 'ClipboardSeconds' $ClipboardSeconds
-Set-Number 'RequirePin' $(if ($null -eq $RequirePin) { $null } elseif ($RequirePin) { 1 } else { 0 })
+function Set-Bool([string] $name, $value) { Set-Number $name $(if ($null -eq $value) { $null } elseif ($value) { 1 } else { 0 }) }
+Set-Bool 'RequirePin' $RequirePin
+Set-Bool 'SelfUpdate' $SelfUpdate
+Set-Bool 'BrowserIntegration' $BrowserIntegration
+Set-Bool 'WindowsProvider' $WindowsProvider
+Set-Bool 'SignInWindows' $SignInWindows
+Set-Text 'DefaultVault' $DefaultVault
+Set-Text 'McpScope' $McpScope
+Set-Text 'ExtensionIds' $ExtensionIds
 
 Write-Output "Keevault: $($Vaults.Count) Tresor(e) vorgegeben. Wirksam beim nächsten Start von Keevault."
 exit 0

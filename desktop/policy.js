@@ -1,6 +1,6 @@
 // Company settings from the registry – set by Group Policy (ADMX in installer/policy) or Intune:
-//   HKLM\SOFTWARE\Policies\Keevault          (computer, wins)  values: TenantId, ClientId, UnlockPrompt, Language,
-//   HKCU\SOFTWARE\Policies\Keevault          (user)            UpdateMode, AutoLockMinutes, ClipboardSeconds, RequirePin, McpEnabled
+//   HKLM\SOFTWARE\Policies\Keevault          (computer, wins)  values: see VALUES below (strings and DWORDs)
+//   HKCU\SOFTWARE\Policies\Keevault          (user)
 //   …\Keevault\Vaults                        value name = display name, data = vault URL[;tenant ID]
 // Read with "reg export" (UTF-16 file): exact strings incl. umlauts, no dependency on the console code page.
 
@@ -23,6 +23,14 @@ const VALUES = {
   RequirePin: { setting: 'requirePin', type: 'boolean' },
   McpEnabled: { setting: 'mcpEnabled', type: 'boolean' },
   OfflineMirror: { setting: 'offlineMirror', type: 'boolean' },
+  // 0.7.10
+  SelfUpdate: { setting: 'selfUpdate', type: 'boolean' }, // 0: the app never checks or installs updates itself
+  BrowserIntegration: { setting: 'browserIntegration', type: 'boolean' },
+  WindowsProvider: { setting: 'windowsProvider', type: 'boolean' },
+  SignInWindows: { setting: 'signInWindows', type: 'boolean' },
+  McpScope: { setting: 'mcpScope', type: 'string' }, // selected | all
+  ExtensionIds: { setting: 'extensionIds', type: 'list' }, // comma/semicolon/space separated extension IDs
+  DefaultVault: { setting: 'defaultContainer', type: 'vault' }, // vault URL → container id (host name)
 };
 
 const unescape = (s) => s.replace(/\\(["\\])/g, '$1');
@@ -58,7 +66,11 @@ export function policyFromKeys(keys, root) {
     if (v === undefined || v === '') continue;
     if (type === 'number') settings[setting] = Number(v);
     else if (type === 'boolean') settings[setting] = Number(v) !== 0 && v !== 'false';
-    else settings[setting] = String(v).trim();
+    else if (type === 'list') settings[setting] = String(v).split(/[\s,;]+/).filter((x) => /^[a-p]{32}$/.test(x));
+    else if (type === 'vault') {
+      const host = /^https:\/\/([a-z0-9-]+\.vault\.(?:azure\.net|azure\.cn|usgovcloudapi\.net|microsoftazure\.de))\/?$/i.exec(String(v).trim())?.[1];
+      if (host) settings[setting] = host.toLowerCase();
+    } else settings[setting] = String(v).trim();
   }
   const containers = [];
   for (const [name, value] of Object.entries(keys[`${root}\\Vaults`.toUpperCase()] || {})) {

@@ -4,8 +4,9 @@
 //   - each agent is approved once (by its MCP client name), the feature is off by default and can be blocked by policy
 //   - agents only see the released vaults and folders (scope; default: nothing until the user releases something)
 //   - searching shows metadata only (title, user, URL, folder) – never secrets
-//   - reading passwords/one-time codes needs a confirmation in the app, valid for this agent session (max 8 hours)
-//     or only once; locking the app ends all sessions
+//   - reading passwords/one-time codes needs a confirmation in the app: only once, for this agent session (max
+//     8 hours) or for a chosen time (1 h / 4 h, bound to the agent name, so it also covers agents that start a new
+//     process per call); locking the app ends all grants
 //   - creating/changing entries needs a confirmation every time; deleting is not possible
 //   - every call is logged without secret values
 
@@ -123,6 +124,8 @@ export class McpService {
     Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy });
     this.clients = new Set();
     this.grants = new WeakMap();
+    // Timed grants by agent name ("for 1 hour"): survive a restart of the agent process, end when the app locks.
+    this.timed = new Map();
   }
 
   connect(client) {
@@ -133,11 +136,20 @@ export class McpService {
   /** Locking the app or revoking an agent ends its permission to read secrets. */
   revoke(agent = null) {
     for (const c of this.clients) if (!agent || c.agent === agent) this.grants.delete(c);
+    if (agent) this.timed.delete(agent);
+    else this.timed.clear();
   }
 
+  /** Agents that may read secrets right now, with the end of the grant (longest per agent). */
   activeSessions() {
     const now = Date.now();
-    return [...this.clients].filter((c) => (this.grants.get(c)?.until || 0) > now).map((c) => ({ agent: c.agent, until: new Date(this.grants.get(c).until).toISOString() }));
+    const best = new Map();
+    for (const c of this.clients) {
+      const until = this.grants.get(c)?.until || 0;
+      if (until > now && until > (best.get(c.agent) || 0)) best.set(c.agent, until);
+    }
+    for (const [agent, until] of this.timed) if (until > now && until > (best.get(agent) || 0)) best.set(agent, until);
+    return [...best].map(([agent, until]) => ({ agent, until: new Date(until).toISOString() }));
   }
 
   session() {
@@ -157,10 +169,17 @@ export class McpService {
     if (!scopeAllows(this.scope(), vaultId, folder)) throw fail(t('Dieser Ordner ist für KI-Agenten nicht freigegeben.'));
   }
 
+  /**
+   * confirmRead answers: 'once' | 'session' (this agent process, max 8 h) | 'minutes:<n>' (this agent name for n
+   * minutes, max 8 h – also across restarts of the agent process) | anything else = denied.
+   */
   async requireRead(client, title, vault) {
-    if ((this.grants.get(client)?.until || 0) > Date.now()) return;
+    const now = Date.now();
+    if ((this.grants.get(client)?.until || 0) > now || (this.timed.get(client.agent) || 0) > now) return;
     const answer = await this.confirmRead({ agent: client.agent, title, vault });
-    if (answer === 'session') this.grants.set(client, { until: Date.now() + SESSION_MS });
+    const minutes = /^minutes:(\d+)$/.exec(String(answer))?.[1];
+    if (answer === 'session') this.grants.set(client, { until: now + SESSION_MS });
+    else if (minutes) this.timed.set(client.agent, now + Math.min(Number(minutes) * 60_000, SESSION_MS));
     else if (answer !== 'once') throw fail(t('Vom Benutzer abgelehnt'));
   }
 

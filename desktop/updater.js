@@ -12,18 +12,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import updaterPkg from 'electron-updater';
 import { verifyManifest, parseManifest } from './update-verify.js';
+import { detectInstallKind } from './install-kind.js';
 
 const { autoUpdater } = updaterPkg;
 export const UPDATE_MODES = ['off', 'auto', 'ask'];
 const FEED = 'https://keevault.de/update';
 const INTERVAL = 6 * 60 * 60_000;
 
-/** How this copy was installed: 'nsis' updates itself; 'msi', 'msix' are managed elsewhere; 'dev' never updates. */
+/** How this copy was installed: 'nsis' updates itself; 'msi', 'msix' (and 'managed' by policy) are updated elsewhere; 'dev' never updates. */
 export function installKind() {
-  if (!app.isPackaged) return 'dev';
-  if (process.windowsStore) return 'msix';
-  if (process.platform !== 'win32') return 'other';
-  return fs.existsSync(path.join(path.dirname(process.execPath), `Uninstall ${app.getName()}.exe`)) ? 'nsis' : 'msi';
+  let filesNextToExe = [];
+  try { filesNextToExe = fs.readdirSync(path.dirname(process.execPath)); } catch { /* unreadable → not an EXE install */ }
+  return detectInstallKind({ packaged: app.isPackaged, windowsStore: !!process.windowsStore, platform: process.platform, filesNextToExe });
 }
 
 /** Compares "1.2.10" with "1.2.9" → 1. */
@@ -41,9 +41,10 @@ export class Updater {
    * away in mode "auto"; beforeInstall(): called right before the app quits for the installation;
    * fetch: secureFetch (in memory).
    */
-  constructor({ mode, onState, offer, isIdle, beforeInstall, fetch }) {
+  constructor({ mode, onState, offer, isIdle, beforeInstall, fetch, selfUpdate }) {
     Object.assign(this, { mode, onState, offer, isIdle, beforeInstall, fetch });
-    this.kind = installKind();
+    // Policy SelfUpdate=0 ('managed'): IT distributes updates – the app only reports a newer version.
+    this.kind = selfUpdate?.() === false ? 'managed' : installKind();
     this.state = { kind: this.kind, status: 'idle', current: app.getVersion(), version: null, notes: '', progress: 0, error: null, checked: null };
     this.timer = null;
     if (this.kind !== 'nsis') return;
@@ -141,6 +142,7 @@ export class Updater {
 
   /** Manual: download (if needed) and install now – the app restarts. */
   async installNow() {
+    if (this.kind === 'managed') throw new Error('Updates verteilt deine IT (Richtlinie).');
     if (this.kind !== 'nsis') throw new Error('Diese Installation (MSI/MSIX) wird über das Paket aktualisiert.');
     this.manualInstall = true;
     if (this.state.status === 'ready') return this.install();

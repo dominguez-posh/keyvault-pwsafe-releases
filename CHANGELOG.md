@@ -4,6 +4,20 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.10 – 2026-10-31
+- Update-Dialog: Die EXE-Installation wurde fälschlich als MSI erkannt, deshalb fehlte der Button „Jetzt aktualisieren“ und die App konnte sich nie selbst aktualisieren. Dieses eine Mal bitte den Installer von Hand ausführen, danach läuft es automatisch.
+- Browser-Erweiterung: Bei der Passkey-Anmeldung erscheint statt eines Fensters eine Leiste oben in der Seite – Konto, „Passkey verwenden“, bei mehreren Passkeys eine Liste, „Andere Optionen“ öffnet das bisherige Fenster, × übergibt an den Browser.
+- Aktualisieren eines Tresors ist sofort fertig: zuerst der schnelle Index, der vollständige Abgleich und die Berechtigungen laufen danach im Hintergrund – mit Fortschrittskarte unten rechts (bei Tresoren mit vielen Secrets als laufende Zahl).
+- KI-Agenten: Beim Lesen von Passwörtern gibt es jetzt „Für 1 Stunde“ und „Für 4 Stunden“. Die Freigabe gilt für den Agenten, auch wenn er pro Anfrage neu startet (z. B. Claude Code), und endet beim Sperren der App.
+- Neue Richtlinien für GPO und Intune: Selbst-Update der App erlauben oder sperren (`SelfUpdate`), Standard-Tresor für neue Einträge, Datei-Tresore in der Browser-Erweiterung, Passkey-Anbieter in Windows, Anmeldung im Windows-Dialog, Zugriff für KI-Agenten, erlaubte Erweiterungs-IDs. ADMX-Vorlage, Intune-Skript und die Anleitung auf keevault.de sind erweitert.
+
+### English
+- Update dialog: the EXE installation was mistaken for an MSI, so the “Update now” button was missing and the app could never update itself. Run the installer by hand this one time; afterwards it works automatically.
+- Browser extension: passkey sign-in shows a bar at the top of the page instead of a window – account, “Use passkey”, a list for several passkeys, “Other options” opens the previous window, × hands over to the browser.
+- Refreshing a vault is done right away: the fast index first, the full reconcile and the permissions follow in the background – with a progress card bottom right (a running count for vaults with many secrets).
+- AI agents: reading passwords now offers “For 1 hour” and “For 4 hours”. The grant applies to the agent even if it starts a new process per request (e.g. Claude Code) and ends when the app locks.
+- New policies for GPO and Intune: allow or block the app's self-update (`SelfUpdate`), default vault for new entries, file vaults in the browser extension, passkey provider in Windows, sign-in through the Windows dialog, access for AI agents, allowed extension IDs. ADMX template, Intune script and the guide on keevault.de are extended.
+
 ## 0.7.9 – 2026-10-31
 - Einstellungen aufgeräumt: fünf Reiter (Allgemein, Sicherheit, Anmeldung, Integrationen, KI-Agenten) statt einer langen Seite; der zuletzt geöffnete Reiter bleibt nach dem Speichern aktiv.
 - Unter „Einrichtung dieses Geräts“ stand ein überflüssiges „null“.

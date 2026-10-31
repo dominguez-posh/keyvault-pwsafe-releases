@@ -11,6 +11,7 @@
     <definitions>
       <definition name="SUPPORTED_Keevault_0_6_2" displayName="$(string.SUPPORTED_Keevault_0_6_2)" />
       <definition name="SUPPORTED_Keevault_0_7_0" displayName="$(string.SUPPORTED_Keevault_0_7_0)" />
+      <definition name="SUPPORTED_Keevault_0_7_10" displayName="$(string.SUPPORTED_Keevault_0_7_10)" />
     </definitions>
   </supportedOn>
   <categories>
@@ -89,6 +90,54 @@
           <item displayName="$(string.UpdateMode_Off)"><value><string>off</string></value></item>
           <item displayName="$(string.UpdateMode_Auto)"><value><string>auto</string></value></item>
           <item displayName="$(string.UpdateMode_Ask)"><value><string>ask</string></value></item>
+        </enum>
+      </elements>
+    </policy>
+    <policy name="SelfUpdate" class="Both" displayName="$(string.SelfUpdate)" explainText="$(string.SelfUpdate_Help)" key="Software\Policies\Keevault" valueName="SelfUpdate">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="DefaultVault" class="Both" displayName="$(string.DefaultVault)" explainText="$(string.DefaultVault_Help)" presentation="$(presentation.DefaultVault)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <elements>
+        <text id="DefaultVault" valueName="DefaultVault" maxLength="200" required="true" />
+      </elements>
+    </policy>
+    <policy name="BrowserIntegration" class="Both" displayName="$(string.BrowserIntegration)" explainText="$(string.BrowserIntegration_Help)" key="Software\Policies\Keevault" valueName="BrowserIntegration">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="ExtensionIds" class="Both" displayName="$(string.ExtensionIds)" explainText="$(string.ExtensionIds_Help)" presentation="$(presentation.ExtensionIds)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <elements>
+        <text id="ExtensionIds" valueName="ExtensionIds" maxLength="500" required="true" />
+      </elements>
+    </policy>
+    <policy name="WindowsProvider" class="Both" displayName="$(string.WindowsProvider)" explainText="$(string.WindowsProvider_Help)" key="Software\Policies\Keevault" valueName="WindowsProvider">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="SignInWindows" class="Both" displayName="$(string.SignInWindows)" explainText="$(string.SignInWindows_Help)" key="Software\Policies\Keevault" valueName="SignInWindows">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="McpScope" class="Both" displayName="$(string.McpScope)" explainText="$(string.McpScope_Help)" presentation="$(presentation.McpScope)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <elements>
+        <enum id="McpScope" valueName="McpScope" required="true">
+          <item displayName="$(string.McpScope_Selected)"><value><string>selected</string></value></item>
+          <item displayName="$(string.McpScope_All)"><value><string>all</string></value></item>
         </enum>
       </elements>
     </policy>

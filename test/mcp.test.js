@@ -66,6 +66,23 @@ test('mcp: reading needs a confirmation – once per session', async () => {
   assert.ok(audit.every((x) => !JSON.stringify(x).includes('S3cret')), 'log without secrets');
 });
 
+test('mcp: timed grant is bound to the agent name, survives a new client, ends on revoke', async () => {
+  const { mcp, client, asked } = service({ read: 'minutes:60' });
+  await mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });
+  const again = { agent: 'claude-ai' }; // the agent started a new process (e.g. one per call)
+  mcp.connect(again);
+  await mcp.call(again, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-2' });
+  assert.equal(asked.read, 1, 'the new process reads without asking within the hour');
+  const other = { agent: 'copilot' };
+  mcp.connect(other);
+  await mcp.call(other, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });
+  assert.equal(asked.read, 2, 'another agent name asks');
+  assert.deepEqual(mcp.activeSessions().map((s) => s.agent).sort(), ['claude-ai', 'copilot']);
+  mcp.revoke('claude-ai');
+  await mcp.call(again, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });
+  assert.equal(asked.read, 3, 'revoking the agent ends the timed grant');
+});
+
 test('mcp: "only once" asks every time, "deny" refuses', async () => {
   const once = service({ read: 'once' });
   await once.mcp.call(once.client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });

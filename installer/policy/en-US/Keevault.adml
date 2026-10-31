@@ -7,6 +7,7 @@
       <string id="Keevault">Keevault</string>
       <string id="SUPPORTED_Keevault_0_6_2">Keevault 0.6.2 or later</string>
       <string id="SUPPORTED_Keevault_0_7_0">Keevault 0.7.0 or later</string>
+      <string id="SUPPORTED_Keevault_0_7_10">Keevault 0.7.10 or later</string>
       <string id="Vaults">Connect vaults automatically</string>
       <string id="Vaults_Help">These Azure Key Vaults appear in Keevault for all affected users automatically after sign-in (labeled "Policy").
 
@@ -48,6 +49,26 @@ Not configured: the user decides (default: off).</string>
       <string id="UpdateMode_Off">Off – check manually only</string>
       <string id="UpdateMode_Auto">Keep up to date automatically</string>
       <string id="UpdateMode_Ask">Check at start and offer the update</string>
+      <string id="SelfUpdate">Allow the app to update itself</string>
+      <string id="SelfUpdate_Help">Not configured or enabled (default): Keevault checks for a new version at start and offers it; details are set by the "Updates" policy.
+
+Disabled: Keevault never downloads or installs an update itself – not even through "Check for updates now". The app only reports that a newer version exists. Distribute updates through software deployment (MSI/MSIX or EXE) instead.
+
+Applies to the per-user EXE installation only; MSI and MSIX never update themselves.</string>
+      <string id="DefaultVault">Default vault for new entries</string>
+      <string id="DefaultVault_Help">Address of the Key Vault where new entries are stored by default, e.g. https://kv-team-it.vault.azure.net. The vault should also be preset with "Connect vaults automatically". Users can then no longer change the default.</string>
+      <string id="BrowserIntegration">File vaults in the browser extension</string>
+      <string id="BrowserIntegration_Help">Enabled: the app registers the native messaging host for Edge, Chrome and Firefox so the browser extension can use file vaults too. Disabled: no registration, the extension sees Key Vault vaults only. Not configured: the user decides (default: on).</string>
+      <string id="ExtensionIds">Allowed extension IDs</string>
+      <string id="ExtensionIds_Help">IDs of the browser extensions (32 letters a–p) that may talk to the app, separated by commas. Only needed when you deploy your own extension ID; the default is the ID of the published Keevault extension.</string>
+      <string id="WindowsProvider">Keevault as passkey provider in Windows</string>
+      <string id="WindowsProvider_Help">Enabled: Keevault appears in the Windows passkey dialog (Windows 11). Disabled: the passkey provider is not registered. Not configured: the user decides (default: on).</string>
+      <string id="SignInWindows">Sign in through the Windows dialog</string>
+      <string id="SignInWindows_Help">Enabled: the Microsoft sign-in uses the Windows sign-in dialog (WAM, like PowerShell or Azure CLI) – single sign-on with the Windows account. Disabled: sign-in in the browser.</string>
+      <string id="McpScope">Access for AI agents (MCP)</string>
+      <string id="McpScope_Help">Which vaults AI agents may see when "Allow AI agents (MCP)" is enabled: only the vaults and folders the user released (recommended) or all vaults the user has access to.</string>
+      <string id="McpScope_Selected">Released vaults and folders only</string>
+      <string id="McpScope_All">All vaults of the user</string>
       <string id="Language">Language</string>
       <string id="Language_Help">Language of the user interface.</string>
       <string id="Language_Auto">Like Windows</string>
@@ -75,6 +96,15 @@ Not configured: the user decides (default: off).</string>
       </presentation>
       <presentation id="UpdateMode">
         <dropdownList refId="UpdateMode" noSort="true" defaultItem="0">Updates</dropdownList>
+      </presentation>
+      <presentation id="DefaultVault">
+        <textBox refId="DefaultVault"><label>Key Vault address</label></textBox>
+      </presentation>
+      <presentation id="ExtensionIds">
+        <textBox refId="ExtensionIds"><label>Extension IDs (comma separated)</label></textBox>
+      </presentation>
+      <presentation id="McpScope">
+        <dropdownList refId="McpScope" noSort="true" defaultItem="0">Access</dropdownList>
       </presentation>
       <presentation id="Language">
         <dropdownList refId="Language" noSort="true" defaultItem="0">Language</dropdownList>

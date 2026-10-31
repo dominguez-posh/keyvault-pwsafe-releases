@@ -137,7 +137,32 @@ function newSession() {
     multiTenant: true,
     // The sidebar spins the refresh icon of the vault that is being loaded or reconciled right now.
     onBusy: (containerId, busy) => send({ type: 'busy', containerId, busy }),
+    // Listing progress (pages of 25) → progress card: per vault for a manual refresh, summed for the reconcile.
+    onProgress: reportListing,
   });
+}
+
+// Manual refreshes in progress (containerId → vault name) and the listing progress behind the reconcile card.
+const refreshing = new Map();
+const listing = new Map();
+let reconcileShown = false;
+function reportListing(containerId, done, total) {
+  if (refreshing.has(containerId)) {
+    // The listing also returns secrets that are no entries (index, settings, disabled ones): when it outgrows the
+    // known size, show the running count instead of a bar stuck at 100 %.
+    const label = t('„{name}“ wird abgeglichen …', { name: refreshing.get(containerId) });
+    send(done > total || total === done ? { type: 'progress', id: `refresh:${containerId}`, label: `${label} ${done}` } : { type: 'progress', id: `refresh:${containerId}`, label, done, total });
+    return;
+  }
+  listing.set(containerId, { done, total });
+  if (!reconcileShown) return;
+  let d = 0;
+  let n = 0;
+  for (const x of listing.values()) {
+    d += x.done;
+    n += x.total;
+  }
+  if (n > 0) send({ type: 'progress', id: 'reconcile', done: d, total: n });
 }
 
 function changed() {
@@ -292,9 +317,12 @@ function completeInBackground(session, options) {
     if (offlineMode) return;
     const shown = session === vault && opened;
     if (shown) send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …') });
+    listing.clear();
+    reconcileShown = shown;
     try {
       await session.refreshIndex();
     } finally {
+      reconcileShown = false;
       if (shown) send({ type: 'progress', id: 'reconcile', end: true });
     }
     if (session === vault && opened) changed();
@@ -693,13 +721,14 @@ async function confirmAgentRead({ agent, title, vault: vaultName }) {
   showWindow();
   const r = await dialog.showMessageBox(win, {
     type: 'warning',
-    buttons: [t('Für diese Sitzung erlauben'), t('Nur dieses Mal'), t('Ablehnen')],
-    defaultId: 1,
-    cancelId: 2,
+    buttons: [t('Nur dieses Mal'), t('Für diese Sitzung'), t('Für 1 Stunde'), t('Für 4 Stunden'), t('Ablehnen')],
+    defaultId: 0,
+    cancelId: 4,
+    noLink: true,
     message: t('KI-Agent „{agent}“ möchte Passwörter lesen.', { agent }),
-    detail: t('Angefragt: „{title}“ im Tresor „{vault}“.\n\n„Für diese Sitzung“: Der Agent darf bis zum Ende seiner Sitzung (höchstens 8 Stunden) oder bis Keevault gesperrt wird Passwörter und Einmalcodes ohne weitere Rückfrage lesen.', { title, vault: vaultName }),
+    detail: t('Angefragt: „{title}“ im Tresor „{vault}“.\n\n„Für diese Sitzung“: bis der Agent beendet wird (höchstens 8 Stunden). „Für 1 Stunde“ / „Für 4 Stunden“: ohne weitere Rückfrage für diesen Agenten, auch wenn er zwischendurch neu startet. Sperren von Keevault beendet jede Freigabe.', { title, vault: vaultName }),
   });
-  return ['session', 'once', 'deny'][r.response];
+  return ['once', 'session', 'minutes:60', 'minutes:240', 'deny'][r.response];
 }
 
 async function confirmAgentWrite({ agent, action, title, vault: vaultName, fields }) {
@@ -979,7 +1008,26 @@ const api = {
       } finally {
         send({ type: 'busy', containerId, busy: false });
       }
-    } else await vault.refreshIndex([containerId]);
+    } else {
+      // Fast first: the index secrets (a few GETs, however many secrets the vault holds) – the list is current
+      // right away. The full listing (pages of 25, slow with thousands of secrets) and the permissions follow in
+      // the background, with a progress card; nothing waits for them.
+      await vault.refreshIndexFast([containerId]);
+      changed();
+      refreshing.set(containerId, c.name);
+      send({ type: 'progress', id: `refresh:${containerId}`, label: t('„{name}“ wird abgeglichen …', { name: c.name }) });
+      const session = vault;
+      (async () => {
+        try {
+          await session.refreshIndex([containerId]);
+          await session.refreshAccess().catch(() => {});
+        } finally {
+          refreshing.delete(containerId);
+          send({ type: 'progress', id: `refresh:${containerId}`, end: true });
+        }
+        if (session === vault && opened) changed();
+      })().catch(() => {});
+    }
     changed();
     return api.state();
   },
@@ -1984,6 +2032,7 @@ app.whenReady().then(async () => {
   });
   updater = new Updater({
     mode: () => (smokeTest ? 'off' : config.get().updateMode),
+    selfUpdate: () => config.get().selfUpdate !== false,
     onState: (state) => send({ type: 'update', state }),
     // New version at start (mode "ask"): the renderer shows the update dialog with the release notes.
     offer: (state) => {

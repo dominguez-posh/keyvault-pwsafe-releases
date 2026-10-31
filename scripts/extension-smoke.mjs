@@ -30,6 +30,12 @@ const manifest = JSON.parse(readFileSync(join(extensionPath, 'manifest.json'), '
 delete manifest.key;
 delete manifest.update_url;
 writeFileSync(join(extensionPath, 'manifest.json'), JSON.stringify(manifest, null, 2));
+// A Keevault installed by policy (ExtensionInstallForcelist applies to every profile, the test one included) would
+// answer the page's WebAuthn relay as well and race the copy – the copy speaks on its own channel.
+for (const f of ['content/webauthn-main.js', 'content/content.js']) {
+  const p = join(extensionPath, f);
+  writeFileSync(p, readFileSync(p, 'utf8').replace("'kvpwsafe-webauthn-v1'", "'kvpwsafe-webauthn-smoke'"));
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
 const check = (ok, message) => {
@@ -39,7 +45,8 @@ const check = (ok, message) => {
 const page = `<!doctype html><title>WebAuthn test</title><body><form><input autocomplete="username"><input type="password"></form>
 <script>
 const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/[+]/g, '-').replace(/[/]/g, '_').replace(/=+$/, '');
-window.results = { patched: navigator.credentials.__kvpwsafe === true };
+window.results = { patched: navigator.credentials.__kvpwsafe === true, msgs: [] };
+window.addEventListener('message', (e) => { if (e.data && e.data.channel) results.msgs.push(e.data.dir + ':' + e.data.id + ':' + Object.keys(e.data).join(',')); });
 PublicKeyCredential.isConditionalMediationAvailable().then((v) => { results.conditional = v; });
 window.startCreate = () => {
   const challenge = crypto.getRandomValues(new Uint8Array(32));
@@ -53,7 +60,7 @@ window.startGet = () => {
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   results.getChallenge = b64u(challenge);
   return navigator.credentials.get({ publicKey: { challenge, userVerification: 'preferred' } })
-    .then((c) => { results.get = 'resolved'; results.getJson = c.toJSON(); }, (e) => { results.get = e.name; });
+    .then((c) => { results.get = 'resolved'; results.getJson = c.toJSON(); }, (e) => { results.get = e.name; results.getMessage = e.message; });
 };
 </script>`;
 const server = createServer((_req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(page));
@@ -104,6 +111,29 @@ async function open(url) {
     await sleep(250);
   }
   return { targetId, sessionId };
+}
+/** Node id of `selector` inside the (closed) shadow root of the element `hostSelector`, or null. */
+async function shadowNode(sessionId, hostSelector, selector) {
+  await send('DOM.enable', {}, sessionId).catch(() => {});
+  const { root } = await send('DOM.getDocument', { depth: 0 }, sessionId);
+  const { nodeId: hostId } = await send('DOM.querySelector', { nodeId: root.nodeId, selector: hostSelector }, sessionId);
+  if (!hostId) return null;
+  const { node } = await send('DOM.describeNode', { nodeId: hostId, depth: 0, pierce: true }, sessionId);
+  const shadow = node.shadowRoots?.[0];
+  if (!shadow) return null;
+  const { nodeIds } = await send('DOM.pushNodesByBackendIdsToFrontend', { backendNodeIds: [shadow.backendNodeId] }, sessionId);
+  const { nodeId } = await send('DOM.querySelector', { nodeId: nodeIds[0], selector }, sessionId);
+  return nodeId || null;
+}
+/** Trusted click in the middle of a node (the content script ignores synthetic clicks). */
+async function clickNode(sessionId, nodeId) {
+  const { model } = await send('DOM.getBoxModel', { nodeId }, sessionId);
+  const q = model.content;
+  const x = (q[0] + q[2] + q[4] + q[6]) / 4;
+  const y = (q[1] + q[3] + q[5] + q[7]) / 4;
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, sessionId);
+  }
 }
 async function evaluate(sessionId, expression) {
   const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
@@ -187,21 +217,70 @@ try {
     if (r?.createJson) {
       const reg = await verifyRegistrationResponse({ response: r.createJson, expectedChallenge: r.createChallenge, expectedOrigin: origin, expectedRPID: 'localhost' });
       check(reg.verified, 'Registrierung nicht verifiziert');
+      // Sign-in 1: the in-page chooser bar (closed shadow root, reached through the DOM domain), "Use passkey".
       await evaluate(tab.sessionId, 'startGet(), true');
-      prompt = await waitFor(() => findTarget(`${ext}/prompt/prompt.html#get:`));
-      check(prompt, 'Passkey-Dialog (get) wurde nicht geöffnet');
-      if (prompt) {
-        const g = await attach(prompt.targetId);
-        await waitFor(() => evaluate(g, '!!document.querySelector(".choice")'));
-        await shot(g, 'ext-prompt-get');
-        await evaluate(g, 'document.querySelector(".choice").click(), true');
+      const use = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .use'));
+      check(use, 'Passkey-Leiste (get) erschien nicht in der Seite');
+      if (use) {
+        await sleep(500); // the bar slides in – click only once it has settled
+        await shot(tab.sessionId, 'ext-inline-get');
+        await clickNode(tab.sessionId, use);
         const r2 = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).get && evaluate(tab.sessionId, 'results'));
-        check(r2?.get === 'resolved', `get(): ${r2?.get}`);
+        check(r2?.get === 'resolved', `get() über die Leiste: ${r2?.get}`);
+        if (process.env.KV_SMOKE_DEBUG && r2?.get !== 'resolved') {
+          const res = await evaluate(tab.sessionId, 'results');
+          console.log(`[debug] get: ${res.get} – ${res.getMessage}; bar still there: ${!!(await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill'))}; UI hosts: ${await evaluate(tab.sessionId, 'document.querySelectorAll("kvpwsafe-ui").length')}`);
+          console.log(`[debug] page messages: ${JSON.stringify(res.msgs)}`);
+          await shot(tab.sessionId, 'ext-inline-after-click');
+        }
         if (r2?.getJson) {
           const auth = await verifyAuthenticationResponse({
             response: r2.getJson, expectedChallenge: r2.getChallenge, expectedOrigin: origin, expectedRPID: 'localhost', credential: reg.registrationInfo.credential,
           });
-          check(auth.verified, 'Anmeldung nicht verifiziert');
+          check(auth.verified, 'Anmeldung (Leiste) nicht verifiziert');
+        }
+      }
+      // Sign-in 2: "Other options" in the bar opens the prompt window, which signs in through its list.
+      await sleep(1500); // the first sign-in still stores the passkey's new counter (index update)
+      await evaluate(tab.sessionId, 'delete results.get; delete results.getJson; startGet(), true');
+      const more = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .more'));
+      check(more, 'Passkey-Leiste (2. get) erschien nicht');
+      if (more) {
+        await sleep(500);
+        if (process.env.KV_SMOKE_DEBUG) {
+          const box = await send('DOM.getBoxModel', { nodeId: more }, tab.sessionId).catch((e) => ({ error: e.message }));
+          const xbox = await send('DOM.getBoxModel', { nodeId: await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .x') }, tab.sessionId).catch((e) => ({ error: e.message }));
+          console.log(`[debug] before click: more=${JSON.stringify(box.model?.content || box.error)} x=${JSON.stringify(xbox.model?.content || xbox.error)}`);
+        }
+        await clickNode(tab.sessionId, more);
+        const other = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill-list .other'));
+        check(other, 'Liste der Leiste erschien nicht');
+        if (process.env.KV_SMOKE_DEBUG && !other) {
+          const res = await evaluate(tab.sessionId, 'results');
+          const box = await send('DOM.getBoxModel', { nodeId: more }, tab.sessionId).catch((e) => ({ error: e.message }));
+          console.log(`[debug] list: get=${res.get}; bar: ${!!(await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill'))}; more box: ${JSON.stringify(box.model?.content || box.error)}; messages: ${JSON.stringify(res.msgs.slice(-4))}; cs: ${await evaluate(tab.sessionId, 'JSON.stringify(document.documentElement.dataset)')}`);
+          await shot(tab.sessionId, 'ext-inline-list-missing');
+        }
+        if (other) {
+          await sleep(300);
+          await shot(tab.sessionId, 'ext-inline-list');
+          await clickNode(tab.sessionId, other);
+        }
+        prompt = await waitFor(() => findTarget(`${ext}/prompt/prompt.html#get:`));
+        check(prompt, 'Passkey-Dialog (get) wurde nicht geöffnet');
+        if (prompt) {
+          const g = await attach(prompt.targetId);
+          await waitFor(() => evaluate(g, '!!document.querySelector(".choice")'));
+          await shot(g, 'ext-prompt-get');
+          await evaluate(g, 'document.querySelector(".choice").click(), true');
+          const r3 = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).get && evaluate(tab.sessionId, 'results'));
+          check(r3?.get === 'resolved', `get() über das Fenster: ${r3?.get}`);
+          if (r3?.getJson) {
+            const auth = await verifyAuthenticationResponse({
+              response: r3.getJson, expectedChallenge: r3.getChallenge, expectedOrigin: origin, expectedRPID: 'localhost', credential: reg.registrationInfo.credential,
+            });
+            check(auth.verified, 'Anmeldung (Fenster) nicht verifiziert');
+          }
         }
       }
     }

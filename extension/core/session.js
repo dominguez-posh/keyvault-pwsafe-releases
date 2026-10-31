@@ -88,7 +88,10 @@ export class VaultSession {
    * trash(id), restore(id, itemId), purge(id, itemId), history(id, itemId), getVersion(id, itemId, v),
    * passkeyCandidates(rpId), protectionInfo(id, rpId), unlock(id, params), lock(id), updateKeyring(id, op)
    */
-  constructor({ getToken, store, fetch: fetchImpl, actor, adapters = {}, multiTenant = false, onBusy = null }) {
+  constructor({ getToken, store, fetch: fetchImpl, actor, adapters = {}, multiTenant = false, onBusy = null, onProgress = null }) {
+    // onProgress(containerId, done, total): listing progress of a full refresh (total = size of the last index,
+    // 0 when unknown) – the desktop shows it as a progress card for big vaults.
+    this.onProgress = onProgress;
     this.multiTenant = multiTenant;
     this.getToken = getToken;
     this.store = store;
@@ -670,10 +673,13 @@ export class VaultSession {
     const containers = await this.kvContainers();
     const targets = containerIds ? containers.filter((c) => containerIds.includes(c.id)) : containers;
     const fresh = {};
+    const sizes = this.onProgress ? await this.index() : {};
     await mapLimit(targets, 4, async (c) => {
       this.busy(c.id, 1);
       try {
-        const secrets = await this.kv(c).listSecrets();
+        // Progress against the previous size of the vault (the listing itself does not know its total).
+        const expected = sizes[c.id]?.items?.length || 0;
+        const secrets = await this.kv(c).listSecrets(this.onProgress ? (n) => this.onProgress(c.id, n, Math.max(expected, n)) : null);
         if (!secrets.some((s) => s.name === CONTAINER_SECRET)) this.writeContainerMeta(this.kv(c), { name: c.name }).catch(() => {});
         const isProtected = secrets.some((s) => s.name === KEYRING_SECRET);
         const key = isProtected ? await this.containerKey(c.id) : null;

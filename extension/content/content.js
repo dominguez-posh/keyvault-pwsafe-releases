@@ -8,6 +8,12 @@
   const CHANNEL = 'kvpwsafe-webauthn-v1';
   const isTop = window.top === window;
   let alive = true;
+  // The newest instance wins: Chrome keeps the Window when the initial empty document is replaced by the real
+  // page and can run the script again in a fresh isolated world – the older instance would then answer every
+  // request a second time. The hand-over goes through an event on the shared window (the document differs).
+  const TAKEOVER = 'kvpwsafe-cs-takeover';
+  window.dispatchEvent(new Event(TAKEOVER));
+  window.addEventListener(TAKEOVER, () => { alive = false; host?.remove(); }, { once: true });
 
   async function call(cmd, args = {}) {
     if (!alive) throw new Error('inactive');
@@ -47,6 +53,8 @@
           conditional = { pageId: d.id, ...res.conditional };
           if (res.conditional.ui) texts = res.conditional.ui;
           if (document.activeElement instanceof HTMLInputElement) onFocus({ target: document.activeElement });
+        } else if (res.inline) {
+          showPasskeyPill(d.id, res.inline);
         } else toPage({ id: d.id, fallback: true });
       })
       .catch(() => toPage({ id: d.id, fallback: true }));
@@ -64,7 +72,126 @@
       conditional = null;
       hideMenu();
     }
+    if (inline?.pageId === pageId) {
+      call('cs:webauthnAbort', { requestId: inline.requestId }).catch(() => {});
+      inline = null;
+      hidePill();
+    }
   }
+
+  // ------------------------------------------------------------ in-page passkey chooser (bar at the top)
+  // A sign-in request with passkeys in the vault: a bar slides in at the top of the page – account, "Use passkey",
+  // a list for several passkeys and "Other options" (the full window). × hands the request to the browser.
+
+  let inline = null; // { requestId, pageId, candidates, site }
+  let pill = null;
+  let pillList = null;
+  const PASSKEY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21v-2a5 5 0 0 1 5-5h4"/><circle cx="17.5" cy="14.5" r="2.5"/><path d="M19.3 16.3 22 19l-1.5 1.5L19 19l-1.2 1.2"/></svg>';
+  const initials = (s) => String(s || 'K').replace(/^www\./, '').slice(0, 2).toUpperCase();
+  const textCol = (main, sub) => {
+    const col = el('div', 'col');
+    col.append(el('div', 't', main), el('div', 's', sub));
+    return col;
+  };
+
+  function hidePill() {
+    pillList?.remove();
+    pillList = null;
+    if (!pill) return;
+    const gone = pill;
+    pill = null;
+    gone.classList.add('hide');
+    setTimeout(() => gone.remove(), 230);
+  }
+
+  function showPasskeyPill(pageId, info) {
+    if (info.ui) texts = info.ui;
+    hidePill();
+    inline = { pageId, requestId: info.requestId, candidates: info.candidates || [], site: info.site };
+    const first = inline.candidates[0];
+    pill = el('div', 'pill');
+    pill.setAttribute('role', 'dialog');
+    pill.setAttribute('aria-label', texts.choosePasskey || 'Passkey');
+    const use = el('button', 'use');
+    use.innerHTML = PASSKEY_SVG;
+    use.append(document.createTextNode(texts.usePasskey || 'Passkey'));
+    use.addEventListener('click', (e) => { if (e.isTrusted) choosePasskey(first); });
+    const more = el('button', 'more', '▾');
+    more.title = texts.otherOptions || '';
+    more.addEventListener('click', (e) => { if (e.isTrusted) togglePillList(); });
+    const x = el('button', 'x', '×');
+    x.title = texts.close || '';
+    x.addEventListener('click', (e) => { if (e.isTrusted) dismissPill(); });
+    pill.append(el('span', 'ava', initials(info.site)), textCol(first?.title || 'Keevault', first?.userName || texts.noUser || ''), use, more, x);
+    ui().append(pill);
+    use.focus({ preventScroll: true });
+  }
+
+  function togglePillList() {
+    if (pillList) {
+      pillList.remove();
+      pillList = null;
+      return;
+    }
+    if (!inline) return;
+    pillList = el('div', 'pill-list');
+    for (const c of inline.candidates) {
+      const b = el('button', 'entry');
+      b.append(avatarFor(c.userName || c.title, 'pk'), textCol(c.userName || texts.noUser || '', `${c.title} · ${c.container}`));
+      b.addEventListener('click', (e) => { if (e.isTrusted) choosePasskey(c); });
+      pillList.append(b);
+    }
+    const other = el('button', 'other', texts.otherOptions || '…');
+    other.addEventListener('click', (e) => { if (e.isTrusted) openPromptWindow(); });
+    pillList.append(other);
+    ui().append(pillList);
+  }
+
+  async function choosePasskey(c) {
+    const cur = inline;
+    if (!cur || !c) return;
+    inline = null;
+    hidePill();
+    passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
+    try {
+      const res = await call('cs:webauthnSelect', { requestId: cur.requestId, containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId });
+      passkeyAnim('ok', texts.passkeyOk || 'Passkey');
+      toPage({ id: cur.pageId, result: res.result });
+    } catch (err) {
+      passkeyAnim('hide');
+      toPage({ id: cur.pageId, error: { name: 'NotAllowedError', message: err.message } });
+    }
+  }
+
+  /** × : the browser's own passkey dialog takes over. */
+  function dismissPill() {
+    const cur = inline;
+    inline = null;
+    hidePill();
+    if (!cur) return;
+    call('cs:webauthnAbort', { requestId: cur.requestId }).catch(() => {});
+    toPage({ id: cur.pageId, fallback: true });
+  }
+
+  /** "Other options": the prompt window (unlock protected vaults, use another device). */
+  async function openPromptWindow() {
+    const cur = inline;
+    inline = null;
+    hidePill();
+    if (!cur) return;
+    try {
+      const r = await call('cs:webauthnWindow', { requestId: cur.requestId });
+      modalRequests.set(r.pending, cur.pageId);
+      pendingKinds.set(r.pending, 'get');
+      passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
+    } catch {
+      toPage({ id: cur.pageId, fallback: true });
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.isTrusted && e.key === 'Escape' && inline) dismissPill();
+  }, true);
 
   async function refreshConditional() {
     if (!conditional) return;
@@ -73,7 +200,7 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (sender.id !== chrome.runtime.id || !msg?.type) return undefined;
+    if (!alive || sender.id !== chrome.runtime.id || !msg?.type) return undefined;
     if (msg.type === 'webauthn:result') {
       const pageId = modalRequests.get(msg.requestId);
       const kind = pendingKinds.get(msg.requestId);
@@ -222,6 +349,30 @@
     .pk.ok .check { display: block; color: #1f9d55; animation: pk-pop .35s cubic-bezier(.2,.9,.3,1.4); }
     .pk .pktxt { font-weight: 600; max-width: 260px; }
     .pk .pksub { color: #5b6170; font-size: 11px; margin-top: 2px; }
+    .pill { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 2147483647; display: flex; align-items: center; gap: 10px;
+      padding: 7px 8px 7px 8px; max-width: min(600px, calc(100vw - 32px)); background: #fff; color: #1b1b1f; border: 2px solid #8b7cf0; border-radius: 999px;
+      box-shadow: 0 0 0 4px rgba(139,124,240,.22), 0 12px 32px rgba(0,0,0,.22); font-size: 14px;
+      animation: pill-in .34s cubic-bezier(.2,.9,.3,1.25), pill-glow 2.4s ease-in-out .4s infinite; }
+    .pill.hide { animation: pill-out .22s ease forwards; }
+    .pill .ava { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff; background: #c46bd1; }
+    .pill .col { min-width: 0; display: grid; line-height: 1.25; padding-right: 6px; }
+    .pill .t { font-weight: 600; }
+    .pill .s { font-size: 12px; }
+    .pill .use { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; color: #0f6cbd; font: inherit; font-weight: 600; font-size: 14px;
+      cursor: pointer; padding: 7px 10px; border-radius: 999px; white-space: nowrap; }
+    .pill .use:hover, .pill .use:focus { background: #eef3fb; outline: none; }
+    .pill .use svg { width: 20px; height: 20px; }
+    /* position: static – the generic button.x rule (banner) would pin × to the corner, on top of the list button. */
+    .pill .more, .pill .x { position: static; flex: none; border: 0; background: none; cursor: pointer; color: #5b6170; font-size: 18px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
+    .pill .x:hover, .pill .more:hover { background: #eef3fb; color: #1b1b1f; }
+    .pill-list { position: fixed; top: 74px; left: 50%; transform: translateX(-50%); z-index: 2147483647; min-width: 320px; max-width: min(600px, calc(100vw - 32px));
+      background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); padding: 4px; font-size: 13px; animation: pk-in .2s ease; }
+    .pill-list .other { width: 100%; border: 0; border-top: 1px solid #e3e6ec; background: none; color: #5b6170; padding: 9px; margin-top: 2px; cursor: pointer; font-size: 12px; text-align: center; }
+    .pill-list .other:hover { color: #0f6cbd; }
+    @keyframes pill-in { from { transform: translate(-50%, -28px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+    @keyframes pill-out { to { transform: translate(-50%, -12px); opacity: 0; } }
+    @keyframes pill-glow { 0%, 100% { box-shadow: 0 0 0 4px rgba(139,124,240,.22), 0 12px 32px rgba(0,0,0,.22); } 50% { box-shadow: 0 0 0 8px rgba(139,124,240,.10), 0 12px 32px rgba(0,0,0,.22); } }
+    @media (prefers-reduced-motion: reduce) { .pill, .pill-list, .pk { animation: none; } }
     @keyframes pk-spin { to { transform: rotate(360deg); } }
     @keyframes pk-key { 0%, 100% { transform: translateY(0) rotate(-8deg); } 50% { transform: translateY(-2px) rotate(8deg); } }
     @keyframes pk-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
@@ -229,6 +380,12 @@
     @keyframes pk-out { to { transform: translateY(-8px); opacity: 0; } }
     @media (prefers-color-scheme: dark) {
       .menu, .banner, .pk { background: #23252b; color: #eceef2; border-color: #3a3d46; }
+      .pill, .pill-list { background: #23252b; color: #eceef2; }
+      .pill-list { border-color: #3a3d46; }
+      .pill .use { color: #5aa0ff; }
+      .pill .use:hover, .pill .use:focus, .pill .x:hover, .pill .more:hover { background: #2f3440; }
+      .pill .s, .pill .more, .pill .x, .pill-list .other { color: #a6abb8; }
+      .pill-list .other { border-top-color: #3a3d46; }
       .pk .ring { background: conic-gradient(#5aa0ff 0 25%, #3a3d46 25% 100%); }
       .pk .pksub { color: #a6abb8; }
       .entry:hover, .entry:focus { background: #2f3440; }

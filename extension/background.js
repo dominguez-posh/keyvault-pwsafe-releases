@@ -202,6 +202,9 @@ function contentStrings() {
     passkeyWait: t('Keevault bestätigt den Passkey …'),
     passkeyOk: t('Mit Passkey angemeldet'),
     passkeyCreated: t('Passkey in Keevault gespeichert'),
+    usePasskey: t('Passkey verwenden'),
+    otherOptions: t('Andere Optionen'),
+    choosePasskey: t('Passkey wählen'),
     otp: t('Einmalcode'),
     noUser: t('(ohne Benutzername)'),
     updateTitle: t('Passwort aktualisieren?'),
@@ -429,6 +432,11 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
         await saveRequest(request);
         return { conditional: { requestId: request.id, locked: false, lockedContainers: locked, candidates: await publicCandidates(found), ui: contentStrings() } };
       }
+      if (found.length) {
+        // Chooser inside the page (a bar at the top, like the browser's own sheet); the window only on request.
+        await saveRequest(request);
+        return { inline: { requestId: request.id, site: rpId, lockedContainers: locked, candidates: await publicCandidates(found), ui: contentStrings() } };
+      }
     } else if (request.conditional) {
       await saveRequest(request);
       return { conditional: { requestId: request.id, locked: true, candidates: [], ui: contentStrings() } };
@@ -553,12 +561,21 @@ async function webauthnApprove({ requestId, containerId, itemId, credentialId, t
   return { done: true };
 }
 
+/** The page's content script picked a passkey (conditional field menu or the in-page chooser bar). */
 async function conditionalSelect(msg, sender) {
   const req = await loadRequest(msg.requestId);
-  if (!req || !req.conditional || req.tabId !== sender.tab?.id || req.frameId !== sender.frameId) throw new Error(t('Ungültige Anfrage'));
+  if (!req || req.kind !== 'get' || req.tabId !== sender.tab?.id || req.frameId !== sender.frameId) throw new Error(t('Ungültige Anfrage'));
   const response = await sign(req, await findCandidate(req, msg));
   await deleteRequest(msg.requestId);
   return { result: response };
+}
+
+/** "Other options" in the in-page chooser: the full prompt window takes over the pending request. */
+async function inlineWindow({ requestId }, sender) {
+  const req = await loadRequest(requestId);
+  if (!req || req.tabId !== sender.tab?.id) throw new Error(t('Die Anfrage ist abgelaufen'));
+  await openPrompt(`${req.kind}:${req.id}`, sender.tab, req);
+  return { pending: req.id };
 }
 
 async function conditionalCandidates({ requestId }, sender) {
@@ -693,6 +710,7 @@ const contentCommands = {
   'cs:webauthnSelect': (msg, sender) => conditionalSelect(msg, sender),
   'cs:webauthnCandidates': (msg, sender) => conditionalCandidates(msg, sender),
   'cs:webauthnAbort': (msg, sender) => abortRequest(msg, sender),
+  'cs:webauthnWindow': (msg, sender) => inlineWindow(msg, sender),
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
