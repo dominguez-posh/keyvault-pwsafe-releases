@@ -202,6 +202,21 @@ test('move between containers', async () => {
   assert.equal(entries(kvB), 1);
 });
 
+test('move between containers into another folder (moving a whole folder)', async () => {
+  const kvA = fakeKeyVault('kv-a.vault.azure.net');
+  const kvB = fakeKeyVault('kv-b.vault.azure.net');
+  const session = new VaultSession({
+    getToken: async (scope) => `token-${scope}`,
+    store: new MemoryStore(),
+    fetch: (input, init) => (new URL(input).hostname.startsWith('kv-a') ? kvA : kvB).fetch(input, init),
+    actor: () => 'bob@contoso.com',
+  });
+  await session.refreshContainers({ configured: [{ name: 'A', vaultUrl: 'kv-a' }, { name: 'B', vaultUrl: 'kv-b' }], discover: false });
+  const saved = await session.saveItem('kv-a.vault.azure.net', { title: 'Deep', password: 'x', folder: 'Kunden/Contoso/Web' });
+  const moved = await session.moveItem('kv-a.vault.azure.net', 'kv-b.vault.azure.net', saved.id, { folder: 'Contoso/Web' });
+  assert.equal((await session.getItem('kv-b.vault.azure.net', moved.id)).folder, 'Contoso/Web');
+});
+
 test('folders of a Key Vault container: plain, then encrypted once protected; not listed as entries', async () => {
   const { kv, session } = await setup();
   const cid = 'kv-team.vault.azure.net';

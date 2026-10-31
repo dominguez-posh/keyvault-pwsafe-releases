@@ -1420,7 +1420,7 @@ const api = {
     return saved;
   },
   delete: (containerId, id) => vault.deleteItem(containerId, id),
-  move: (fromId, toId, id) => vault.moveItem(fromId, toId, id),
+  move: (fromId, toId, id, opts) => vault.moveItem(fromId, toId, id, opts),
   history: (containerId, id) => vault.history(containerId, id),
   version: (containerId, id, version) => vault.getVersion(containerId, id, version),
   restoreVersion: (containerId, id, version) => vault.restoreVersion(containerId, id, version),
@@ -2984,6 +2984,14 @@ function runSmokeTest() {
         await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
         await sleep(500);
         await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
+        await sleep(400);
+      }
+      if (view === 'listmenu') {
+        // Right-click on the empty list area of a vault (screenshot only).
+        // Screenshot size first: resizing the window closes context menus.
+        win.setSize(1200, 780);
+        await sleep(300);
+        await js('(() => { const el = document.querySelector(".list-pane .list-scroll"); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 120, clientY: r.top + 120 })); })()');
         await sleep(400);
       }
       if (view === 'itemmenu') {

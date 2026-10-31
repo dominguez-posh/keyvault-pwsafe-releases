@@ -991,12 +991,13 @@ export class VaultSession {
     return undefined;
   }
 
-  async moveItem(fromId, toId, id) {
+  /** Moves an entry into another vault; `folder` puts it into another folder there (default: the same path). */
+  async moveItem(fromId, toId, id, { folder } = {}) {
     // Nothing leaves a shared vault into the personal one (only the owner could read it there).
     const [from, to] = await Promise.all([this.container(fromId), this.container(toId)]);
     if (to.personal && !from.personal) throw new Error(t('Einträge aus geteilten Tresoren lassen sich nicht in den persönlichen Tresor verschieben'));
     const item = await this.getItem(fromId, id, { fresh: true });
-    const saved = await this.saveItem(toId, { ...item, id: '' });
+    const saved = await this.saveItem(toId, { ...item, id: '', folder: folder ?? item.folder });
     await this.deleteItem(fromId, id);
     return saved;
   }

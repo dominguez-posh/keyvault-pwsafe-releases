@@ -717,7 +717,7 @@ function renderSidebar() {
     refresh.classList.add('nav-refresh');
     refresh.dataset.container = c.id;
     refresh.classList.toggle('spinning', busyContainers.has(c.id));
-    return h('div', { class: `nav-row ${ui.containerId === c.id ? 'active' : ''}`, oncontextmenu: (e) => contextMenu(e, containerActions(c)) },
+    return h('div', { class: `nav-row ${ui.containerId === c.id ? 'active' : ''}`, oncontextmenu: (e) => contextMenu(e, containerActions(c)), ...vaultDropTarget(c) },
       h('button', {
         class: `nav ${ui.containerId === c.id ? 'active' : ''}`,
         title: [c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
@@ -1079,7 +1079,9 @@ function renderList() {
         const keys = ui.multi.has(i.key) ? [...ui.multi] : [i.key];
         e.dataTransfer.setData(DRAG_TYPE, keys.join('\n'));
         e.dataTransfer.effectAllowed = 'move';
+        draggedKeys = keys;
       } : undefined,
+      ondragend: draggable ? () => { draggedKeys = []; } : undefined,
       onclick: (e) => {
       // Shift: range from the last clicked entry; Ctrl: toggle; plain click: single selection.
       if (e.shiftKey && ui.selected) {
@@ -1173,15 +1175,7 @@ function renderList() {
   const newButton = h('button', { class: 'btn primary', title: t('Neuer Eintrag (Strg+N)'), onclick: (e) => {
         // Choose what to create right at the button.
         const r = e.currentTarget.getBoundingClientRect();
-        contextMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 4 }, [
-          { action: 'new-login', icon: 'key', label: t('Passwort / Login'), onClick: () => newItem('login') },
-          { action: 'new-note', icon: 'note', label: t('Sichere Notiz'), onClick: () => newItem('note') },
-          { action: 'new-card', icon: 'card', label: t('Kreditkarte'), onClick: () => newItem('card') },
-          { action: 'new-certificate', icon: 'certificate', label: t('Zertifikat'), onClick: () => newItem('certificate') },
-          container ? '-' : null,
-          container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
-            ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
-        ]);
+        contextMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 4 }, newMenuItems(container));
       } }, icon('plus'), t('Neu'));
   topActions.replaceChildren(newButton);
   setChildren(panes.list,
@@ -1225,7 +1219,11 @@ function renderList() {
       }
     } }, icon('unlock'), t('Im Tenant des Key Vaults anmelden')) : null,
     typePills(visibleItems({ ignoreType: true })),
-    h('div', { class: 'list-scroll' }, rowsEl),
+    h('div', { class: 'list-scroll', oncontextmenu: (e) => {
+      // Right-click on the empty area (not on an entry or folder, those have their own menus).
+      if (e.target.closest('li.row-item')) return;
+      contextMenu(e, listAreaActions(container));
+    } }, rowsEl),
   );
   // In a vault: a switch between this vault (default) and all vaults; elsewhere the search already covers everything.
   const scope = container ? h('div', { class: 'search-scope', role: 'radiogroup', 'aria-label': t('Suchbereich') },
@@ -1287,6 +1285,57 @@ function vaultIdentityCell(container) {
 }
 
 const DRAG_TYPE = 'application/x-kvpwsafe-item';
+const DRAG_FOLDER = 'application/x-kvpwsafe-folder';
+// What is being dragged right now (dataTransfer can only be read on drop; the vault rows decide earlier whether they accept).
+let draggedKeys = [];
+let draggedFolder = null; // { containerId, folder }
+
+/** Whether the dragged entries (or folder) may go into vault c: writable, from another vault, nothing shared into the personal one. */
+function vaultAccepts(c, keys, folder = null) {
+  if (folder) {
+    if (!writable(c) || !featureAllowed(c, 'folders') || folder.containerId === c.id) return false;
+    return !(c.personal && !st.containers.find((x) => x.id === folder.containerId)?.personal);
+  }
+  if (!keys.length || !writable(c)) return false;
+  const sources = keys.map((k) => splitKey(k)[0]);
+  if (sources.every((id) => id === c.id)) return false;
+  return !(c.personal && sources.some((id) => !st.containers.find((x) => x.id === id)?.personal));
+}
+
+/** Sidebar vault row as drop target: moves the dragged entries into that vault after a short confirmation. */
+function vaultDropTarget(c) {
+  return {
+    ondragover: (e) => {
+      const ok = e.dataTransfer.types.includes(DRAG_FOLDER) ? vaultAccepts(c, [], draggedFolder)
+        : e.dataTransfer.types.includes(DRAG_TYPE) && vaultAccepts(c, draggedKeys);
+      if (!ok) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      e.currentTarget.classList.add('drop');
+    },
+    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop'); },
+    ondrop: async (e) => {
+      e.preventDefault();
+      e.currentTarget.classList.remove('drop');
+      if (e.dataTransfer.types.includes(DRAG_FOLDER)) {
+        const [containerId, folder] = e.dataTransfer.getData(DRAG_FOLDER).split('\n');
+        draggedFolder = null;
+        if (containerId && folder && vaultAccepts(c, [], { containerId, folder })) await moveFolderTo(containerId, folder, c);
+        return;
+      }
+      const keys = e.dataTransfer.getData(DRAG_TYPE).split('\n').filter(Boolean);
+      draggedKeys = [];
+      if (!vaultAccepts(c, keys)) return;
+      const list = keys.map((k) => items.find((i) => i.key === k)).filter(Boolean).filter((i) => i.containerId !== c.id);
+      if (!list.length) return;
+      const what = list.length === 1 ? `„${list[0].title}“` : t('{n} Einträge', { n: list.length });
+      if (!(await confirmDialog(t('Nach „{vault}“ verschieben?', { vault: c.name }),
+        t('{what} nach „{vault}“ verschieben? Danach sehen ihn alle mit Zugriff auf „{vault}“. Der Eintrag wird im Ziel neu angelegt und in der Quelle gelöscht.', { what, vault: c.name }),
+        { confirmLabel: t('Verschieben') }))) return;
+      await moveItemsTo(list, c.id);
+    },
+  };
+}
 
 /** Drag & drop target that moves the dragged entry into folder (same container). */
 function dropTarget(folder) {
@@ -1328,6 +1377,50 @@ async function moveToFolder(key, folder) {
   }
 }
 
+/** What can be created here: entry types, plus a (sub)folder in a vault. */
+function newMenuItems(container) {
+  return [
+    { action: 'new-login', icon: 'key', label: t('Passwort / Login'), onClick: () => newItem('login') },
+    { action: 'new-note', icon: 'note', label: t('Sichere Notiz'), onClick: () => newItem('note') },
+    { action: 'new-card', icon: 'card', label: t('Kreditkarte'), onClick: () => newItem('card') },
+    { action: 'new-certificate', icon: 'certificate', label: t('Zertifikat'), onClick: () => newItem('certificate') },
+    container ? '-' : null,
+    container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
+      ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
+  ];
+}
+
+/** Right-click on the empty list area: create something here, the current folder's functions, select all, refresh. */
+function listAreaActions(container) {
+  const folder = container ? ui.folder || '' : '';
+  const open = (f) => { ui.folder = f; renderList(); syncNewEntryTarget(); };
+  const inFolder = folder
+    ? folderActions(container, folder, items.filter((i) => i.containerId === container.id && (i.folder === folder || (i.folder || '').startsWith(`${folder}/`))).length, open)
+      .filter((a) => a && a !== '-' && !['open-folder', 'subfolder'].includes(a.action))
+      .map((a) => ({ ...a, label: `${a.label} – ${folder.split('/').pop()}` }))
+    : [];
+  const visible = [...document.querySelectorAll('.list-pane li.row-item[data-key]')].map((el) => el.dataset.key);
+  return [
+    ...newMenuItems(container),
+    inFolder.length ? '-' : null,
+    ...inFolder,
+    folder ? { action: 'folder-up', icon: 'back', label: t('Übergeordneter Ordner'), onClick: () => open(folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '') } : null,
+    '-',
+    visible.length > 1 ? { action: 'select-all', icon: 'check', label: t('Alle auswählen'), onClick: () => {
+      visible.forEach((k) => ui.multi.add(k));
+      renderList();
+      renderDetail();
+    } } : null,
+    container ? { action: 'refresh', icon: 'refresh', label: t('Aktualisieren'), disabled: container.locked && !container.error,
+      onClick: () => refreshContainer(container, document.querySelector(`.nav-refresh[data-container="${CSS.escape(container.id)}"]`)) } : null,
+    container ? { action: 'vault-functions', icon: 'more', label: t('Tresor-Funktionen …'), onClick: () => {
+      const row = document.querySelector(`.nav-refresh[data-container="${CSS.escape(container.id)}"]`)?.closest('.nav-row');
+      const r = row?.getBoundingClientRect();
+      contextMenu({ preventDefault() {}, clientX: r ? r.right - 8 : 300, clientY: r ? r.top : 200 }, containerActions(container));
+    } } : null,
+  ];
+}
+
 /** Folder view of a container: breadcrumb, subfolders of the current folder, then its entries. */
 function folderRows(container, list, row, rerender) {
   const all = new Set([...(explicitFolders.get(container.id) || []), ...list.map((i) => i.folder).filter(Boolean)]);
@@ -1354,7 +1447,16 @@ function folderRows(container, list, row, rerender) {
   for (const f of children) {
     const count = inside(f);
     const name = f.slice(prefix.length);
-    out.push(h('li', { class: 'row-item folder-row', onclick: () => open(f), oncontextmenu: (e) => contextMenu(e, folderActions(container, f, count, open)), ...dropTarget(f) },
+    const dragFolder = writable(container) && featureAllowed(container, 'folders');
+    out.push(h('li', { class: 'row-item folder-row', onclick: () => open(f), oncontextmenu: (e) => contextMenu(e, folderActions(container, f, count, open)), ...dropTarget(f),
+      draggable: dragFolder ? 'true' : false,
+      ondragstart: dragFolder ? (e) => {
+        if (e.target !== e.currentTarget) return;
+        e.dataTransfer.setData(DRAG_FOLDER, `${container.id}\n${f}`);
+        e.dataTransfer.effectAllowed = 'move';
+        draggedFolder = { containerId: container.id, folder: f };
+      } : undefined,
+      ondragend: dragFolder ? () => { draggedFolder = null; } : undefined },
       h('span', { class: 'folder-icon' }, icon('folder', 18)),
       h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, name), h('div', { class: 'row-sub' }, t('{count} Einträge', { count }))),
       !count && writable(container) ? h('button', { class: 'icon-btn', title: t('Leeren Ordner löschen'), onclick: async (e) => {
@@ -2312,23 +2414,60 @@ function moveManyDialog(list) {
     field(t('{n} Einträge verschieben nach', { n: list.length }), target),
     h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle gelöscht. Der bisherige Verlauf bleibt bis zum Ende der Aufbewahrungsfrist in der Quelle.'))), [
     { label: t('Abbrechen') },
-    { label: t('Verschieben'), primary: true, onClick: async () => {
-      let moved = 0;
-      for (const i of list) {
-        if (i.containerId === target.value) continue;
-        try {
-          await call('move', i.containerId, target.value, i.id);
-          moved++;
-        } catch (e) {
-          toast(`${i.title}: ${e.message}`, 'error');
-        }
-      }
-      ui.multi.clear();
-      ui.selected = null;
-      toast(t('{n} Einträge verschoben', { n: moved }));
-      await reloadAll();
-    } },
+    { label: t('Verschieben'), primary: true, onClick: () => moveItemsTo(list, target.value) },
   ]);
+}
+
+/**
+ * A folder with everything in it into another vault: it lands there under its own name at the top level
+ * ("Kunden/Contoso" → "Contoso", subfolders along); an existing folder of that name is merged. The source folder is
+ * removed once every entry arrived.
+ */
+async function moveFolderTo(sourceId, folder, target) {
+  const source = st.containers.find((c) => c.id === sourceId);
+  const name = folder.split('/').pop();
+  const inside = (f) => f === folder || f.startsWith(`${folder}/`);
+  const map = (f) => name + f.slice(folder.length);
+  const list = items.filter((i) => i.containerId === sourceId && inside(i.folder || ''));
+  if (!(await confirmDialog(t('Nach „{vault}“ verschieben?', { vault: target.name }),
+    t('Ordner „{folder}“ ({n} Einträge, mit Unterordnern) nach „{vault}“ verschieben? Danach sehen alle mit Zugriff auf „{vault}“ die Einträge. Sie werden im Ziel neu angelegt und in der Quelle gelöscht; gibt es dort schon einen Ordner „{folder}“, landet alles darin.', { folder: name, n: list.length, vault: target.name }),
+    { confirmLabel: t('Verschieben') }))) return;
+  try {
+    // Empty subfolders too (folders without entries exist only in the folder list).
+    const explicit = (await call('folders', sourceId)).filter(inside);
+    for (const f of [folder, ...explicit]) await call('addFolder', target.id, map(f)).catch(() => {});
+    const failed = await moveItemsTo(list, target.id, (i) => map(i.folder));
+    if (!failed) await call('removeFolder', sourceId, folder).catch(() => {});
+    explicitFolders.delete(sourceId);
+    explicitFolders.delete(target.id);
+    if (ui.containerId === sourceId && inside(ui.folder || '')) ui.folder = '';
+    if (!failed) toast(t('„{folder}“ nach „{vault}“ verschoben', { folder: name, vault: target.name }));
+    await reloadAll();
+  } catch (e) {
+    toast(`${source?.name || ''}: ${e.message}`, 'error');
+  }
+}
+
+/** Moves entries into another vault one by one (each is re-created there and deleted in the source); returns the failures. */
+async function moveItemsTo(list, targetId, folderOf = null) {
+  let moved = 0;
+  let failed = 0;
+  let last = null;
+  for (const i of list) {
+    if (i.containerId === targetId) continue;
+    try {
+      last = await call('move', i.containerId, targetId, i.id, folderOf ? { folder: folderOf(i) } : undefined);
+      moved++;
+    } catch (e) {
+      failed++;
+      toast(`${i.title}: ${e.message}`, 'error');
+    }
+  }
+  ui.multi.clear();
+  ui.selected = list.length === 1 && last ? last.key : null;
+  if (moved && !folderOf) toast(moved === 1 ? t('Verschoben') : t('{n} Einträge verschoben', { n: moved }));
+  if (!folderOf) await reloadAll();
+  return failed;
 }
 
 /** Copy in the same vault and folder (without passkeys); the copy is selected afterwards. */
