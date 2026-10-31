@@ -4,6 +4,18 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.1 – 2026-10-31
+- „Link kopieren“ für Einträge (Aktionen, Rechtsklick, Popup der Erweiterung): ein Web-Link, der in Teams und E-Mail anklickbar ist und den Eintrag direkt in Keevault öffnet. Tresor und Eintrag stehen nur hinter dem # und erreichen keinen Server; der Link gibt keinen Zugriff – öffnen kann ihn nur, wer Rechte auf den Tresor hat. Fehlt der Tresor in der App, bietet Keevault an, ihn hinzuzufügen; ist die App gesperrt, öffnet sich der Eintrag nach dem Entsperren.
+- Suche: standardmäßig im aktuellen Tresor, mit einem Umschalter „Tresor | Alle“ im Suchfeld; Treffer aus allen Tresoren nach Tresor gruppiert.
+- Hilfe unten links (oder F1): Tipps für jeden Tag und Links in die Wissensdatenbank (Erste Schritte, Passkeys, Teilen, Fehlerbehebung, Support); bleibt auch bei vielen Tresoren an seinem Platz.
+- Obere Leiste: Suche über der mittleren Spalte, „Neu“ an der Kante der rechten Spalte; Sperren- und Menüknopf reagieren wieder (der Verschiebestreifen fing ihre Klicks ab); schmale Scrollleisten.
+
+### English
+- “Copy link” for entries (actions, right-click, extension popup): a web link that is clickable in Teams and mail and opens the entry right in Keevault. Vault and entry sit only behind the # and reach no server; the link grants no access – only people with rights on the vault can open it. If the vault is missing in the app, Keevault offers to add it; if the app is locked, the entry opens after unlocking.
+- Search: in the current vault by default, with a “Vault | All” switch in the field; hits from all vaults grouped by vault.
+- Help bottom left (or F1): everyday tips and links into the knowledge base (getting started, passkeys, sharing, troubleshooting, support); stays in place however many vaults there are.
+- Top bar: search above the middle column, “New” at the edge of the right column; lock and menu buttons respond again (the drag strip caught their clicks); thin scrollbars.
+
 ## 0.8.0 – 2026-10-31
 - Fenster ohne Titelleiste: Das Logo sitzt nahtlos oben links, die Windows-Knöpfe in den Farben der App oben rechts.
 - Hauptmenü hinter dem Burger neben dem Logo: Konto, Neu laden, Einstellungen, Werkzeuge (Passwort-Generator, Passwort-Check, Zugriffsbericht) und Sperren; Sperren zusätzlich als eigener Knopf.

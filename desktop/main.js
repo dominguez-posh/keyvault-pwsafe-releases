@@ -2521,14 +2521,14 @@ function runSmokeTest() {
       if (view === 'edit') await js('document.querySelector(".detail-pane .btn.primary")?.click()');
       if (view === 'detail') await js('document.querySelector(".list-pane .row-item:not(.folder-row)")?.click()');
       if (view === 'newcard' || view === 'newcert') {
-        await js('document.querySelector(".list-head .btn.primary")?.click()');
+        await js('document.querySelector(".top-actions .btn.primary")?.click()');
         await sleep(300);
         await js(`document.querySelector('.context-menu [data-action="${view === 'newcard' ? 'new-card' : 'new-certificate'}"]')?.click()`);
       }
       if (view === 'cardcert') {
         // Create a credit card and a certificate through the form, then check their detail views.
         const create = async (action, fill, expect) => {
-          await js('document.querySelector(".list-head .btn.primary")?.click()');
+          await js('document.querySelector(".top-actions .btn.primary")?.click()');
           await sleep(300);
           await js(`document.querySelector('.context-menu [data-action="${action}"]')?.click()`);
           await sleep(400);
@@ -2554,7 +2554,7 @@ function runSmokeTest() {
       if (view === 'small') {
         win.setSize(1000, 560);
         await sleep(300);
-        await js('document.querySelector(".list-head .btn.primary")?.click()');
+        await js('document.querySelector(".top-actions .btn.primary")?.click()');
         await sleep(300);
         await js('document.querySelector(".context-menu [data-action=new-login]")?.click()');
         await sleep(500);
@@ -2639,7 +2639,7 @@ function runSmokeTest() {
         if (!/"multi":3/.test(r)) errors.push(`multi-select: expected 3 selected rows, got ${r}`);
       }
       if (view === 'expiry') {
-        await js('document.querySelector(".list-head .btn.primary")?.click()');
+        await js('document.querySelector(".top-actions .btn.primary")?.click()');
         await sleep(300);
         await js('document.querySelector(".context-menu [data-action=new-login]")?.click()');
         await sleep(400);
@@ -2647,7 +2647,7 @@ function runSmokeTest() {
       }
       if (view === 'fields') {
         // New login with the additional-field menu open and two typed fields (screenshot only).
-        await js('document.querySelector(".list-head .btn.primary")?.click()');
+        await js('document.querySelector(".top-actions .btn.primary")?.click()');
         await sleep(300);
         await js('document.querySelector(".context-menu [data-action=new-login]")?.click()');
         await sleep(400);
@@ -2657,6 +2657,39 @@ function runSmokeTest() {
         // First entry opened in the detail pane (screenshot only).
         await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
         await sleep(500);
+      }
+      if (view === 'help') await js('document.querySelector(".help-btn")?.click()');
+      if (view === 'searchall') {
+        // Search scope: "o" in the team vault finds only its entries, switched to "All" also the personal ones.
+        const typeInto = (v) => js(`(() => { const s = document.getElementById("search"); s.value = ${JSON.stringify(v)}; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+        await typeInto('o');
+        await sleep(300);
+        const vaultOnly = Number(await js('document.querySelectorAll(".list li.row-item[data-key]").length'));
+        await js('document.querySelector(".search-scope button:last-child")?.click()');
+        await sleep(300);
+        await typeInto('o');
+        await sleep(300);
+        const all = Number(await js('document.querySelectorAll(".list li.row-item[data-key]").length'));
+        if (!(all > vaultOnly)) errors.push(`searchall: expected more hits in all vaults (${vaultOnly} vs ${all})`);
+        // The lock and menu buttons in the top strip take clicks.
+        await js('document.querySelector(".menu-btn")?.click()');
+        await sleep(200);
+        if (await js('String(!!document.querySelector(".main-menu"))') !== 'true') errors.push('searchall: menu button did not open the menu');
+        const hit = await js('(() => { const b = document.querySelector(".brand .icon-btn"); const r = b.getBoundingClientRect(); return String(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)?.closest(".icon-btn") === b); })()');
+        if (hit !== 'true') errors.push('searchall: lock button is covered');
+        await js('document.querySelector(".main-menu")?.remove()');
+      }
+      if (view === 'itemlink') {
+        // "Copy link" round trip: the web link of a team entry opens exactly that entry (screenshot/smoke only).
+        const c = (await vault.containers()).find((x) => /kv-pws-demo-team/.test(x.vaultUrl || ''));
+        const entry = c && (await vault.index())[c.id]?.items?.find((x) => x.title === 'Grafana');
+        if (!entry) errors.push('itemlink: demo entry missing');
+        else {
+          send({ type: 'link', url: `https://keevault.de/open#v=${new URL(c.vaultUrl).host}&i=${entry.id}` });
+          await sleep(900);
+          const shown = await js('document.querySelector(".detail-pane .item-head h2")?.textContent || ""');
+          if (!shown.includes('Grafana')) errors.push(`itemlink: expected Grafana in the detail pane, got "${shown}"`);
+        }
       }
       if (view === 'add') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');

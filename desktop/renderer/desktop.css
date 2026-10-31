@@ -241,11 +241,11 @@ body { overflow: hidden; }
 .nav-section { gap: 6px; margin: 16px 0 6px; padding: 0 2px 0 12px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .nav-section .spacer { flex: 1; }
 .nav-section .count { letter-spacing: 0; font-weight: 600; }
-.vault-list { display: flex; flex-direction: column; gap: 2px; }
-.vault-list .nav.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20, 26, 38, .10); }
-.vault-list.many { max-height: 212px; overflow-y: auto; padding-right: 2px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }
-.vault-list.many::-webkit-scrollbar { width: 6px; }
-.vault-list.many::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 45%, transparent); border-radius: 3px; }
+.sidebar-vaults { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-vaults .nav.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20, 26, 38, .10); }
+.sidebar-vaults.many { max-height: 212px; overflow-y: auto; padding-right: 2px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }
+.sidebar-vaults.many::-webkit-scrollbar { width: 6px; }
+.sidebar-vaults.many::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 45%, transparent); border-radius: 3px; }
 .vault-search { margin: 0 2px 6px; }
 .vault-search input { min-height: 32px; padding-top: 4px; padding-bottom: 4px; border-radius: 10px; font-size: 13px; background: var(--surface); }
 .account { gap: 2px; margin-top: 10px; padding: 8px 6px 8px 8px; border: 0; border-radius: 14px; background: var(--surface); box-shadow: 0 1px 3px rgba(20, 26, 38, .08); }
@@ -321,7 +321,7 @@ body { overflow: hidden; }
 .list-head { align-items: center; }
 .list-head .btn.primary { margin-top: 0; }
 .sidebar > .nav .count { margin-right: 32px; min-width: 14px; text-align: right; }
-.vault-list .count { min-width: 14px; text-align: right; }
+.sidebar-vaults .count { min-width: 14px; text-align: right; }
 .nav-section { padding-right: 0; }
 .nav-section .count { margin-right: 8px; min-width: 14px; text-align: right; }
 
@@ -364,3 +364,45 @@ body { overflow: hidden; }
 .top-search input { min-height: 32px; padding-top: 4px; padding-bottom: 4px; padding-right: 64px; border-radius: 10px; background: var(--surface); font-size: 13px; }
 .top-search kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); padding: 1px 6px; border: 1px solid var(--border); border-radius: 6px; font: 11px var(--font); color: var(--muted); pointer-events: none; }
 .top-search { top: 6px; }
+
+/* Top bar lined up with the columns: the search spans the list column's content, "New" starts at the detail
+   column's content edge. */
+.top-search { left: calc(var(--sidebar-w, 250px) + 13px); right: auto; width: calc(var(--list-w, 380px) - 26px); justify-content: stretch; }
+.top-search .search { width: 100%; }
+.top-actions { position: absolute; top: 6px; left: calc(var(--sidebar-w, 250px) + var(--list-w, 380px) + 30px); z-index: 3; display: flex; gap: 8px; }
+.top-actions .btn { min-height: 32px; height: 32px; -webkit-app-region: no-drag; border-radius: 10px; }
+/* Thin scrollbars in the panes (like the vault list). */
+.list-scroll, .detail-pane, .sidebar { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent; }
+.list-scroll::-webkit-scrollbar, .detail-pane::-webkit-scrollbar, .sidebar::-webkit-scrollbar { width: 8px; }
+.list-scroll::-webkit-scrollbar-thumb, .detail-pane::-webkit-scrollbar-thumb, .sidebar::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 40%, transparent); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+.list-scroll::-webkit-scrollbar-button, .detail-pane::-webkit-scrollbar-button, .sidebar::-webkit-scrollbar-button { display: none; height: 0; }
+
+/* The drag strip must not take clicks (lock and menu sit in it); only the OS drag region remains, the buttons are
+   cut out of it with no-drag. */
+.frameless .drag-strip { pointer-events: none; }
+.brand { position: relative; z-index: 3; }
+/* Search scope switch inside the field: this vault | all vaults. */
+.top-search .search.with-scope input { padding-right: 112px; }
+.search-scope { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface-2); }
+.search-scope button { height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
+.search-scope button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 26, 38, .12); }
+
+/* Help button at the bottom of the sidebar: sticky, so a long vault list scrolls behind it, never pushes it away. */
+.sidebar-foot { position: sticky; bottom: -12px; margin: auto -12px -12px; padding: 10px 12px 12px; background: linear-gradient(to bottom, transparent, var(--bg) 14px); display: flex; }
+.help-btn { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px 0 4px; border: 0; border-radius: 999px; background: none; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; }
+.help-btn:hover { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20, 26, 38, .08); }
+.help-mark { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid currentColor; font-weight: 700; font-size: 12px; }
+.help h3 { margin: 4px 0 10px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.help-tips { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 8px; }
+.help-tips li { display: flex; gap: 10px; align-items: baseline; line-height: 1.45; }
+.help-tips kbd { flex: none; padding: 1px 7px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; font: 12px var(--font); background: var(--surface-2); white-space: nowrap; }
+.help-articles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.help-article { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.help-article:hover { border-color: var(--accent); background: var(--accent-soft); }
+.help-article-icon { flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.help-article-text { flex: 1; min-width: 0; display: grid; }
+.help-article-text span { font-size: 12px; color: var(--muted); }
+.help-article > .icon:last-child { color: var(--muted); }
+.help-foot { display: flex; align-items: center; gap: 18px; font-size: 13px; }
+.help-foot .muted { margin-left: auto; font-size: 12px; }
+.help-btn { padding-left: 9px; }

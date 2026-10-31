@@ -6,6 +6,7 @@ import { faviconToDataUrl } from '../core/image.js';
 import { itemHosts } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call, copy } from '../lib/api.js';
+import { buildItemLink } from '../core/links.js';
 
 const view = document.getElementById('view');
 const topActions = document.getElementById('top-actions');
@@ -216,6 +217,12 @@ function closeMenu() {
 }
 document.addEventListener('click', closeMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+/** Web link to the entry for colleagues (only Key Vault entries; the vault URL falls back to the container id, its host). */
+function itemLinkFor(s) {
+  const c = st?.containers.find((x) => x.id === s.containerId);
+  return c ? buildItemLink({ vaultUrl: c.vaultUrl || `https://${c.id}/`, name: c.name }, s.id) : null;
+}
+
 function entryMenu(e, s) {
   e.preventDefault();
   closeMenu();
@@ -236,6 +243,9 @@ function entryMenu(e, s) {
       const item = await load().catch(() => null);
       if (item?.password) copy(item.password, t('Passwort'));
       else toast(t('Kein Passwort gespeichert'));
+    }) : null,
+    itemLinkFor(s) ? entry('link', t('Link kopieren'), () => {
+      copy(itemLinkFor(s), t('Link zum Eintrag'));
     }) : null,
     h('hr'),
     entry('trash', t('Löschen'), async () => {

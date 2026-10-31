@@ -14,6 +14,7 @@ import { expiryState, expiringEntries, daysUntil } from '../../extension/core/he
 import { healthDialog, accessReportDialog } from './reports.js';
 import { releaseNotesSince } from '../../extension/core/release-notes.js';
 import * as progress from './progress.js';
+import { buildItemLink, parseItemLink } from '../../extension/core/links.js';
 
 // Calls that can take a moment show the progress card bottom right (progress.js); the main process reports
 // done/total under the same id where it knows them. Dialogs with their own inline progress are not listed.
@@ -41,8 +42,10 @@ if (/Win/.test(navigator.platform)) document.documentElement.classList.add('fram
 document.body.prepend(h('div', { class: 'drag-strip', 'aria-hidden': 'true' }));
 // Search field in the top bar (above list and details); renderList puts the current view's field into it.
 const topSearch = h('div', { class: 'top-search' });
+// "New" in the top bar, at the content edge of the detail column.
+const topActions = h('div', { class: 'top-actions' });
 const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { class: 'list-pane' }), detail: h('section', { class: 'detail-pane' }) };
-const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '' };
+const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '', searchAll: false };
 // Vaults that fit in the sidebar without scrolling; with more, the list scrolls and a search appears above it.
 const VAULTS_FIT = 5;
 const explicitFolders = new Map(); // containerId → created folders (also empty ones)
@@ -161,7 +164,9 @@ window.pwsafe.onEvent((ev) => {
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(() => reloadAll().catch(() => {}), 250);
   } else if (ev.type === 'link') {
-    addContainerDialog(ev.url);
+    const entry = parseItemLink(ev.url);
+    if (entry) openItemLink(entry);
+    else addContainerDialog(ev.url);
   } else if (ev.type === 'progress') {
     progress.onEvent(ev);
     for (const fn of progressListeners) fn(ev);
@@ -349,7 +354,7 @@ async function render() {
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
-  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch);
+  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions);
   root.replaceChildren(shell);
   setupSplitters(shell);
   renderSidebar();
@@ -357,7 +362,8 @@ async function render() {
   checkWindowsRequests();
   loadLogos();
   if (st.requirePin && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ forced: true });
-  return renderDetail();
+  await renderDetail();
+  if (pendingItemLink) openItemLink(pendingItemLink);
 }
 
 // ---------------------------------------------------------------- resizable panes
@@ -445,7 +451,8 @@ async function reloadAll() {
   renderSidebar();
   renderList();
   loadLogos();
-  return renderDetail();
+  await renderDetail();
+  if (pendingItemLink) openItemLink(pendingItemLink);
 }
 
 // ---------------------------------------------------------------- setup / locked
@@ -580,6 +587,8 @@ function pinDialog({ forced = false } = {}) {
 function select(next) {
   // A new view starts without a type filter (the pills belong to the list they were chosen in).
   if (next.view !== undefined && (next.view !== ui.view || next.containerId !== ui.containerId)) ui.type = '';
+  // Searching starts in the vault one is in again after switching ("All" is a deliberate choice per search).
+  if (next.containerId !== undefined && next.containerId !== ui.containerId) ui.searchAll = false;
   Object.assign(ui, next, { editing: null });
   if (ui.selected && !visibleItems().some((i) => i.key === ui.selected)) ui.selected = null;
   for (const k of ui.multi) if (!items.some((i) => i.key === k)) ui.multi.delete(k);
@@ -628,6 +637,9 @@ function renderSidebar() {
     h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length ? h('span', { class: 'count' }, containers.length) : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
+    // Pinned to the bottom edge (sticky): stays reachable however many vaults the list above holds.
+    h('div', { class: 'sidebar-foot' }, h('button', { type: 'button', class: 'help-btn', title: t('Hilfe und Tipps (F1)'), onclick: helpDialog },
+      h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe'))),
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
         await call('signIn');
@@ -637,6 +649,34 @@ function renderSidebar() {
       }
     } }, icon('unlock', 14), t('Key-Vault-Tresore anmelden')) : null,
   );
+}
+
+/** Help: the most useful tips for daily use and links into the knowledge base on the website (in the app's language). */
+function helpDialog() {
+  const en = getLanguage() === 'en';
+  const kb = (de, enSlug) => (en ? `https://keevault.de/en/knowledge/${enSlug}.html` : `https://keevault.de/wissen/${de}.html`);
+  const tip = (keys, text) => h('li', {}, keys ? h('kbd', {}, keys) : null, h('span', {}, text));
+  const article = (iconName, title, sub, url) => h('button', { type: 'button', class: 'help-article', onclick: () => openUrl(url) },
+    h('span', { class: 'help-article-icon' }, icon(iconName, 16)), h('span', { class: 'help-article-text' }, h('b', {}, title), h('span', {}, sub)), icon('external', 14));
+  modal(t('Hilfe'), h('div', { class: 'help' },
+    h('h3', {}, t('Tipps für jeden Tag')),
+    h('ul', { class: 'help-tips' },
+      tip(t('Strg F'), t('Suchen – standardmäßig im geöffneten Tresor, mit „Alle“ in allen Tresoren.')),
+      tip(t('Strg N'), t('Neuer Eintrag: Login, Notiz, Karte oder Zertifikat.')),
+      tip(t('Rechtsklick'), t('Auf Einträgen und Tresoren: alle Funktionen, z. B. „Link kopieren“ für Kolleginnen und Kollegen.')),
+      tip(t('Strg+Umschalt+U / P / O'), t('Benutzername, Passwort oder Einmalcode in jedes Fenster tippen (Auto-Type, einstellbar).')),
+      tip(null, t('Passkeys: Die Browser-Erweiterung und Windows fragen Keevault – der Anhänger oben im Browser zeigt, welches Konto genutzt wird.')),
+      tip(null, t('Schloss oben links sperrt Keevault sofort; das Menü daneben enthält Einstellungen und Werkzeuge.'))),
+    h('h3', {}, t('Wissensdatenbank')),
+    h('div', { class: 'help-articles' },
+      article('check', t('Erste Schritte'), t('Installieren, anmelden, ersten Tresor öffnen'), kb('erste-schritte', 'getting-started')),
+      article('key', t('Passkeys'), t('Im Browser und unter Windows nutzen'), kb('passkeys', 'passkeys')),
+      article('users', t('Teilen und Zugriff'), t('Kolleginnen und Kollegen einladen, Rollen'), kb('teilen', 'sharing')),
+      article('info', t('Fehlerbehebung'), t('Wenn etwas nicht klappt'), kb('fehlerbehebung', 'troubleshooting'))),
+    h('div', { class: 'help-foot' },
+      h('button', { type: 'button', class: 'linklike', onclick: () => openUrl(en ? 'https://keevault.de/en/knowledge/index.html' : 'https://keevault.de/wissen/index.html') }, t('Alle Artikel')),
+      h('button', { type: 'button', class: 'linklike', onclick: () => openUrl(en ? 'https://keevault.de/en/support.html' : 'https://keevault.de/support.html') }, t('Support')),
+      h('span', { class: 'muted' }, `Keevault ${st.version}`))), [{ label: t('Schließen'), primary: true }]);
 }
 
 /** Burger next to the logo: opens the main menu; a dot when the password check reports expiring entries. */
@@ -706,7 +746,7 @@ function mainMenu(anchor) {
  */
 function vaultList(rows) {
   const many = rows.length > VAULTS_FIT;
-  const list = h('div', { class: `vault-list ${many ? 'many' : ''}` }, ...rows);
+  const list = h('div', { class: `sidebar-vaults ${many ? 'many' : ''}` }, ...rows);
   const empty = h('p', { class: 'muted small pad', hidden: true }, t('Kein Tresor gefunden'));
   const apply = () => {
     const q = many ? ui.vaultQuery.trim().toLowerCase() : '';
@@ -760,10 +800,12 @@ async function refresh() {
 function visibleItems({ ignoreType = false } = {}) {
   let list = items;
   if (!ignoreType && ui.type && TYPE_TESTS[ui.type]) list = list.filter(TYPE_TESTS[ui.type]);
-  if (ui.containerId) list = list.filter((i) => i.containerId === ui.containerId);
+  const q = ui.query.trim().toLowerCase();
+  // Search scope: the current vault (default) or, switched to "All", every vault.
+  const global = !!q && ui.searchAll;
+  if (global) { /* all vaults */ } else if (ui.containerId) list = list.filter((i) => i.containerId === ui.containerId);
   else if (ui.view === 'favorites') list = list.filter((i) => i.favorite);
   else if (ui.view === 'passkeys') list = list.filter((i) => i.rpIds.length);
-  const q = ui.query.trim().toLowerCase();
   if (q) {
     list = list.filter((i) => [i.title, i.username, i.folder, ...i.hosts, ...i.rpIds, containerName(i.containerId)]
       .some((v) => String(v || '').toLowerCase().includes(q)));
@@ -874,6 +916,14 @@ function renderList() {
       renderChunked(folderRows(container, list, row, renderRows));
       return;
     }
+    if (container && ui.searchAll) {
+      // Search across all vaults: hits grouped by vault, the current one first.
+      const groups = new Map([[container.id, []]]);
+      for (const i of list) groups.set(i.containerId, [...(groups.get(i.containerId) || []), i]);
+      renderChunked([...groups].filter(([, entries]) => entries.length)
+        .flatMap(([id, entries]) => [h('li', { class: 'folder-title' }, containerName(id)), ...entries.map((i) => () => row(i))]));
+      return;
+    }
     if (container && list.some((i) => i.folder)) {
       const groups = new Map();
       for (const i of list) groups.set(i.folder || '', [...(groups.get(i.folder || '') || []), i]);
@@ -890,6 +940,7 @@ function renderList() {
   }
   if (container?.locked && !container.error) {
     topSearch.replaceChildren();
+    topActions.replaceChildren();
     setChildren(panes.list,
       h('div', { class: 'list-head' }, listTitle(title, container)),
       h('div', { class: 'list-scroll' }, h('span', { class: 'spinner' })));
@@ -901,10 +952,7 @@ function renderList() {
     return;
   }
 
-  setChildren(panes.list,
-    h('div', { class: 'list-head' }, container && logos.get(container.id) ? h('img', { class: 'container-logo large', src: logos.get(container.id), alt: '' }) : null,
-      listTitle(title, container),
-      h('button', { class: 'btn primary', title: t('Neuer Eintrag (Strg+N)'), onclick: (e) => {
+  const newButton = h('button', { class: 'btn primary', title: t('Neuer Eintrag (Strg+N)'), onclick: (e) => {
         // Choose what to create right at the button.
         const r = e.currentTarget.getBoundingClientRect();
         contextMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 4 }, [
@@ -916,7 +964,11 @@ function renderList() {
           container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
             ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
         ]);
-      } }, icon('plus'), t('Neu'))),
+      } }, icon('plus'), t('Neu'));
+  topActions.replaceChildren(newButton);
+  setChildren(panes.list,
+    h('div', { class: 'list-head' }, container && logos.get(container.id) ? h('img', { class: 'container-logo large', src: logos.get(container.id), alt: '' }) : null,
+      listTitle(title, container)),
     container?.error ? notice(container.error.status !== 403 ? container.error.message
       : container.rbac === false
         ? t('{message}. Dieser Key Vault nutzt Zugriffsrichtlinien statt Azure RBAC: Stelle ihn unter „Zugriffskonfiguration“ auf „Azure RBAC“ um oder lege eine Zugriffsrichtlinie für dein Konto an.', { message: container.error.message })
@@ -957,7 +1009,21 @@ function renderList() {
     typePills(visibleItems({ ignoreType: true })),
     h('div', { class: 'list-scroll' }, rowsEl),
   );
-  topSearch.replaceChildren(h('div', { class: 'search' }, icon('search'), search, h('kbd', { 'aria-hidden': 'true' }, t('Strg F'))));
+  // In a vault: a switch between this vault (default) and all vaults; elsewhere the search already covers everything.
+  const scope = container ? h('div', { class: 'search-scope', role: 'radiogroup', 'aria-label': t('Suchbereich') },
+    ...[[false, t('Tresor'), t('Nur in „{vault}“ suchen', { vault: container.name })], [true, t('Alle'), t('In allen Tresoren suchen')]].map(([all, label, hint]) => h('button', {
+      type: 'button', role: 'radio', 'aria-checked': String(ui.searchAll === all), class: ui.searchAll === all ? 'on' : '', title: hint,
+      onclick: () => {
+        if (ui.searchAll === all) return;
+        ui.searchAll = all;
+        renderList();
+        const field = document.getElementById('search');
+        field?.focus();
+        field?.setSelectionRange(field.value.length, field.value.length);
+      },
+    }, label))) : null;
+  search.placeholder = container ? (ui.searchAll ? t('Alle Tresore durchsuchen') : t('In „{vault}“ suchen', { vault: container.name })) : t('Suchen (Titel, Benutzer, Website, Ordner)');
+  topSearch.replaceChildren(h('div', { class: `search ${scope ? 'with-scope' : ''}` }, icon('search'), search, scope || h('kbd', { 'aria-hidden': 'true' }, t('Strg F'))));
   renderRows();
   if (container && !container.error) {
     call('folders', container.id).then((f) => {
@@ -1734,6 +1800,63 @@ function containerBadges(c) {
 }
 
 /** Functions of an entry (right-click in the list). */
+/**
+ * "Copy link": a web link to the entry for colleagues (extension/core/links.js). It grants no access – whoever opens
+ * it needs rights on the vault; the copy confirmation says so.
+ */
+function copyItemLink(container, id) {
+  const link = buildItemLink(container, id);
+  if (!link) return;
+  copy(link, t('Link zum Eintrag'));
+  toast(t('Öffnen können ihn alle mit Zugriff auf „{vault}“.', { vault: container.name }));
+}
+
+// Entry link that arrived while Keevault was locked or the vault was still missing: opened once that is resolved.
+let pendingItemLink = null;
+
+/** Opens an entry from a link: selects vault and entry; offers to add a vault this app does not know yet. */
+async function openItemLink(link) {
+  pendingItemLink = link;
+  if (!st?.opened) return; // after unlocking (render)
+  const sameHost = (c) => {
+    try {
+      return new URL(c.vaultUrl || '').host.toLowerCase() === link.host;
+    } catch {
+      return false;
+    }
+  };
+  const container = st.containers.find(sameHost);
+  if (!container) {
+    // Not added yet: the invite dialog with the vault prefilled; the entry opens after the vault was added.
+    // Only once: closing the dialog without adding drops the link (no dialog on every reload).
+    if (link.prompted) {
+      pendingItemLink = null;
+      return;
+    }
+    link.prompted = true;
+    const invite = new URL('kvpwsafe://add');
+    invite.searchParams.set('vault', link.vaultUrl);
+    if (link.name) invite.searchParams.set('name', link.name);
+    if (!document.querySelector('dialog[open]')) addContainerDialog(invite.toString());
+    return;
+  }
+  pendingItemLink = null;
+  const key = `${container.id}/${link.id}`;
+  if (!items.some((i) => i.key === key)) {
+    if (container.locked) {
+      select({ view: 'container', containerId: container.id });
+      toast(t('Tresor zuerst entsperren, dann den Link erneut öffnen.'), 'error');
+      return;
+    }
+    toast(t('Eintrag nicht gefunden – gelöscht, verschoben oder kein Zugriff.'), 'error');
+    return;
+  }
+  ui.query = '';
+  ui.type = '';
+  ui.folder = '';
+  select({ view: 'container', containerId: container.id, selected: key });
+}
+
 function itemActions(i) {
   if (ui.multi.size > 1 && ui.multi.has(i.key)) return multiActions();
   const [containerId, id] = splitKey(i.key);
@@ -1757,6 +1880,7 @@ function itemActions(i) {
     } },
     { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), disabled: !canWrite, onClick: () => duplicateItem(containerId, id) },
     { action: 'history', icon: 'history', label: t('Verlauf'), onClick: async () => historyDialog(await open()) },
+    { action: 'copy-link', icon: 'link', label: t('Link kopieren'), disabled: !buildItemLink(c, id), onClick: () => copyItemLink(c, id) },
     { action: 'delete', icon: 'trash', label: t('Löschen'), danger: true, disabled: !canWrite, onClick: async () => {
       if (!(await confirmDialog(t('Eintrag löschen'), t('„{title}“ in den Papierkorb verschieben? Wiederherstellen ist bis zum Ablauf der Aufbewahrungsfrist möglich.', { title: i.title }), { confirmLabel: t('Löschen'), danger: true }))) return;
       await call('delete', containerId, id);
@@ -2000,6 +2124,8 @@ async function renderDetail() {
       canWrite ? { icon: 'copy', label: t('Duplizieren'), onClick: () => duplicateItem(containerId, id) } : null,
       canWrite ? { icon: 'star', label: item.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), onClick: () => toggleFavorite(item) } : null,
       { icon: 'history', label: t('Verlauf'), onClick: () => historyDialog(item) },
+      buildItemLink(st.containers.find((c) => c.id === containerId), id)
+        ? { icon: 'link', label: t('Link kopieren'), onClick: () => copyItemLink(st.containers.find((c) => c.id === containerId), id) } : null,
       st.containers.find((c) => c.id === containerId)?.secure
         ? { icon: 'clock', label: t('Änderungsprotokoll'), onClick: () => changelogDialog(st.containers.find((c) => c.id === containerId), id) } : null,
       canWrite ? { icon: 'trash', label: t('Löschen'), danger: true, onClick: async () => {
@@ -3241,6 +3367,9 @@ document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.key.toLowerCase() === 'f') {
     e.preventDefault();
     document.getElementById('search')?.focus();
+  } else if (e.key === 'F1') {
+    e.preventDefault();
+    helpDialog();
   } else if (e.ctrlKey && e.key.toLowerCase() === 'n') {
     e.preventDefault();
     newItem('login');
