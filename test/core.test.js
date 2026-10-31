@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { totpCode, hotp, parseTotp } from '../extension/core/totp.js';
-import { hostMatches, hostFromUrl } from '../extension/core/match.js';
+import { hostMatches, hostFromUrl, urlScore } from '../extension/core/match.js';
 import { generatePassword, passwordStrength } from '../extension/core/generator.js';
 import { serializeItem, summaryFromSecret, parseItem, ItemTooLargeError } from '../extension/core/model.js';
 import { normalizeVaultUrl } from '../extension/core/keyvault.js';
@@ -103,4 +103,18 @@ test('CSV export: quoting, card fields, BOM', async () => {
   assert.ok(csv.includes('"A, ""B"""'));
   assert.ok(csv.includes('"x\ny"'));
   assert.ok(csv.includes(',Kim,4111,12/28,1,2,'));
+});
+
+test('urlScore: an entry for the exact path ranks above one for the bare host, both stay matches', () => {
+  const page = 'https://keevault.de/admin/';
+  const admin = urlScore(['https://keevault.de/admin'], page);
+  const site = urlScore(['https://keevault.de'], page);
+  const partner = urlScore(['keevault.de/partner'], page);
+  assert.ok(admin > site, 'exact path first');
+  assert.ok(site > partner, 'another path ranks below the bare host');
+  assert.ok(partner > 0, 'but still belongs to the site');
+  assert.equal(urlScore(['https://other.example'], page), 0);
+  assert.ok(urlScore(['keevault.de/admin'], 'https://keevault.de/admin/users') > urlScore(['keevault.de'], 'https://keevault.de/admin/users'));
+  assert.ok(urlScore(['https://keevault.de'], 'https://www.keevault.de/') >= 2, 'www is the same host');
+  assert.equal(urlScore(['x'], 'kein-url'), 0);
 });

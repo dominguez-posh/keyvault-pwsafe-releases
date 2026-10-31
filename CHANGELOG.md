@@ -4,6 +4,18 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.12 – 2026-10-31
+- Browser-Erweiterung: Passt die gespeicherte URL genauer zur Seite (z. B. keevault.de/admin), steht der Eintrag in „Diese Website“ und in der Passkey-Leiste ganz oben; alle anderen Einträge der Website bleiben sichtbar.
+- Diagnose: Langsame oder fehlgeschlagene Anfragen an Key Vault und langsame Anmeldungen landen ohne Inhalte in `%APPDATA%\KeyVault PwSafe\diagnostics.log`.
+- Wissen: Abschnitt „Passkeys für Microsoft Entra ID“ (synchronisierbare Passkeys erlauben, Keevault-AAGUID).
+- Browser-Erweiterung: Auch das Speichern neuer Passkeys läuft in der Leiste oben in der Seite (Tresor über ▾ wählbar); die Animation sitzt oben mittig und erscheint nie mehr hinter einem Fenster.
+
+### English
+- Browser extension: when the stored URL fits the page more precisely (e.g. keevault.de/admin), the entry comes first in “This website” and in the passkey bar; all other entries of the website stay visible.
+- Diagnostics: slow or failed Key Vault requests and slow sign-ins are written without content to `%APPDATA%\KeyVault PwSafe\diagnostics.log`.
+- Docs: section “Passkeys for Microsoft Entra ID” (allow syncable passkeys, Keevault AAGUID).
+- Browser extension: saving new passkeys also happens in the bar at the top of the page (vault selectable via ▾); the animation sits top centre and never hides behind a window again.
+
 ## 0.7.11 – 2026-10-31
 - Die Fortschrittskarte beim Abgleich zeigt bei Tresoren mit vielen Secrets eine laufende Zahl statt einer vollen Leiste, die fertig aussah.
 - Rückfragen von KI-Agenten (verbinden, Passwort lesen, Eintrag ändern) erscheinen als Dialog im Stil der App statt als Windows-Meldung; das Fenster kommt dabei nach vorn und bleibt im Vordergrund, bis du antwortest.

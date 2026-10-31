@@ -199,19 +199,23 @@ try {
   await shot(popup.sessionId, 'ext-popup');
   pageErrors(popup.sessionId, 'popup');
 
-  // Passkey registration through the prompt window, verified by an independent RP library.
+  // Passkey registration through the bar at the top of the page ("Save in Keevault"), verified by an independent
+  // RP library.
   const tab = await open(`${origin}/`);
   await sleep(800);
   const r0 = await evaluate(tab.sessionId, 'results');
   check(r0.patched, 'WebAuthn-Shim nicht aktiv');
   await evaluate(tab.sessionId, 'startCreate(), true');
-  let prompt = await waitFor(() => findTarget(`${ext}/prompt/prompt.html#create:`));
-  check(prompt, 'Passkey-Dialog (create) wurde nicht geöffnet');
-  if (prompt) {
-    const s = await attach(prompt.targetId);
-    await waitFor(() => evaluate(s, '!!document.querySelector("footer .btn.primary")'));
-    await shot(s, 'ext-prompt-create');
-    await evaluate(s, 'document.querySelector("footer .btn.primary").click(), true');
+  const save = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .use'));
+  check(save, 'Passkey-Leiste (create) erschien nicht in der Seite');
+  if (!save && process.env.KV_SMOKE_DEBUG) {
+    console.log(`[debug] create: window=${!!(await findTarget(`${ext}/prompt/prompt.html#create:`))} results=${JSON.stringify(await evaluate(tab.sessionId, 'results'))}`);
+  }
+  let prompt = null;
+  if (save) {
+    await sleep(500);
+    await shot(tab.sessionId, 'ext-inline-create');
+    await clickNode(tab.sessionId, save);
     const r = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).create && evaluate(tab.sessionId, 'results'));
     check(r?.create === 'resolved' && r.isPkc, `create(): ${r?.create}`);
     if (r?.createJson) {

@@ -1071,7 +1071,7 @@ export class VaultSession {
         continue;
       }
       for (const passkey of filterPasskeys(item.passkeys, rpId, allowCredentialIds)) {
-        out.push({ containerId: s.containerId, itemId: s.id, title: item.title, passkey });
+        out.push({ containerId: s.containerId, itemId: s.id, title: item.title, urls: item.urls || [], passkey });
       }
     }
     for (const adapter of Object.values(this.adapters)) {

@@ -11,7 +11,8 @@
   // The newest instance wins: Chrome keeps the Window when the initial empty document is replaced by the real
   // page and can run the script again in a fresh isolated world – the older instance would then answer every
   // request a second time. The hand-over goes through an event on the shared window (the document differs).
-  const TAKEOVER = 'kvpwsafe-cs-takeover';
+  // Per extension ID: window events reach the content scripts of every extension in the page.
+  const TAKEOVER = `kvpwsafe-cs-takeover-${chrome.runtime.id}`;
   window.dispatchEvent(new Event(TAKEOVER));
   window.addEventListener(TAKEOVER, () => { alive = false; host?.remove(); }, { once: true });
 
@@ -48,7 +49,7 @@
         if (res.pending) {
           modalRequests.set(res.pending, d.id);
           pendingKinds.set(res.pending, d.kind);
-          passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
+          // The prompt window covers the page: no waiting card behind it – the success card follows the answer.
         } else if (res.conditional) {
           conditional = { pageId: d.id, ...res.conditional };
           if (res.conditional.ui) texts = res.conditional.ui;
@@ -107,22 +108,27 @@
   function showPasskeyPill(pageId, info) {
     if (info.ui) texts = info.ui;
     hidePill();
-    inline = { pageId, requestId: info.requestId, candidates: info.candidates || [], site: info.site };
+    inline = { pageId, kind: info.kind || 'get', requestId: info.requestId, candidates: info.candidates || [], site: info.site, containers: info.containers || [], containerId: info.defaultContainer };
+    const create = inline.kind === 'create';
     const first = inline.candidates[0];
     pill = el('div', 'pill');
     pill.setAttribute('role', 'dialog');
     pill.setAttribute('aria-label', texts.choosePasskey || 'Passkey');
     const use = el('button', 'use');
     use.innerHTML = PASSKEY_SVG;
-    use.append(document.createTextNode(texts.usePasskey || 'Passkey'));
-    use.addEventListener('click', (e) => { if (e.isTrusted) choosePasskey(first); });
+    use.append(document.createTextNode(create ? (texts.savePasskey || 'Save') : (texts.usePasskey || 'Passkey')));
+    use.addEventListener('click', (e) => { if (e.isTrusted) (create ? savePasskey(inline.containerId) : choosePasskey(first)); });
     const more = el('button', 'more', '▾');
     more.title = texts.otherOptions || '';
     more.addEventListener('click', (e) => { if (e.isTrusted) togglePillList(); });
     const x = el('button', 'x', '×');
     x.title = texts.close || '';
     x.addEventListener('click', (e) => { if (e.isTrusted) dismissPill(); });
-    pill.append(el('span', 'ava', initials(info.site)), textCol(first?.title || 'Keevault', first?.userName || texts.noUser || ''), use, more, x);
+    const vaultName = () => inline?.containers.find((c) => c.id === inline.containerId)?.name || '';
+    const col = create
+      ? textCol(texts.saveQuestion || 'Passkey?', info.alreadyRegistered ? (texts.alreadySaved || '') : `${info.user || info.rpName} · ${vaultName()}`)
+      : textCol(first?.title || 'Keevault', first?.userName || texts.noUser || '');
+    pill.append(el('span', 'ava', initials(info.site)), col, use, more, x);
     ui().append(pill);
     use.focus({ preventScroll: true });
   }
@@ -135,6 +141,14 @@
     }
     if (!inline) return;
     pillList = el('div', 'pill-list');
+    if (inline.kind === 'create') {
+      for (const c of inline.containers) {
+        const b = el('button', 'entry');
+        b.append(avatarFor(c.name, c.id === inline.containerId ? 'pk' : ''), textCol(c.name, (texts.saveIn || '{vault}').replace('{vault}', c.name)));
+        b.addEventListener('click', (e) => { if (e.isTrusted) savePasskey(c.id); });
+        pillList.append(b);
+      }
+    }
     for (const c of inline.candidates) {
       const b = el('button', 'entry');
       b.append(avatarFor(c.userName || c.title, 'pk'), textCol(c.userName || texts.noUser || '', `${c.title} · ${c.container}`));
@@ -163,6 +177,25 @@
     }
   }
 
+  /** Saves the new passkey in the chosen vault; the result arrives as webauthn:result (success animation there). */
+  async function savePasskey(containerId) {
+    const cur = inline;
+    if (!cur || !containerId) return;
+    inline = null;
+    hidePill();
+    modalRequests.set(cur.requestId, cur.pageId);
+    pendingKinds.set(cur.requestId, 'create');
+    passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
+    try {
+      await call('cs:webauthnCreate', { requestId: cur.requestId, containerId });
+    } catch (err) {
+      modalRequests.delete(cur.requestId);
+      pendingKinds.delete(cur.requestId);
+      passkeyAnim('hide');
+      toPage({ id: cur.pageId, error: { name: 'NotAllowedError', message: err.message } });
+    }
+  }
+
   /** × : the browser's own passkey dialog takes over. */
   function dismissPill() {
     const cur = inline;
@@ -182,8 +215,7 @@
     try {
       const r = await call('cs:webauthnWindow', { requestId: cur.requestId });
       modalRequests.set(r.pending, cur.pageId);
-      pendingKinds.set(r.pending, 'get');
-      passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
+      pendingKinds.set(r.pending, cur.kind);
     } catch {
       toPage({ id: cur.pageId, fallback: true });
     }
@@ -333,10 +365,10 @@
     button.b.primary { background: #0f6cbd; border-color: #0f6cbd; color: #fff; }
     button.x { position: absolute; top: 8px; right: 8px; border: 0; background: none; font-size: 18px; cursor: pointer; color: #5b6170; }
     .logo { width: 18px; height: 18px; border-radius: 5px; background: #0f6cbd; display: inline-grid; place-items: center; color: #fff; font-size: 11px; }
-    .pk { position: fixed; top: 16px; right: 16px; z-index: 2147483647; display: flex; align-items: center; gap: 12px; padding: 12px 16px 12px 12px;
+    .pk { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 2147483647; display: flex; align-items: center; gap: 12px; padding: 12px 16px 12px 12px;
       background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.2); font-size: 13px;
-      animation: pk-in .22s cubic-bezier(.2,.8,.2,1); }
-    .pk.hide { animation: pk-out .25s ease forwards; }
+      animation: pkc-in .3s cubic-bezier(.2,.9,.3,1.2); }
+    .pk.hide { animation: pkc-out .25s ease forwards; }
     .pk .disc { position: relative; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none; }
     .pk .ring { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(#0f6cbd 0 25%, #dfe6f3 25% 100%); animation: pk-spin .9s linear infinite;
       -webkit-mask: radial-gradient(circle, transparent 60%, #000 62%); mask: radial-gradient(circle, transparent 60%, #000 62%); }
@@ -366,7 +398,7 @@
     .pill .more, .pill .x { position: static; flex: none; border: 0; background: none; cursor: pointer; color: #5b6170; font-size: 18px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
     .pill .x:hover, .pill .more:hover { background: #eef3fb; color: #1b1b1f; }
     .pill-list { position: fixed; top: 74px; left: 50%; transform: translateX(-50%); z-index: 2147483647; min-width: 320px; max-width: min(600px, calc(100vw - 32px));
-      background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); padding: 4px; font-size: 13px; animation: pk-in .2s ease; }
+      background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); padding: 4px; font-size: 13px; animation: pkc-in .2s ease; }
     .pill-list .other { width: 100%; border: 0; border-top: 1px solid #e3e6ec; background: none; color: #5b6170; padding: 9px; margin-top: 2px; cursor: pointer; font-size: 12px; text-align: center; }
     .pill-list .other:hover { color: #0f6cbd; }
     @keyframes pill-in { from { transform: translate(-50%, -28px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
@@ -378,6 +410,8 @@
     @keyframes pk-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
     @keyframes pk-in { from { transform: translateY(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
     @keyframes pk-out { to { transform: translateY(-8px); opacity: 0; } }
+    @keyframes pkc-in { from { transform: translate(-50%, -16px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+    @keyframes pkc-out { to { transform: translate(-50%, -10px); opacity: 0; } }
     @media (prefers-color-scheme: dark) {
       .menu, .banner, .pk { background: #23252b; color: #eceef2; border-color: #3a3d46; }
       .pill, .pill-list { background: #23252b; color: #eceef2; }

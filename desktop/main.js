@@ -128,13 +128,54 @@ const offlineMirror = () => (offline ||= new OfflineMirror({
 }));
 const mirrorWanted = () => !!config.get().offlineMirror && !!config.get().appPin && !demo;
 
+// ---- Diagnostics: slow or failing requests (> 1 s, status >= 400) and slow token requests go to
+// %APPDATA%\KeyVault PwSafe\diagnostics.log – method, host, path, status, duration; never headers, bodies or values.
+const SLOW_MS = 1000;
+let diagWrites = Promise.resolve();
+function diag(line) {
+  const file = path.join(app.getPath('userData'), 'diagnostics.log');
+  diagWrites = diagWrites.then(async () => {
+    try {
+      if ((await fs.stat(file).catch(() => null))?.size > 512_000) await fs.rename(file, `${file}.1`);
+      await fs.appendFile(file, `${new Date().toISOString()} ${line}\n`);
+    } catch {
+      // Diagnostics never break a request.
+    }
+  });
+}
+async function timedFetch(url, init = {}) {
+  const started = Date.now();
+  let status = 'ERR';
+  try {
+    const res = await secureFetch(url, init);
+    status = res.status;
+    return res;
+  } finally {
+    const ms = Date.now() - started;
+    if (ms > SLOW_MS || status === 'ERR' || status >= 400) {
+      let where = String(url);
+      try { const u = new URL(url); where = u.host + u.pathname; } catch { /* keep */ }
+      diag(`${init.method || 'GET'} ${where} ${status} ${ms}ms`);
+    }
+  }
+}
+async function timedToken(scope, opts) {
+  const started = Date.now();
+  try {
+    return await auth.getToken(scope, opts);
+  } finally {
+    const ms = Date.now() - started;
+    if (ms > SLOW_MS) diag(`TOKEN ${String(scope).replace(/^https:\/\//, '')} tenant=${opts?.tenantId || 'home'} force=${!!opts?.forceRefresh} ${ms}ms`);
+  }
+}
+
 function newSession() {
   vault = new VaultSession({
-    getToken: offlineMode ? async () => 'offline' : (scope, opts) => auth.getToken(scope, opts),
+    getToken: offlineMode ? async () => 'offline' : timedToken,
     store: new MemoryStore(),
     // Chromium network stack: Windows certificate store, system proxy, unaffected by NODE_TLS_REJECT_UNAUTHORIZED.
     // In-memory session: Key Vault responses never reach a disk cache – except the encrypted offline mirror.
-    fetch: demo?.fetch || (offlineMode ? offlineMirror().replay : mirrorWanted() ? offlineMirror().record(secureFetch) : secureFetch),
+    fetch: demo?.fetch || (offlineMode ? offlineMirror().replay : mirrorWanted() ? offlineMirror().record(timedFetch) : timedFetch),
     actor,
     adapters: { file: files },
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.

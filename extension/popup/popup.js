@@ -1,7 +1,7 @@
 import { h, icon, iconButton, setChildren, toast, avatar, confirmDialog } from '../core/dom.js';
 import { itemDetail, itemForm, generatorPanel } from '../core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../core/generator.js';
-import { itemMatchesHost } from '../core/match.js';
+import { itemMatchesHost, urlScore } from '../core/match.js';
 import { itemHosts } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call, copy } from '../lib/api.js';
@@ -15,6 +15,9 @@ let host = null;
 let items = [];
 let listTab = null;
 let query = '';
+// How well each entry of this website fits the page path (urlScore) – loaded for the few matching entries only.
+const siteScores = new Map();
+const scoreKey = (s) => `${s.containerId}/${s.id}`;
 
 const containerName = (id) => st?.containers.find((c) => c.id === id)?.name || '';
 const writableContainers = () => st.containers.filter((c) => c.access?.write !== false && !c.error && !c.locked).map((c) => ({ id: c.id, name: c.name }));
@@ -118,7 +121,8 @@ function filtered() {
     list = list.filter((s) => [s.title, s.username, s.folder, ...s.hosts, ...s.rpIds, containerName(s.containerId)]
       .some((v) => String(v || '').toLowerCase().includes(q)));
   }
-  return [...list].sort((a, b) => (b.favorite - a.favorite) || a.title.localeCompare(b.title));
+  const score = (s) => (listTab === 'site' ? siteScores.get(scoreKey(s)) || 0 : 0);
+  return [...list].sort((a, b) => (score(b) - score(a)) || (b.favorite - a.favorite) || a.title.localeCompare(b.title));
 }
 
 function renderList() {
@@ -159,6 +163,14 @@ function renderList() {
         }) : null))));
   }
   renderRows();
+  // Exact URL first (keevault.de/admin before keevault.de): needs the entries' full URLs, the list only has hosts.
+  const missing = tab?.url ? items.filter((x) => matchesSite(x) && !siteScores.has(scoreKey(x))) : [];
+  if (missing.length) {
+    Promise.all(missing.map(async (x) => {
+      const item = await call('item', { containerId: x.containerId, id: x.id }).catch(() => null);
+      siteScores.set(scoreKey(x), item ? urlScore(item.urls, tab.url) : 0);
+    })).then(() => { if (listTab === 'site') renderRows(); });
+  }
 
   const problems = st.containers.filter((c) => c.error);
   const locked = st.containers.filter((c) => c.locked && !c.error);

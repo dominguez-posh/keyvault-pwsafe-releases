@@ -6,7 +6,7 @@
 
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
-import { hostFromUrl, itemMatchesHost } from './core/match.js';
+import { hostFromUrl, itemMatchesHost, urlScore } from './core/match.js';
 import { itemHosts } from './core/model.js';
 import { totpCode } from './core/totp.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
@@ -205,6 +205,10 @@ function contentStrings() {
     usePasskey: t('Passkey verwenden'),
     otherOptions: t('Andere Optionen'),
     choosePasskey: t('Passkey wählen'),
+    savePasskey: t('In Keevault speichern'),
+    saveQuestion: t('Passkey in Keevault speichern?'),
+    saveIn: t('Speichern in „{vault}“'),
+    alreadySaved: t('Für dieses Konto ist bereits ein Passkey im Tresor gespeichert.'),
     otp: t('Einmalcode'),
     noUser: t('(ohne Benutzername)'),
     updateTitle: t('Passwort aktualisieren?'),
@@ -349,9 +353,15 @@ async function containerNames() {
   return new Map((await vault.containers()).map((c) => [c.id, c.name]));
 }
 
-async function publicCandidates(list) {
+/** Passkeys whose entry URL fits the page best come first (keevault.de/admin before keevault.de) – none is dropped. */
+function rankCandidates(list, pageUrl) {
+  if (!pageUrl) return list;
+  return list.map((c, i) => ({ c, i, score: urlScore(c.urls, pageUrl) })).sort((a, b) => b.score - a.score || a.i - b.i).map((x) => x.c);
+}
+
+async function publicCandidates(list, pageUrl = '') {
   const names = await containerNames();
-  return list.map((c) => ({
+  return rankCandidates(list, pageUrl).map((c) => ({
     containerId: c.containerId,
     itemId: c.itemId,
     credentialId: c.passkey.credentialId,
@@ -414,6 +424,7 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
     kind,
     rpId,
     origin,
+    pageUrl: sender.url || sender.tab.url || origin,
     options,
     tabId: sender.tab.id,
     frameId: sender.frameId,
@@ -430,16 +441,31 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
       if (!found.length && !locked) return { fallback: true };
       if (request.conditional) {
         await saveRequest(request);
-        return { conditional: { requestId: request.id, locked: false, lockedContainers: locked, candidates: await publicCandidates(found), ui: contentStrings() } };
+        return { conditional: { requestId: request.id, locked: false, lockedContainers: locked, candidates: await publicCandidates(found, request.pageUrl), ui: contentStrings() } };
       }
       if (found.length) {
         // Chooser inside the page (a bar at the top, like the browser's own sheet); the window only on request.
         await saveRequest(request);
-        return { inline: { requestId: request.id, site: rpId, lockedContainers: locked, candidates: await publicCandidates(found), ui: contentStrings() } };
+        return { inline: { requestId: request.id, site: rpId, lockedContainers: locked, candidates: await publicCandidates(found, request.pageUrl), ui: contentStrings() } };
       }
     } else if (request.conditional) {
       await saveRequest(request);
       return { conditional: { requestId: request.id, locked: true, candidates: [], ui: contentStrings() } };
+    }
+  }
+  if (kind === 'create' && open) {
+    // Saving a new passkey also happens in the bar at the top of the page; the window only on "Other options".
+    const containers = await writableContainers();
+    if (containers.length) {
+      const s = await getSettings();
+      const existing = options.excludeCredentials?.length ? await vault.passkeyCandidates(rpId, options.excludeCredentials) : [];
+      await saveRequest(request);
+      return { inline: {
+        kind: 'create', requestId: request.id, site: rpId, rpName: options.rp?.name || rpId,
+        user: options.user?.name || options.user?.displayName || '', containers,
+        defaultContainer: containers.some((c) => c.id === s.defaultContainer) ? s.defaultContainer : containers[0].id,
+        alreadyRegistered: existing.length > 0, ui: contentStrings(),
+      } };
     }
   }
   await saveRequest(request);
@@ -479,7 +505,7 @@ async function webauthnDetails({ requestId }) {
   if (!out.unlocked) return out;
   out.lockedContainers = (await vault.containers()).filter((c) => c.protected && c.locked).map((c) => ({ id: c.id, name: c.name, kind: c.kind }));
   if (req.kind === 'get') {
-    out.candidates = await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials));
+    out.candidates = await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials), req.pageUrl);
     return out;
   }
   const s = await getSettings();
@@ -570,6 +596,13 @@ async function conditionalSelect(msg, sender) {
   return { result: response };
 }
 
+/** "Save" in the in-page bar: stores the new passkey; the result reaches the page like from the window. */
+async function inlineCreate({ requestId, containerId }, sender) {
+  const req = await loadRequest(requestId);
+  if (!req || req.kind !== 'create' || req.tabId !== sender.tab?.id || req.frameId !== sender.frameId) throw new Error(t('Ungültige Anfrage'));
+  return webauthnApprove({ requestId, containerId, itemId: '', title: req.options.rp?.name || req.rpId });
+}
+
 /** "Other options" in the in-page chooser: the full prompt window takes over the pending request. */
 async function inlineWindow({ requestId }, sender) {
   const req = await loadRequest(requestId);
@@ -585,7 +618,7 @@ async function conditionalCandidates({ requestId }, sender) {
   return {
     locked: false,
     lockedContainers: await lockedProtected(),
-    candidates: await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials)),
+    candidates: await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials), req.pageUrl),
   };
 }
 
@@ -711,6 +744,7 @@ const contentCommands = {
   'cs:webauthnCandidates': (msg, sender) => conditionalCandidates(msg, sender),
   'cs:webauthnAbort': (msg, sender) => abortRequest(msg, sender),
   'cs:webauthnWindow': (msg, sender) => inlineWindow(msg, sender),
+  'cs:webauthnCreate': (msg, sender) => inlineCreate(msg, sender),
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
