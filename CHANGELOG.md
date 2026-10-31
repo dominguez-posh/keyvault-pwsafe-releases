@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.11 – 2026-10-31
+- Die Fortschrittskarte beim Abgleich zeigt bei Tresoren mit vielen Secrets eine laufende Zahl statt einer vollen Leiste, die fertig aussah.
+- Rückfragen von KI-Agenten (verbinden, Passwort lesen, Eintrag ändern) erscheinen als Dialog im Stil der App statt als Windows-Meldung; das Fenster kommt dabei nach vorn und bleibt im Vordergrund, bis du antwortest.
+- Entwickler-Builds belegen nicht mehr die Verbindung der installierten App (Browser-Erweiterung, KI-Agenten).
+
+### English
+- The reconcile progress card shows a running count for vaults with many secrets instead of a full bar that looked finished.
+- Questions from AI agents (connect, read a password, change an entry) appear as a dialog in the app's style instead of a Windows message box; the window comes to the front and stays on top until you answer.
+- Development builds no longer take over the connection of the installed app (browser extension, AI agents).
+
 ## 0.7.10 – 2026-10-31
 - Update-Dialog: Die EXE-Installation wurde fälschlich als MSI erkannt, deshalb fehlte der Button „Jetzt aktualisieren“ und die App konnte sich nie selbst aktualisieren. Dieses eine Mal bitte den Installer von Hand ausführen, danach läuft es automatisch.
 - Browser-Erweiterung: Bei der Passkey-Anmeldung erscheint statt eines Fensters eine Leiste oben in der Seite – Konto, „Passkey verwenden“, bei mehreren Passkeys eine Liste, „Andere Optionen“ öffnet das bisherige Fenster, × übergibt an den Browser.

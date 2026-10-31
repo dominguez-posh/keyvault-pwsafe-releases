@@ -20,8 +20,12 @@ export const launchPath = () => (process.windowsStore
   ? path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'keevault.exe')
   : process.execPath);
 
+// KVPWSAFE_DEV_PIPE: development runs (not packaged, set by main.js) use their own pipe – otherwise a dev instance
+// started from the repository takes over the pipe of the installed app and answers its browser extension and AI
+// agents with its own (empty) approvals.
 export function pipePath(userData) {
-  if (process.platform === 'win32') return `\\\\.\\pipe\\kvpwsafe-${os.userInfo().username.replace(/[^\w.-]/g, '_')}`;
+  const dev = process.env.KVPWSAFE_DEV_PIPE ? '-dev' : '';
+  if (process.platform === 'win32') return `\\\\.\\pipe\\kvpwsafe-${os.userInfo().username.replace(/[^\w.-]/g, '_')}${dev}`;
   return path.join(userData, 'bridge.sock');
 }
 

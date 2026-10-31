@@ -50,6 +50,10 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: t
 // The product was renamed to Keevault; the profile (settings, encrypted token cache, PIN) stays in the folder of the
 // old product name so that updates keep it.
 if (app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), 'KeyVault PwSafe'));
+// Development runs get their own pipe (bridge.js pipePath) and never register themselves as the browser's native
+// host or the Windows passkey command – the installed app keeps both (KVPWSAFE_DEV_INTEGRATION=1 to test them).
+const devIsolated = !app.isPackaged && !process.env.KVPWSAFE_DEV_INTEGRATION;
+if (!app.isPackaged) process.env.KVPWSAFE_DEV_PIPE = '1';
 
 if (demo) {
   // Separate profile so that the demo never touches real settings, tokens or files.
@@ -151,7 +155,7 @@ function reportListing(containerId, done, total) {
     // The listing also returns secrets that are no entries (index, settings, disabled ones): when it outgrows the
     // known size, show the running count instead of a bar stuck at 100 %.
     const label = t('„{name}“ wird abgeglichen …', { name: refreshing.get(containerId) });
-    send(done > total || total === done ? { type: 'progress', id: `refresh:${containerId}`, label: `${label} ${done}` } : { type: 'progress', id: `refresh:${containerId}`, label, done, total });
+    send(done >= total ? { type: 'progress', id: `refresh:${containerId}`, label: `${label} ${t('{n} gelesen', { n: done })}`, total: 0 } : { type: 'progress', id: `refresh:${containerId}`, label, done, total });
     return;
   }
   listing.set(containerId, { done, total });
@@ -162,7 +166,11 @@ function reportListing(containerId, done, total) {
     d += x.done;
     n += x.total;
   }
-  if (n > 0) send({ type: 'progress', id: 'reconcile', done: d, total: n });
+  // The listing also returns secrets that are no entries, so it can outgrow the known size: then a running count
+  // ("… 1250 gelesen") instead of a full bar that looks finished while the reconcile still runs.
+  const label = t('Tresore werden abgeglichen …');
+  if (d >= n) send({ type: 'progress', id: 'reconcile', label: `${label} ${t('{n} gelesen', { n: d })}`, total: 0 });
+  else if (n > 0) send({ type: 'progress', id: 'reconcile', label, done: d, total: n });
 }
 
 function changed() {
@@ -699,49 +707,99 @@ async function approveAgent(agent) {
     // The approval ran out: ask again.
     config.update({ approvedAgents: s.approvedAgents.filter((x) => x !== agent) });
   }
-  showWindow();
-  const r = await dialog.showMessageBox(win, {
-    type: 'question',
-    buttons: [t('Lesen und Schreiben'), t('Nur lesen'), t('Ablehnen')],
-    defaultId: 2,
-    cancelId: 2,
-    message: t('KI-Agent „{agent}“ möchte sich mit Keevault verbinden.', { agent }),
-    detail: t('Der Agent darf danach Tresore und Einträge durchsuchen (ohne Passwörter). Passwörter lesen und Einträge ändern muss du jedes Mal bzw. pro Sitzung erlauben. Erlaube das nur für Agenten, die du selbst eingerichtet hast.')
-      + '\n\n' + t('„Nur lesen“: der Agent kann keine Einträge anlegen oder ändern. Rechte und Gültigkeit änderst du jederzeit in den Einstellungen.'),
+  const answer = await askInApp({
+    kind: 'agent-connect',
+    agent,
+    title: t('„{agent}“ möchte sich verbinden', { agent }),
+    lead: t('Ein KI-Agent möchte Keevault nutzen. Erlaube das nur für Agenten, die du selbst eingerichtet hast.'),
+    choices: [
+      { value: 'write', label: t('Lesen und Schreiben'), hint: t('Suchen, Passwörter mit deiner Freigabe lesen, Einträge mit Bestätigung anlegen und ändern.') },
+      { value: 'read', label: t('Nur lesen'), hint: t('Suchen und Passwörter mit deiner Freigabe lesen – keine Änderungen.') },
+    ],
+    note: t('Löschen ist nie möglich. Rechte und Gültigkeit änderst du jederzeit in den Einstellungen.'),
+    allow: t('Verbinden'),
+    cancel: 'deny',
   });
-  if (r.response === 2) return false;
+  if (answer === 'deny') return false;
   config.update({
     approvedAgents: [...config.get().approvedAgents, agent],
-    agentRules: { ...config.get().agentRules, [agent]: { write: r.response === 0, until: null } },
+    agentRules: { ...config.get().agentRules, [agent]: { write: answer === 'write', until: null } },
   });
   return true;
 }
 
 async function confirmAgentRead({ agent, title, vault: vaultName }) {
-  showWindow();
-  const r = await dialog.showMessageBox(win, {
-    type: 'warning',
-    buttons: [t('Nur dieses Mal'), t('Für diese Sitzung'), t('Für 1 Stunde'), t('Für 4 Stunden'), t('Ablehnen')],
-    defaultId: 0,
-    cancelId: 4,
-    noLink: true,
-    message: t('KI-Agent „{agent}“ möchte Passwörter lesen.', { agent }),
-    detail: t('Angefragt: „{title}“ im Tresor „{vault}“.\n\n„Für diese Sitzung“: bis der Agent beendet wird (höchstens 8 Stunden). „Für 1 Stunde“ / „Für 4 Stunden“: ohne weitere Rückfrage für diesen Agenten, auch wenn er zwischendurch neu startet. Sperren von Keevault beendet jede Freigabe.', { title, vault: vaultName }),
+  return askInApp({
+    kind: 'agent-read',
+    agent,
+    title: t('„{agent}“ möchte ein Passwort lesen', { agent }),
+    entry: title,
+    vault: vaultName,
+    choices: [
+      { value: 'once', label: t('Nur dieses Mal'), hint: t('Beim nächsten Passwort fragt Keevault wieder.') },
+      { value: 'session', label: t('Für diese Sitzung'), hint: t('Bis der Agent beendet wird, höchstens 8 Stunden.') },
+      { value: 'minutes:60', label: t('Für 1 Stunde'), hint: t('Ohne Rückfrage – auch wenn der Agent zwischendurch neu startet.') },
+      { value: 'minutes:240', label: t('Für 4 Stunden'), hint: t('Ohne Rückfrage – auch wenn der Agent zwischendurch neu startet.') },
+    ],
+    note: t('Sperren von Keevault beendet jede Freigabe.'),
+    allow: t('Erlauben'),
+    cancel: 'deny',
   });
-  return ['once', 'session', 'minutes:60', 'minutes:240', 'deny'][r.response];
 }
 
 async function confirmAgentWrite({ agent, action, title, vault: vaultName, fields }) {
+  return (await askInApp({
+    kind: 'agent-write',
+    agent,
+    title: action === 'create' ? t('„{agent}“ möchte einen Eintrag anlegen', { agent }) : t('„{agent}“ möchte einen Eintrag ändern', { agent }),
+    entry: title,
+    vault: vaultName,
+    fields,
+    allow: action === 'create' ? t('Anlegen') : t('Ändern'),
+    cancel: 'deny',
+  })) === 'allow';
+}
+
+// ---- Questions to the user from background requests (AI agents): a dialog in the app's own style, window in front.
+const questions = new Map(); // id → resolve
+let questionSeq = 0;
+
+/**
+ * spec: { kind, agent, title, lead?, entry?, vault?, fields?, choices?: [{ value, label, hint }], note?, allow, cancel }
+ * → the chosen choice (or 'allow' without choices), or `cancel`. The window comes to the front and stays on top
+ * while the question is open (agents wait for it). Without a ready window the native dialog asks instead.
+ */
+async function askInApp(spec) {
   showWindow();
-  const r = await dialog.showMessageBox(win, {
-    type: 'question',
-    buttons: [t('Erlauben'), t('Ablehnen')],
-    defaultId: 0,
-    cancelId: 1,
-    message: action === 'create' ? t('KI-Agent „{agent}“ möchte einen Eintrag anlegen.', { agent }) : t('KI-Agent „{agent}“ möchte einen Eintrag ändern.', { agent }),
-    detail: t('„{title}“ im Tresor „{vault}“\nFelder: {fields}', { title, vault: vaultName, fields: fields.join(', ') }),
-  });
-  return r.response === 0;
+  if (!win || win.webContents.isLoading()) {
+    const options = spec.choices ? spec.choices.map((c) => ({ value: c.value, label: c.label })) : [{ value: 'allow', label: spec.allow }];
+    const r = await dialog.showMessageBox(win || null, {
+      type: 'question', buttons: [...options.map((o) => o.label), t('Ablehnen')], cancelId: options.length, noLink: true,
+      message: spec.title, detail: [spec.lead, spec.entry && `${spec.entry} · ${spec.vault}`, spec.fields?.join(', '), spec.note].filter(Boolean).join('\n\n'),
+    });
+    return options[r.response]?.value ?? spec.cancel;
+  }
+  const id = ++questionSeq;
+  win.setAlwaysOnTop(true, 'floating');
+  win.flashFrame(true);
+  try {
+    return await new Promise((resolve) => {
+      questions.set(id, resolve);
+      send({ type: 'question', id, ...spec });
+      // Nobody answers within 5 minutes: treated as the cancel choice (the agent gets a refusal, not a hang).
+      setTimeout(() => {
+        if (questions.delete(id)) {
+          send({ type: 'questionClose', id });
+          resolve(spec.cancel);
+        }
+      }, 5 * 60_000);
+    });
+  } finally {
+    if (!questions.size && win) {
+      win.setAlwaysOnTop(false);
+      win.flashFrame(false);
+    }
+  }
 }
 
 /** Log of agent calls (no secret values) in the profile; rotates at 1 MB. */
@@ -816,7 +874,7 @@ async function setupWindowsProvider() {
 
 async function applyBrowserIntegration() {
   const s = config.get();
-  if (!demo) {
+  if (!demo && !devIsolated) {
     if (s.browserIntegration) {
       const launch = { cmd: launchPath(), args: app.isPackaged ? [] : [appRoot] };
       await registerNativeHost({ userData: app.getPath('userData'), extensionIds: s.extensionIds, launch });
@@ -1733,6 +1791,14 @@ const api = {
     return true;
   },
   /** Rights of an agent: write yes/no, approval for `days` days (0 = until removed). */
+  /** Answer to a question from askInApp (agent approvals). */
+  answerQuestion: (id, value) => {
+    const resolve = questions.get(id);
+    if (!resolve) return false;
+    questions.delete(id);
+    resolve(String(value));
+    return true;
+  },
   mcpAgentRule: (agent, { write, days }) => {
     const current = config.get().agentRules?.[agent] || { write: true, until: null };
     const rule = {
@@ -2390,6 +2456,14 @@ function runSmokeTest() {
       if (view === 'restore') await menuAction('restore');
       // Success animation after a Windows passkey request (screenshot only).
       if (view === 'passkey-success') send({ type: 'passkeyFlash', text: t('Angemeldet') });
+      // Agent question in the app's style (screenshot only; answered with the cancel choice when the test ends).
+      if (view === 'agent-read') confirmAgentRead({ agent: 'claude-code', title: 'Strato SFTP keevault.de', vault: 'kv-team' }).catch(() => {});
+      if (view === 'agent-write') confirmAgentWrite({ agent: 'claude-code', action: 'update', title: 'GitHub', vault: 'kv-team', fields: Object.keys({ password: 1, notes: 1 }) }).catch(() => {});
+      if (view === 'agent-connect') askInApp({ kind: 'agent-connect', agent: 'claude-code', title: t('„{agent}“ möchte sich verbinden', { agent: 'claude-code' }),
+        lead: t('Ein KI-Agent möchte Keevault nutzen. Erlaube das nur für Agenten, die du selbst eingerichtet hast.'),
+        choices: [{ value: 'write', label: t('Lesen und Schreiben'), hint: t('Suchen, Passwörter mit deiner Freigabe lesen, Einträge mit Bestätigung anlegen und ändern.') },
+          { value: 'read', label: t('Nur lesen'), hint: t('Suchen und Passwörter mit deiner Freigabe lesen – keine Änderungen.') }],
+        note: t('Löschen ist nie möglich. Rechte und Gültigkeit änderst du jederzeit in den Einstellungen.'), allow: t('Verbinden'), cancel: 'deny' }).catch(() => {});
       if (view === 'progress') {
         // Progress card bottom right as during a background reconcile (screenshot only).
         send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …'), done: 1234, total: 2000 });

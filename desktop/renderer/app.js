@@ -169,6 +169,10 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'update') {
     progress.fromUpdate(ev.state);
     for (const fn of updateListeners) fn(ev.state);
+  } else if (ev.type === 'question') {
+    questionDialog(ev);
+  } else if (ev.type === 'questionClose') {
+    openQuestions.get(ev.id)?.();
   } else if (ev.type === 'passkeyFlash') {
     flashPasskey(ev.text);
   } else if (ev.type === 'checkUpdates') {
@@ -202,6 +206,53 @@ async function checkWindowsRequests() {
     if (r.locked || windowsDialogs.has(r.id)) continue;
     windowsDialogs.set(r.id, windowsDialog(r));
   }
+}
+
+/**
+ * Question from the main process (AI agent wants to connect, read a password or change an entry): a dialog in the
+ * app's style – agent badge, request, answers as buttons (the recommended one highlighted). Escape or × = cancel.
+ */
+const openQuestions = new Map(); // id → close without answer
+// MCP argument names that differ from the item fields (FIELD_LABELS below).
+const AGENT_FIELD_ALIAS = { url: 'urls', generatePassword: 'password' };
+function questionDialog(q) {
+  let answered = false;
+  const answer = (value) => {
+    if (answered) return;
+    answered = true;
+    openQuestions.delete(q.id);
+    call('answerQuestion', q.id, value).catch(() => {});
+  };
+  const icons = { 'agent-connect': 'link', 'agent-read': 'key', 'agent-write': 'edit' };
+  let choice = q.choices?.[0]?.value || 'allow';
+  const options = (q.choices || []).map((c, i) => {
+    const input = h('input', { type: 'radio', name: `q${q.id}`, value: c.value, checked: i === 0, onchange: () => { choice = c.value; } });
+    return h('label', { class: 'q-option' }, input,
+      h('span', { class: 'q-option-text' }, h('span', { class: 'q-option-label' }, c.label), c.hint ? h('span', { class: 'q-option-hint' }, c.hint) : null));
+  });
+  const target = q.entry ? h('div', { class: 'q-target' },
+    h('span', { class: 'q-target-icon' }, icon(q.kind === 'agent-read' ? 'key' : 'edit', 16)),
+    h('div', { class: 'q-target-text' }, h('div', { class: 'q-target-entry' }, q.entry), h('div', { class: 'q-target-vault' }, icon('vault', 12), q.vault || '')),
+    q.fields?.length ? h('div', { class: 'q-fields' }, ...[...new Set(q.fields.map((f) => AGENT_FIELD_ALIAS[f] || f))].map((f) => h('span', { class: 'q-chip' }, FIELD_LABELS[f] ? t(FIELD_LABELS[f]) : f))) : null) : null;
+  const allow = h('button', { type: 'button', class: 'btn primary', onclick: () => { answer(choice); close(); } }, q.allow || t('Erlauben'));
+  const body = h('div', { class: `question ${q.kind}` },
+    h('div', { class: 'q-hero' },
+      h('span', { class: 'q-badge' }, icon(icons[q.kind] || 'shield', 26)),
+      h('div', { class: 'q-hero-text' },
+        h('div', { class: 'q-eyebrow' }, t('Anfrage eines KI-Agenten')),
+        h('div', { class: 'q-title' }, q.title))),
+    q.lead ? h('p', { class: 'q-lead' }, q.lead) : null,
+    target,
+    options.length ? h('div', { class: 'q-options', role: 'radiogroup' }, ...options) : null,
+    q.note ? h('p', { class: 'q-note' }, icon('shield', 13), q.note) : null,
+    h('div', { class: 'q-actions' },
+      h('button', { type: 'button', class: 'btn', onclick: () => { answer(q.cancel); close(); } }, t('Ablehnen')),
+      allow));
+  const { dialog, close } = modal('', body, []);
+  dialog.classList.add('question-modal');
+  dialog.addEventListener('close', () => answer(q.cancel));
+  openQuestions.set(q.id, () => { answered = true; close(); });
+  allow.focus();
 }
 
 /** Success moment after a passkey request from Windows: centred badge animation, gone after about a second. */

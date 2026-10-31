@@ -108,6 +108,45 @@ body { overflow: hidden; }
 #app-version { position: fixed; right: 22px; bottom: 6px; font-size: 11px; color: var(--muted); user-select: none; z-index: 1; background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit; }
 #app-version:hover { color: var(--text); text-decoration: underline; }
 .update-progress { width: 100%; margin-top: 8px; }
+/* Questions from AI agents (app.js questionDialog) */
+/* Questions from AI agents (app.js questionDialog): hero with badge, target card, choice cards, two actions. */
+.question-modal { width: min(500px, calc(100vw - 32px)); border-radius: 16px; overflow: hidden; animation: q-in .22s cubic-bezier(.2, .9, .3, 1.15); }
+.question-modal .modal-head { position: absolute; top: 6px; right: 6px; padding: 0; z-index: 1; }
+.question-modal .modal-head h3 { display: none; }
+.question-modal .modal-body { padding: 0; max-height: none; }
+.question-modal .modal-footer:empty { display: none; }
+.question { --q: var(--accent); }
+.question.agent-read { --q: var(--passkey); }
+.question.agent-write { --q: #c27c0e; }
+.q-hero { display: flex; gap: 14px; align-items: center; padding: 22px 22px 16px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--q) 16%, var(--surface)), var(--surface) 75%); border-bottom: 1px solid var(--border); }
+.q-badge { flex: none; width: 52px; height: 52px; border-radius: 15px; display: grid; place-items: center; color: #fff; background: var(--q);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--q) 40%, transparent); }
+.q-eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--q); margin-bottom: 3px; }
+.q-title { font-size: 17px; font-weight: 650; line-height: 1.3; }
+.question > :not(.q-hero) { margin-left: 22px; margin-right: 22px; }
+.q-lead { margin-top: 16px; margin-bottom: 0; color: var(--muted); line-height: 1.5; }
+.q-target { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2); }
+.q-target-icon { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: var(--q); background: color-mix(in srgb, var(--q) 14%, var(--surface)); }
+.q-target-text { min-width: 0; flex: 1; }
+.q-target-entry { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-target-vault { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.q-fields { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
+.q-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); }
+.q-options { display: grid; gap: 8px; margin-top: 16px; }
+.q-option { display: flex; gap: 12px; align-items: flex-start; padding: 11px 14px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: border-color .12s, background .12s; }
+.q-option:hover { border-color: color-mix(in srgb, var(--q) 50%, var(--border)); }
+.q-option:has(input:checked) { border-color: var(--q); background: color-mix(in srgb, var(--q) 8%, var(--surface)); box-shadow: 0 0 0 1px var(--q) inset; }
+.q-option input { margin: 3px 0 0; accent-color: var(--q); }
+.q-option-text { display: grid; gap: 2px; }
+.q-option-label { font-weight: 600; }
+.q-option-hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.q-note { display: flex; gap: 6px; align-items: center; margin-top: 14px; margin-bottom: 0; color: var(--muted); font-size: 12px; }
+.q-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; margin-bottom: 20px; }
+.q-actions .btn { min-width: 110px; justify-content: center; }
+.q-actions .btn.primary { background: var(--q); border-color: var(--q); }
+@keyframes q-in { from { transform: translateY(8px) scale(.98); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .question-modal { animation: none; } }
 .release-notes { margin: 4px 0 12px; }
 .release-notes h4 { margin: 0 0 4px; font-size: 13px; }
 .release-notes ul { margin: 0 0 6px 18px; padding: 0; max-height: 220px; overflow: auto; }

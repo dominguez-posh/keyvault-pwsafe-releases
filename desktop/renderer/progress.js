@@ -98,7 +98,8 @@ export function onEvent(ev) {
     if (!ev.label) return; // progress for a task nobody started here (e.g. a call from another window)
     begin(ev.id, ev.label);
   } else if (ev.label) begin(ev.id, ev.label);
-  if (ev.total > 0) set(ev.id, ev.done || 0, ev.total);
+  // total 0 switches back to a running bar (count in the label), e.g. when a listing outgrows the expected size.
+  if ('total' in ev) set(ev.id, ev.done || 0, ev.total || 0);
 }
 
 /** Updater state → download progress in percent. */
