@@ -4,6 +4,30 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.6 – in Arbeit
+- Transparenz „Leicht“ ist jetzt Standard (auch nach „Ansicht auf Standard“).
+- Website: Die Live-Demo zeigt einen dezenten Glas-Effekt – ein Farbverlauf schimmert durch den Grund, die Karten bleiben deckend.
+
+### English
+- Transparency “Light” is now the default (also after “Reset view”).
+- Website: the live demo shows a subtle glass effect – a colour gradient shines through the ground, the cards stay opaque.
+
+## 0.8.5 – 2026-10-31
+- Eintrag aufgeräumt: eine schlanke Werkzeugleiste, die unten mittig über dem Eintrag schwebt (bleibt beim Scrollen sichtbar) – Stern (Favorit), „Link kopieren“, „Bearbeiten“ als ruhiger Text-Knopf und „⋯“ mit allem Weiteren (Verschieben, Duplizieren, Verlauf, Löschen) – keine Knopfwand mehr unter den Feldern. Dazu ein ausgegrautes „⋯“ neben dem Titel, das beim Darüberfahren alle Aktionen zeigt; die Leiste unten lässt sich unter Menü → Ansicht ausblenden.
+- Neuer Eintrag: Wechselst du links Tresor oder Ordner, während der neue Eintrag offen ist, übernimmt das Formular beides – Eingetipptes bleibt.
+- Tresore zeigen ihren Speicherort: ein blaues „A“ für Azure Key Vault, eine Festplatte für lokale Datei-Tresore (Menü → Ansicht → Speicherort).
+- Leere Detailansicht mit dem Keevault-Zeichen (Schild mit Schlüsselloch) als stiller Umriss.
+- Fensterknöpfe oben rechts werden mit abgedunkelt, solange ein Dialog offen ist.
+- Spaltenaufteilung: Die Liste ist standardmäßig die breiteste Spalte (55 % neben der Seitenleiste), die Seitenleiste etwas breiter (280 px); „Ansicht auf Standard“ im Menü setzt Zoom, Transparenz, Leisten, Symbole und Spaltenbreiten zurück.
+
+### English
+- Tidier entry: one slim toolbar floating at the bottom centre of the entry (stays visible while scrolling) – star (favorite), “Copy link”, “Edit” as a quiet text button and “⋯” with everything else (move, duplicate, history, delete) – no wall of buttons below the fields. Plus a quiet “⋯” beside the title that shows every action on hover; the bottom bar can be hidden under menu → View.
+- New entry: picking another vault or folder on the left while a new entry is open puts both into the form – what you typed stays.
+- Vaults show where they live: a blue “A” for Azure Key Vault, a drive for local file vaults (menu → View → Storage).
+- Empty detail pane with the Keevault mark (shield with keyhole) as a quiet outline.
+- Window buttons top right are dimmed along while a dialog is open.
+- Column split: the list is the widest column by default (55 % beside the sidebar), the sidebar a little wider (280 px); “Reset view” in the menu resets zoom, transparency, bars, marks and column widths.
+
 ## 0.8.4 – 2026-10-31
 - Papierkorb wieder da (Rechtsklick auf den Tresor → Papierkorb): gelöschte Einträge mit Löschdatum und Frist, Wiederherstellen mit einem Klick, endgültig löschen nur wenn die Tresor-Einstellungen es erlauben. Der Löschdialog verweist darauf.
 - Website: Wissensartikel „Den Key Vault richtig betreiben“ (Aufbewahrung, Löschschutz, Wiederherstellung, Backups, Rollen, Protokolle, Netzwerk, Checkliste).

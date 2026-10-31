@@ -52,9 +52,13 @@ const DEFAULTS = {
   offlineMirror: false,
   // View (main menu): zoom factor of the window and see-through ground (off | light | strong, Windows 11 acrylic).
   zoom: 1,
-  transparency: 'off',
+  transparency: 'light',
   // Version for which Keevault.exe was excluded from Windows Error Reporting (no crash dumps).
   werExcluded: '',
+  // View: floating toolbar at the bottom of an entry (the "⋯" beside the title stays either way).
+  entryToolbar: true,
+  // View: small marks before the vaults – cloud for Azure Key Vault, drive for local files.
+  sourceBadges: true,
 };
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled', 'offlineMirror',
   'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];

@@ -40,7 +40,9 @@ export function itemDetail(item, ctx) {
 
   // With ctx.menu (desktop): the actions sit in the head – main action as a button, "quick" ones as icons, the rest
   // behind "⋯". Without it (popup): the classic row of buttons below the fields.
-  const toolbar = ctx.menu && ctx.actions?.length ? itemToolbar(ctx) : null;
+  // Desktop: a quiet "⋯" beside the title (menu on hover) and the floating toolbar at the bottom.
+  const hoverMenu = ctx.menu && ctx.actions?.length ? itemHoverMenu(ctx) : null;
+  const toolbar = ctx.menu && ctx.actions?.length && ctx.showToolbar !== false ? itemToolbar(ctx) : null;
   return h('div', { class: 'item-detail' },
     h('div', { class: 'item-head' },
       avatar(item.title, 'avatar large', item.icon),
@@ -48,15 +50,38 @@ export function itemDetail(item, ctx) {
         h('h2', {}, item.favorite ? icon('star', 14) : null, item.title),
         h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type])].filter(Boolean).join(' · ')),
         expiryBadge(item.expires)),
-      toolbar),
+      hoverMenu),
     // Fields as one card with dividers (modern design); the action bar and meta line stay outside.
     rows.length ? h('div', { class: 'field-card' }, ...rows) : h('p', { class: 'muted' }, t('Keine Felder')),
     h('div', { class: 'meta muted' }, item.updatedBy
       ? t('Geändert {date} von {user}', { date: formatDateTime(item.updated), user: item.updatedBy })
       : t('Geändert {date}', { date: formatDateTime(item.updated) })),
-    !toolbar && ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
+    // Desktop: the toolbar floats at the bottom of the pane (sticky while long entries scroll).
+    toolbar,
+    !toolbar && !hoverMenu && ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
       type: 'button', class: a.danger ? 'btn danger' : a.primary ? 'btn primary' : 'btn', onclick: a.onClick,
     }, icon(a.icon), a.label))) : null);
+}
+
+/**
+ * View "actions at the top": a quiet "⋯" next to the title; hovering (or clicking) opens one menu with every action –
+ * the main one first, quick ones next, the rest below, deleting last.
+ */
+function itemHoverMenu(ctx) {
+  const ordered = [...ctx.actions.filter((a) => a.primary), ...ctx.actions.filter((a) => a.quick && !a.primary), ...ctx.actions.filter((a) => !a.primary && !a.quick)];
+  const items = [];
+  ordered.forEach((a, i) => {
+    const prev = ordered[i - 1];
+    if (prev && ((prev.primary || prev.quick) && !a.primary && !a.quick || a.danger)) items.push('-');
+    items.push({ action: a.action || '', icon: a.icon, label: a.label, danger: a.danger, onClick: a.onClick });
+  });
+  const b = iconButton('more', t('Aktionen'), (e) => ctx.menu(e.currentTarget, items, { below: true }));
+  b.classList.add('item-hover-menu');
+  b.setAttribute('aria-haspopup', 'menu');
+  let timer = null;
+  b.addEventListener('mouseenter', () => { timer = setTimeout(() => { if (!document.querySelector('.context-menu')) ctx.menu(b, items, { below: true }); }, 150); });
+  b.addEventListener('mouseleave', () => clearTimeout(timer));
+  return b;
 }
 
 /** Head toolbar: primary actions as buttons, quick actions as icon buttons, everything else in the "⋯" menu. */
@@ -74,15 +99,17 @@ function itemToolbar(ctx) {
   }) : null;
   more?.classList.add('item-more');
   more?.setAttribute('aria-haspopup', 'menu');
-  return h('div', { class: 'item-tools' },
-    ...quick.map((a) => {
-      const b = iconButton(a.icon, a.label, a.onClick);
-      if (a.on) b.classList.add('on');
-      if (a.on !== undefined) b.setAttribute('aria-pressed', String(!!a.on));
-      return b;
-    }),
-    more,
-    ...primary.map((a) => h('button', { type: 'button', class: 'btn primary', onclick: a.onClick }, icon(a.icon), a.label)));
+  // One capsule: quick icons | main action as a quiet text button | "⋯" – separated by hairlines.
+  const sep = () => h('span', { class: 'item-tools-sep', 'aria-hidden': 'true' });
+  const quickButtons = quick.map((a) => {
+    const b = iconButton(a.icon, a.label, a.onClick);
+    if (a.on) b.classList.add('on');
+    if (a.on !== undefined) b.setAttribute('aria-pressed', String(!!a.on));
+    return b;
+  });
+  const main = primary.map((a) => h('button', { type: 'button', class: 'item-tools-main', onclick: a.onClick }, icon(a.icon, 15), a.label));
+  return h('div', { class: 'item-tools floating', role: 'toolbar', 'aria-label': t('Aktionen') },
+    ...quickButtons, quickButtons.length && main.length ? sep() : null, ...main, more ? sep() : null, more);
 }
 
 /** "Gültig bis" with a warning when the date is near or past. */

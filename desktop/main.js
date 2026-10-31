@@ -1021,8 +1021,12 @@ function applyView() {
 /** Window buttons over the hidden title bar: the ground colour of the app (extension/styles/app.css --bg). */
 function titleBarColors() {
   const dark = nativeTheme.shouldUseDarkColors;
+  // While a dialog is open the page lies under a dark veil (rgba(10, 12, 16, .45), app.css .modal::backdrop): the
+  // window buttons get the same shade so they do not stand out light against it.
+  if (titleBarDimmed) return { color: dark ? '#121317' : '#8b8d90', symbolColor: dark ? '#868889' : '#13151a', height: 52 };
   return { color: dark ? '#18191d' : '#f5f6f8', symbolColor: dark ? '#eceef2' : '#1b1d22', height: 52 };
 }
+let titleBarDimmed = false;
 
 /** Windows login item of the installed app (tray only, --background); development and MSIX stay untouched. */
 function applyStartWithWindows() {
@@ -1857,6 +1861,12 @@ const api = {
   },
 
   copy: (text) => copyToClipboard(String(text)),
+  /** Renderer: a dialog opened or closed – the window buttons follow the veil behind it. */
+  titleBarDim(dim) {
+    titleBarDimmed = !!dim;
+    if (process.platform === 'win32' && win && !win.isDestroyed()) win.setTitleBarOverlay(titleBarColors());
+    return true;
+  },
   /**
    * Auto-type for Strg+Umschalt+U/P/O: minimizes the app so that the previous window gets the focus back and
    * types user name, password or current one-time code there – no clipboard involved.
@@ -2771,6 +2781,32 @@ function runSmokeTest() {
           const shown = await js('document.querySelector(".detail-pane .item-head h2")?.textContent || ""');
           if (!shown.includes('Grafana')) errors.push(`itemlink: expected Grafana in the detail pane, got "${shown}"`);
         }
+      }
+      if (view === 'newfolder') {
+        // New entry, then a folder picked in the list: the form takes the folder over and keeps what was typed.
+        await js('document.querySelector(".top-actions .btn.primary")?.click()');
+        await sleep(300);
+        await js('document.querySelector(".context-menu [data-action=new-login]")?.click()');
+        await sleep(400);
+        await js('(() => { const t = document.querySelector(".editor input[name=title]"); t.value = "Neuer Test"; t.dispatchEvent(new Event("input", { bubbles: true })); })()');
+        await js('[...document.querySelectorAll(".list li")].find((r) => /Monitoring/.test(r.textContent))?.click()');
+        await sleep(400);
+        const r = await js('JSON.stringify({ folder: document.querySelector(".editor [name=folder]")?.value, title: document.querySelector(".editor input[name=title]")?.value })');
+        if (!/"folder":"Monitoring"/.test(r) || !/"title":"Neuer Test"/.test(r)) errors.push(`newfolder: form did not take the folder over (${r})`);
+      }
+      if (view === 'topmenu') {
+        // Variant "actions at the top": quiet ⋯ beside the title, menu open (screenshot only).
+        await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
+        await sleep(500);
+        await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
+        await sleep(400);
+      }
+      if (view === 'itemmenu') {
+        // Entry with the "⋯" menu of its head toolbar open (screenshot only).
+        await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
+        await sleep(500);
+        await js('document.querySelector(".detail-pane .item-more")?.click()');
+        await sleep(400);
       }
       if (view === 'add') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');

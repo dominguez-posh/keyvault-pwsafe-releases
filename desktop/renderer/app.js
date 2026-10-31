@@ -44,6 +44,16 @@ document.body.prepend(h('div', { class: 'drag-strip', 'aria-hidden': 'true' }));
 const topSearch = h('div', { class: 'top-search' });
 // "New" in the top bar, at the content edge of the detail column.
 const topActions = h('div', { class: 'top-actions' });
+// Window buttons (drawn by Windows) are dimmed with the page while a dialog is open.
+if (/Win/.test(navigator.platform)) {
+  let dimmed = false;
+  new MutationObserver(() => {
+    const now = !!document.querySelector('dialog.modal[open]');
+    if (now === dimmed) return;
+    dimmed = now;
+    window.pwsafe.invoke('titleBarDim', [now]).catch?.(() => {});
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] });
+}
 const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { class: 'list-pane' }), detail: h('section', { class: 'detail-pane' }) };
 const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '', searchAll: false };
 // Vaults that fit in the sidebar without scrolling; with more, the list scrolls and a search appears above it.
@@ -369,8 +379,10 @@ async function render() {
 
 // ---------------------------------------------------------------- resizable panes
 
-const PANE_DEFAULTS = { sidebar: 250, list: 380 };
-const PANE_LIMITS = { sidebar: [180, 420], list: [260, 720] };
+// Default split: the list is the widest column (about half the window), the detail beside it.
+// list: null = proportional (55 % of the width beside the sidebar) until the user drags it.
+const PANE_DEFAULTS = { sidebar: 280, list: null };
+const PANE_LIMITS = { sidebar: [180, 420], list: [260, 960] };
 const DETAIL_MIN = 340;
 
 function paneWidths() {
@@ -388,7 +400,8 @@ function setupSplitters(shell) {
     // Keep room for the detail pane when the window is narrow.
     const room = Math.max(0, shell.clientWidth - DETAIL_MIN);
     const sidebar = Math.min(Math.max(widths.sidebar, PANE_LIMITS.sidebar[0]), PANE_LIMITS.sidebar[1]);
-    const list = Math.max(PANE_LIMITS.list[0], Math.min(widths.list, PANE_LIMITS.list[1], room > 0 ? room - sidebar : Infinity));
+    const wanted = widths.list ?? Math.round((shell.clientWidth - sidebar) * 0.55);
+    const list = Math.max(PANE_LIMITS.list[0], Math.min(wanted, PANE_LIMITS.list[1], room > 0 ? room - sidebar : Infinity));
     shell.style.setProperty('--sidebar-w', `${sidebar}px`);
     shell.style.setProperty('--list-w', `${list}px`);
     handles.sidebar.style.left = `${sidebar}px`;
@@ -405,7 +418,7 @@ function setupSplitters(shell) {
       el.classList.add('dragging');
       shell.classList.add('resizing');
       const startX = e.clientX;
-      const start = widths[pane];
+      const start = parseInt(shell.style.getPropertyValue(pane === 'list' ? '--list-w' : '--sidebar-w'), 10) || 0;
       const move = (ev) => {
         widths[pane] = Math.round(start + ev.clientX - startX);
         apply();
@@ -590,12 +603,55 @@ function select(next) {
   if (next.view !== undefined && (next.view !== ui.view || next.containerId !== ui.containerId)) ui.type = '';
   // Searching starts in the vault one is in again after switching ("All" is a deliberate choice per search).
   if (next.containerId !== undefined && next.containerId !== ui.containerId) ui.searchAll = false;
-  Object.assign(ui, next, { editing: null });
+  // A new entry being written stays open while the user picks another vault or folder; the form takes it over.
+  const keepNew = ui.editing === 'new' && !('selected' in next);
+  Object.assign(ui, next, { editing: keepNew ? 'new' : null });
   if (ui.selected && !visibleItems().some((i) => i.key === ui.selected)) ui.selected = null;
   for (const k of ui.multi) if (!items.some((i) => i.key === k)) ui.multi.delete(k);
   renderSidebar();
   renderList();
-  renderDetail();
+  if (keepNew) syncNewEntryTarget();
+  else renderDetail();
+}
+
+/**
+ * New entry open while the user navigates: vault (sidebar) and folder (list) go straight into the form – the rest of
+ * what was typed stays.
+ */
+function syncNewEntryTarget() {
+  if (ui.editing !== 'new') return;
+  const pane = panes.detail;
+  const vault = pane.querySelector('select[name=container]');
+  if (vault && ui.containerId && [...vault.options].some((o) => o.value === ui.containerId) && vault.value !== ui.containerId) {
+    vault.value = ui.containerId;
+    vault.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  const folder = pane.querySelector('[name=folder]');
+  if (folder && ui.containerId) {
+    const value = ui.folder || '';
+    if (folder.tagName === 'SELECT' && ![...folder.options].some((o) => o.value === value)) folder.append(h('option', { value }, value));
+    if (folder.value !== value) {
+      folder.value = value;
+      folder.dispatchEvent(new Event('input', { bubbles: true }));
+      folder.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+}
+
+let sourceSeq = 0;
+/**
+ * Where a vault lives, as a small coloured mark before its icon: a blue "A" in the style of Azure for Key Vault, a drive for a
+ * local file vault (View → "Speicherort" switches it off).
+ */
+function sourceBadge(c) {
+  if (st.settings.sourceBadges === false) return null;
+  const id = `src${++sourceSeq}`;
+  const azure = c.kind !== 'file';
+  const el = h('span', { class: `source-badge ${azure ? 'azure' : 'local'}`, title: azure ? t('In Azure Key Vault') : t('Lokale Datei'), 'aria-label': azure ? t('In Azure Key Vault') : t('Lokale Datei'), role: 'img' });
+  el.innerHTML = azure
+    ? `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><defs><linearGradient id="${id}a" x1="0" y1="1" x2="0.6" y2="0"><stop offset="0" stop-color="#0a4fa8"/><stop offset="1" stop-color="#2b8be6"/></linearGradient><linearGradient id="${id}b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3ea2ff"/><stop offset="1" stop-color="#1677e0"/></linearGradient></defs><path d="M3.4 19.5 9.9 4.3a.9.9 0 0 1 .83-.55h3.1L7.3 19.5z" fill="url(#${id}a)"/><path d="M12.9 9.4l7.7 10.1H8.7l4.1-4.6-1.6-2.6z" fill="url(#${id}b)"/></svg>`
+    : `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9aa3b2"/><stop offset="1" stop-color="#5d6779"/></linearGradient></defs><rect x="3" y="6.5" width="18" height="11" rx="3" fill="url(#${id})"/><path d="M6.5 14.2h7" stroke="#fff" stroke-opacity=".5" stroke-width="1.3" stroke-linecap="round"/><circle cx="17.2" cy="14.2" r="1.3" fill="#3ddc84"/></svg>`;
+  return el;
 }
 
 function containerIcon(c) {
@@ -622,7 +678,7 @@ function renderSidebar() {
         class: `nav ${ui.containerId === c.id ? 'active' : ''}`,
         title: [c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
         onclick: () => select({ view: 'container', containerId: c.id }),
-      }, containerIcon(c), h('span', { class: 'nav-label' }, c.name),
+      }, sourceBadge(c), containerIcon(c), h('span', { class: 'nav-label' }, c.name),
       c.error ? h('span', { class: 'badge danger' }, '!') : c.locked ? icon('lock', 13) : h('span', { class: 'count' }, c.count ?? '')),
       refresh);
   });
@@ -684,7 +740,7 @@ function helpDialog() {
 
 /** See-through ground (light/strong) as classes on <html>; the main process switches the window material. */
 function applyViewClass() {
-  const mode = st?.settings?.transparency || 'off';
+  const mode = st?.settings?.transparency || 'light';
   document.documentElement.classList.toggle('see-through', mode === 'light' || mode === 'strong');
   document.documentElement.classList.toggle('see-through-strong', mode === 'strong');
 }
@@ -723,15 +779,56 @@ function zoomControl() {
     step(1, t('Vergrößern (Strg +)'), '+'));
 }
 
+/** View: the floating toolbar of an entry on or off (the "⋯" beside the title keeps every action reachable). */
+function toolbarControl() {
+  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': t('Leiste unten'), 'data-view-value': '' });
+  const draw = () => box.replaceChildren(...[[true, t('An')], [false, t('Aus')]].map(([value, label]) => h('button', {
+    type: 'button', role: 'radio', 'aria-checked': String((st.settings.entryToolbar !== false) === value), class: (st.settings.entryToolbar !== false) === value ? 'on' : '',
+    onclick: async () => { await setView({ entryToolbar: value }); renderDetail(); },
+  }, label)));
+  box.addEventListener('view-changed', draw);
+  draw();
+  return box;
+}
+
+/** View → "Ansicht auf Standard": zoom, transparency, bottom bar, source marks and column widths as on first start. */
+async function resetView() {
+  try { localStorage.removeItem('paneWidths'); } catch {}
+  await setView({ zoom: 1, transparency: 'light', entryToolbar: true, sourceBadges: true });
+  await render();
+  toast(t('Ansicht zurückgesetzt'));
+}
+
+/** View: the source marks (Azure / local) before the vaults on or off. */
+function sourceControl() {
+  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': t('Speicherort'), 'data-view-value': '' });
+  const draw = () => box.replaceChildren(...[[true, t('An')], [false, t('Aus')]].map(([value, label]) => h('button', {
+    type: 'button', role: 'radio', 'aria-checked': String((st.settings.sourceBadges !== false) === value), class: (st.settings.sourceBadges !== false) === value ? 'on' : '',
+    onclick: async () => { await setView({ sourceBadges: value }); renderSidebar(); },
+  }, label)));
+  box.addEventListener('view-changed', draw);
+  draw();
+  return box;
+}
+
 function transparencyControl() {
   const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': t('Transparenz'), 'data-view-value': '' });
   const draw = () => box.replaceChildren(...[['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]].map(([value, label]) => h('button', {
-    type: 'button', role: 'radio', 'aria-checked': String((st.settings.transparency || 'off') === value), class: (st.settings.transparency || 'off') === value ? 'on' : '',
+    type: 'button', role: 'radio', 'aria-checked': String((st.settings.transparency || 'light') === value), class: (st.settings.transparency || 'light') === value ? 'on' : '',
     onclick: () => setView({ transparency: value }),
   }, label)));
   box.addEventListener('view-changed', draw);
   draw();
   return box;
+}
+
+/** Empty detail pane: the Keevault mark as a quiet outline – shield with the keyhole, like a shadow of the logo. */
+function placeholderMark() {
+  const mark = h('span', { class: 'placeholder-mark', 'aria-hidden': 'true' });
+  mark.innerHTML = '<svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">'
+    + '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+    + '<path d="M12 8.3a2 2 0 0 1 1.15 3.64l.6 3.56h-3.5l.6-3.56A2 2 0 0 1 12 8.3z" fill="currentColor" stroke="none"/></svg>';
+  return mark;
 }
 
 /** Burger next to the logo: opens the main menu; a dot when the password check reports expiring entries. */
@@ -770,6 +867,9 @@ function mainMenu(anchor) {
     h('div', { class: 'main-menu-label' }, t('Ansicht')),
     viewRow(t('Zoom'), zoomControl()),
     viewRow(t('Transparenz'), transparencyControl()),
+    viewRow(t('Leiste unten'), toolbarControl()),
+    viewRow(t('Speicherort'), sourceControl()),
+    entry('view-reset', 'refresh', t('Ansicht auf Standard'), resetView),
     h('div', { class: 'context-sep' }),
     entry('lock', 'lock', t('Sperren'), () => call('lock')));
   const close = () => {
@@ -1182,6 +1282,7 @@ function folderRows(container, list, row, rerender) {
   const open = (f) => {
     ui.folder = f;
     rerender();
+    syncNewEntryTarget();
   };
   const out = [];
   if (cur) {
@@ -2201,7 +2302,7 @@ async function renderDetail() {
   if (ui.editing) return renderEditor();
   if (ui.multi.size > 1) return renderMultiSelection();
   if (!ui.selected) {
-    pane.replaceChildren(h('div', { class: 'placeholder' }, icon('shield', 56), h('p', {}, t('Wähle einen Eintrag aus oder lege einen neuen an.'))));
+    pane.replaceChildren(h('div', { class: 'placeholder' }, placeholderMark(), h('p', {}, t('Wähle einen Eintrag aus oder lege einen neuen an.'))));
     return undefined;
   }
   const key = ui.selected;
@@ -2238,9 +2339,13 @@ async function renderDetail() {
       }
     } : null,
     // "⋯" in the head opens the same menu as a right-click in the list.
-    menu: (anchor, items) => {
+    showToolbar: st.settings.entryToolbar !== false,
+    menu: (anchor, items, { below = false } = {}) => {
       const r = anchor.getBoundingClientRect();
-      contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: r.bottom + 6 }, items);
+      if (below) return contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: r.bottom + 6 }, items);
+      // The toolbar floats at the bottom: the menu opens upwards, right above it.
+      const height = items.reduce((sum, x) => sum + (x === '-' ? 9 : 34), 10);
+      contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: Math.max(8, r.top - height - 6) }, items);
     },
     actions: [
       canWrite ? { icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: () => {
