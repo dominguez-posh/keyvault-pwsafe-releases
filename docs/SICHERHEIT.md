@@ -216,6 +216,26 @@ Chiffretext.
 - Entsperrte Tresor-Schlüssel liegen nur im Arbeitsspeicher (Erweiterung: `chrome.storage.session`) und werden
   beim Sperren verworfen.
 
+## Persönlicher Tresor
+
+Ein Datei-Tresor (Format 1) nur für eine Person, kostenlos und nicht teilbar.
+
+- **Speicherort:** nur synchronisierte Ordner (OneDrive, iCloud, Dropbox …) oder Netzlaufwerke. Die App prüft das
+  über die Windows-Cloud-Files-API (`CfGetSyncRootInfoByPath`, `CfGetPlaceholderInfo`) bzw. UNC/Laufwerkstyp und
+  lehnt lokale Ordner ab; der Sync-Zustand wird regelmäßig angezeigt.
+- **Verschlüsselung:** wie Datei-Tresore – Masterpasswort (mind. 12 Zeichen, PBKDF2-SHA-256 600 000 Runden),
+  Wiederherstellungsschlüssel, optional FIDO-Stick mit PRF.
+- **Entsperren mit der App-PIN:** Der Tresor-Schlüssel liegt auf dem Gerät, verschlüsselt mit AES-256-GCM unter
+  einem Schlüssel aus PIN (PBKDF2, 310 000 Runden, eigenes Salz; AAD bindet an die Tresor-ID) und darüber mit
+  DPAPI (`safeStorage`) an das Windows-Konto. Eine kopierte Tresor-Datei ist ohne Masterpasswort nicht zu öffnen;
+  wer Konto **und** PIN hat, kommt auf diesem Gerät hinein – deshalb gilt die PIN-Sperre nach Fehlversuchen.
+  Solange ein persönlicher Tresor eingerichtet ist, lässt sich die PIN nicht entfernen; eine neue PIN bindet den
+  Schlüssel neu.
+- **Abgrenzung:** keine Einladungen; Einträge aus geteilten Tresoren lassen sich nicht hineinschieben (Schutz vor
+  Abfluss von Firmendaten), umgekehrt schon.
+- **Restrisiko:** Konfliktkopien des Sync-Programms bei gleichzeitiger Bearbeitung auf zwei Geräten werden nicht
+  zusammengeführt.
+
 ## Desktop-App ↔ Erweiterung
 
 Der Native-Messaging-Host ist nur für den eigenen Windows-Benutzer registriert und nur für die eingetragenen

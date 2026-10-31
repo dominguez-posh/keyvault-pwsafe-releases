@@ -4,11 +4,17 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
-## 0.8.6 – in Arbeit
+## 0.8.6 – 2026-10-31
+- Tresor-Überschrift aufgeräumt: Ein Symbol vor dem Namen zeigt deine Berechtigung – Auge (nur lesen), Stift (bearbeiten), Schild (verwalten), Krone (Besitzer, darf Berechtigungen vergeben); beim Darüberfahren steht sie ausgeschrieben. Demo- oder Test-Lizenz stehen rechts neben dem Namen.
+- Neu: persönlicher Tresor – kostenlos, nur für dich und nicht teilbar. Ein Assistent richtet ihn in wenigen Schritten ein: Speicherort (OneDrive, iCloud, Dropbox oder ein Netzlaufwerk – nie lokal), Masterpasswort mit Wiederherstellungsschlüssel, optional ein FIDO-Stick. Im Alltag entsperrt deine eine App-PIN App und persönlichen Tresor zugleich. Er steht oben in der Seitenleiste mit Person- und Anbieter-Symbol; Keevault zeigt, ob die Datei synchronisiert ist. Einträge aus geteilten Tresoren lassen sich nicht hineinschieben, aus dem persönlichen in geteilte schon.
+- Unten links neben „Hilfe“ steht die Organisation, mit der du bei Microsoft angemeldet bist.
 - Transparenz „Leicht“ ist jetzt Standard (auch nach „Ansicht auf Standard“).
 - Website: Die Live-Demo zeigt einen dezenten Glas-Effekt – ein Farbverlauf schimmert durch den Grund, die Karten bleiben deckend.
 
 ### English
+- Tidier vault heading: a symbol before the name shows your permission – eye (read only), pen (edit), shield (manage), crown (owner, may grant permissions); hovering spells it out. Demo or trial license sit right of the name.
+- New: personal vault – free, just for you and not shareable. A wizard sets it up in a few steps: location (OneDrive, iCloud, Dropbox or a network drive – never local), master password with recovery key, optionally a FIDO key. Day to day your one app PIN unlocks the app and the personal vault together. It sits at the top of the sidebar with a person and a provider mark; Keevault shows whether the file is in sync. Entries from shared vaults cannot be moved in, from the personal vault to shared ones they can.
+- Bottom left next to “Help” shows the organisation you are signed in to Microsoft with.
 - Transparency “Light” is now the default (also after “Reset view”).
 - Website: the live demo shows a subtle glass effect – a colour gradient shines through the ground, the cards stay opaque.
 

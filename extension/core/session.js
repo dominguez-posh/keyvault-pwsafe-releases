@@ -913,6 +913,7 @@ export class VaultSession {
   /** { licensed, code, vault, count, limit, to?, issued?, reason? } */
   async licenseState(containerId) {
     const c = await this.container(containerId);
+    if (c.personal) return { licensed: true, personal: true, code: '', vault: c.id, count: 0, limit: FREE_LIMIT, to: '', issued: '', reason: null };
     const key = await this.containerLicenseKey(c).catch(() => null);
     const check = key ? await verifyLicense(key, c.id) : { valid: false };
     const count = (await this.summaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === containerId).length;
@@ -941,6 +942,7 @@ export class VaultSession {
   /** New entries beyond the free limit need a license (edits and deletions never do). */
   async requireLicenseForNew(c) {
     if (c.kind === 'remote') return; // the desktop app checks
+    if (c.personal) return; // the personal vault is free
     const count = (await this.summaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === c.id).length;
     if (count < FREE_LIMIT) return;
     const key = await this.containerLicenseKey(c).catch(() => null);
@@ -990,6 +992,9 @@ export class VaultSession {
   }
 
   async moveItem(fromId, toId, id) {
+    // Nothing leaves a shared vault into the personal one (only the owner could read it there).
+    const [from, to] = await Promise.all([this.container(fromId), this.container(toId)]);
+    if (to.personal && !from.personal) throw new Error(t('Einträge aus geteilten Tresoren lassen sich nicht in den persönlichen Tresor verschieben'));
     const item = await this.getItem(fromId, id, { fresh: true });
     const saved = await this.saveItem(toId, { ...item, id: '' });
     await this.deleteItem(fromId, id);

@@ -498,3 +498,35 @@ dialog .member .row-sub { white-space: normal; }
 html.web-demo-embedded, html.web-demo-embedded body { background: transparent; }
 html.web-demo-embedded .shell { background: color-mix(in srgb, var(--bg) 62%, transparent); }
 html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { background: color-mix(in srgb, var(--surface) 94%, transparent); }
+
+/* Location marks of file vaults (cloud folder / network drive) with a dot when not in sync. */
+.source-badge.cloud, .source-badge.network { position: relative; }
+.source-badge.pending::after, .source-badge.problem::after { content: ""; position: absolute; right: -1px; bottom: 0; width: 7px; height: 7px; border-radius: 50%; box-shadow: 0 0 0 2px var(--bg); }
+.source-badge.pending::after { background: #e8a400; }
+.source-badge.problem::after { background: var(--danger); }
+
+/* Personal vault wizard */
+.wizard { display: grid; gap: 12px; min-width: min(520px, 80vw); }
+.wizard-steps { display: flex; gap: 6px; list-style: none; margin: 0 0 6px; padding: 0; flex-wrap: wrap; }
+.wizard-steps li { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; }
+.wizard-steps li span { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); font-weight: 700; font-size: 11px; }
+.wizard-steps li.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.wizard-steps li.on span { background: var(--accent); color: var(--on-accent); }
+.wizard-steps li.done span { background: var(--success); color: #fff; }
+.wizard-points { margin: 0; padding-left: 18px; display: grid; gap: 6px; line-height: 1.45; }
+.wizard-path { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); overflow-wrap: anywhere; }
+.wizard-choice { display: grid; gap: 6px; }
+.wizard-buttons { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+/* The personal vault: its own place right below the views, a hairline above it. */
+.personal-slot { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+/* Organisation of the signed-in account next to "Help". */
+.sidebar-foot { align-items: center; gap: 8px; }
+.org-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-left: auto; color: var(--muted); font-size: 12px; }
+.org-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Vault heading: permission symbol, name, then license and state tags on the same line. */
+.list-title .title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.list-title .title-row h2 { flex: 0 1 auto; min-width: 0; }
+.list-title .title-row .head-badges { flex: 0 0 auto; flex-wrap: nowrap; }
+.role-mark { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; color: var(--muted); background: var(--accent-soft); cursor: help; }
+.role-mark.role-write, .role-mark.role-admin { color: var(--accent); }
+.role-mark.role-owner { color: #b7791f; background: rgba(214, 158, 46, .14); }

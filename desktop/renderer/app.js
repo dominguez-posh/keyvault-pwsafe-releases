@@ -1,7 +1,7 @@
 import { h, icon, iconButton, setChildren, toast, avatar, modal, confirmDialog, formatDateTime, passkeySuccess } from '../../extension/core/dom.js';
 import { itemDetail, itemForm, generatorPanel } from '../../extension/core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../../extension/core/generator.js';
-import { unlockPanel, manageDialog, enableDialog, setClipboardWriter } from '../../extension/core/ui-protect.js';
+import { unlockPanel, manageDialog, enableDialog, setClipboardWriter, showRecoveryKey } from '../../extension/core/ui-protect.js';
 // Codes in dialogs (recovery key, invitation code) go through the app's clipboard like everything else.
 setClipboardWriter((text) => call('copy', text));
 import { importDialog } from '../../extension/core/ui-import.js';
@@ -141,7 +141,7 @@ function tabbed(key, pages) {
 }
 const notice = (text, kind = 'error') => h('div', { class: `notice ${kind}` }, text);
 const writable = (c) => c.access?.write !== false && !c.error && !c.locked;
-const writableContainers = () => st.containers.filter(writable).map((c) => ({ id: c.id, name: c.name }));
+const writableContainers = () => st.containers.filter(writable).map((c) => ({ id: c.id, name: c.name, personal: !!c.personal }));
 
 const protectCtx = {
   info: (id) => call('protectionInfo', id),
@@ -373,6 +373,11 @@ async function render() {
   checkWindowsRequests();
   loadLogos();
   if (st.requirePin && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ forced: true });
+  // First start after setting up: offer the personal vault once (use an existing one or create a new one).
+  else if (!st.settings.personalVault && !st.settings.personalOffered && !document.querySelector('dialog[open]') && !st.smoke) {
+    call('updateSettings', { personalOffered: true }).catch(() => {});
+    setTimeout(() => personalWizard(), 400);
+  }
   await renderDetail();
   if (pendingItemLink) openItemLink(pendingItemLink);
 }
@@ -638,6 +643,8 @@ function syncNewEntryTarget() {
   }
 }
 
+// Where a personal vault may live: a synchronised cloud folder or a network drive (never only on this device).
+const REMOTE_KINDS = 'cloud network'.split(' ');
 let sourceSeq = 0;
 /**
  * Where a vault lives, as a small coloured mark before its icon: a blue "A" in the style of Azure for Key Vault, a drive for a
@@ -647,6 +654,8 @@ function sourceBadge(c) {
   if (st.settings.sourceBadges === false) return null;
   const id = `src${++sourceSeq}`;
   const azure = c.kind !== 'file';
+  const loc = c.location;
+  if (!azure && REMOTE_KINDS.includes(loc?.kind)) return locationBadge(c, loc, id);
   const el = h('span', { class: `source-badge ${azure ? 'azure' : 'local'}`, title: azure ? t('In Azure Key Vault') : t('Lokale Datei'), 'aria-label': azure ? t('In Azure Key Vault') : t('Lokale Datei'), role: 'img' });
   el.innerHTML = azure
     ? `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><defs><linearGradient id="${id}a" x1="0" y1="1" x2="0.6" y2="0"><stop offset="0" stop-color="#0a4fa8"/><stop offset="1" stop-color="#2b8be6"/></linearGradient><linearGradient id="${id}b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3ea2ff"/><stop offset="1" stop-color="#1677e0"/></linearGradient></defs><path d="M3.4 19.5 9.9 4.3a.9.9 0 0 1 .83-.55h3.1L7.3 19.5z" fill="url(#${id}a)"/><path d="M12.9 9.4l7.7 10.1H8.7l4.1-4.6-1.6-2.6z" fill="url(#${id}b)"/></svg>`
@@ -654,7 +663,39 @@ function sourceBadge(c) {
   return el;
 }
 
+/** Small mark of the sync provider (own drawings in the providers' colours): OneDrive, iCloud, Dropbox, Google Drive, other clouds. */
+function providerMark(provider, id) {
+  const svg = (inner) => `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">${inner}</svg>`;
+  if (/onedrive/i.test(provider)) {
+    return svg('<path d="M9.6 9.1a5.3 5.3 0 0 1 9.4 2.3 3.6 3.6 0 0 1 .5 7.1H9.2z" fill="#0364b8"/><path d="M5.6 18.5a3.9 3.9 0 0 1-.3-7.8 5 5 0 0 1 9.4-1.2 4.4 4.4 0 0 1 3.7 4.3 3.5 3.5 0 0 1-.4 4.7z" fill="#28a8ea"/>');
+  }
+  if (/icloud/i.test(provider)) {
+    return svg(`<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5ab2ff"/><stop offset="1" stop-color="#1e6fe0"/></linearGradient></defs><path d="M7 18.5h10.6a3.9 3.9 0 0 0 .6-7.75 5.8 5.8 0 0 0-11-1.7A4.75 4.75 0 0 0 7 18.5z" fill="#fff" stroke="url(#${id})" stroke-width="1.8"/>`);
+  }
+  if (/dropbox/i.test(provider)) {
+    return svg('<path d="M7.5 3.5 3 6.4l4.5 2.9L12 6.4zm9 0L12 6.4l4.5 2.9L21 6.4zM3 12.2l4.5 2.9 4.5-2.9-4.5-2.9zm13.5-2.9L12 12.2l4.5 2.9 4.5-2.9zM7.6 16l4.4 2.9 4.4-2.9-4.4-2.8z" fill="#0061fe"/>');
+  }
+  if (/google/i.test(provider)) {
+    return svg('<path d="M8.4 4h7.2l6 10.4h-7.2z" fill="#ffba00"/><path d="M8.4 4 2.4 14.4 6 20.6l6-10.4z" fill="#0f9d58"/><path d="M6 20.6h12l3.6-6.2H9.6z" fill="#4285f4"/>');
+  }
+  return svg(`<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9aa9bd"/><stop offset="1" stop-color="#5f7088"/></linearGradient></defs><path d="M6.8 19h11a4.2 4.2 0 0 0 .5-8.37A6 6 0 0 0 6.9 9.3 4.85 4.85 0 0 0 6.8 19z" fill="url(#${id})"/>`);
+}
+
+/** Cloud folder (OneDrive, iCloud, Dropbox …) or network drive, with a dot when the file is not in sync. */
+function locationBadge(c, loc, id) {
+  const cloud = loc.kind === 'cloud';
+  const problem = loc.providerStatus === 'error' || loc.providerStatus === 'offline' || loc.providerStatus === 'terminated';
+  const pending = !problem && (loc.inSync === false || loc.providerStatus === 'syncing');
+  const state = problem ? t('Synchronisierung gestört') : pending ? t('wird synchronisiert …') : loc.inSync ? t('synchronisiert') : '';
+  const title = [cloud ? loc.provider || t('Cloud-Ordner') : t('Netzlaufwerk'), state].filter(Boolean).join(' · ');
+  const el = h('span', { class: `source-badge ${cloud ? 'cloud' : 'network'} ${problem ? 'problem' : pending ? 'pending' : ''}`, title, 'aria-label': title, role: 'img' });
+  el.innerHTML = cloud ? providerMark(loc.provider || '', id)
+    : `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fa3c0"/><stop offset="1" stop-color="#4f6584"/></linearGradient></defs><rect x="3" y="4" width="18" height="9" rx="2.5" fill="url(#${id})"/><path d="M12 13v4M6 19h12" stroke="#4f6584" stroke-width="1.8" stroke-linecap="round"/><circle cx="17" cy="8.5" r="1.2" fill="#3ddc84"/></svg>`;
+  return el;
+}
+
 function containerIcon(c) {
+  if (c.personal) return icon('user');
   if (logos.get(c.id)) return h('img', { class: 'container-logo', src: logos.get(c.id), alt: '' });
   if (c.kind === 'file') return icon('note');
   return icon(c.protected ? 'shield' : 'vault');
@@ -665,7 +706,8 @@ function renderSidebar() {
     class: `nav ${ui.view === view && !ui.containerId ? 'active' : ''}`,
     onclick: () => select({ view, containerId: null }),
   }, icon(iconName), h('span', { class: 'nav-label' }, label), h('span', { class: 'count' }, count));
-  const containers = st.containers.map((c) => {
+  // The personal vault has its own place right below the views; the vault list shows the others.
+  const vaultRow = (c) => {
     const refresh = iconButton('refresh', t('Aktualisieren'), (e) => {
       e.stopPropagation();
       refreshContainer(c, refresh);
@@ -678,10 +720,13 @@ function renderSidebar() {
         class: `nav ${ui.containerId === c.id ? 'active' : ''}`,
         title: [c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
         onclick: () => select({ view: 'container', containerId: c.id }),
-      }, sourceBadge(c), containerIcon(c), h('span', { class: 'nav-label' }, c.name),
+      // Personal vault: the person first, then where it lives (OneDrive, iCloud, Dropbox …); other vaults the other way round.
+      }, ...(c.personal ? [containerIcon(c), sourceBadge(c)] : [sourceBadge(c), containerIcon(c)]), h('span', { class: 'nav-label' }, c.name),
       c.error ? h('span', { class: 'badge danger' }, '!') : c.locked ? icon('lock', 13) : h('span', { class: 'count' }, c.count ?? '')),
       refresh);
-  });
+  };
+  const personal = st.containers.find((c) => c.personal);
+  const containers = st.containers.filter((c) => !c.personal).map(vaultRow);
   setChildren(panes.sidebar,
     h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), h('span', { class: 'brand-name' }, 'Keevault'),
       st.offline ? h('span', { class: 'badge warn', title: t('Letzter Stand: {date}', { date: formatDateTime(st.offlineAt) }) }, t('Offline')) : null,
@@ -691,12 +736,13 @@ function renderSidebar() {
     nav('all', t('Alle Einträge'), 'shield', items.length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite).length),
     nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
+    personal ? h('div', { class: 'personal-slot' }, vaultRow(personal)) : null,
     h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length ? h('span', { class: 'count' }, containers.length) : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
     // Pinned to the bottom edge (sticky): stays reachable however many vaults the list above holds.
     h('div', { class: 'sidebar-foot' }, h('button', { type: 'button', class: 'help-btn', title: t('Hilfe und Tipps (F1)'), onclick: helpDialog },
-      h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe'))),
+      h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe')), orgLabel()),
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
         await call('signIn');
@@ -829,6 +875,25 @@ function placeholderMark() {
     + '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
     + '<path d="M12 8.3a2 2 0 0 1 1.15 3.64l.6 3.56h-3.5l.6-3.56A2 2 0 0 1 12 8.3z" fill="currentColor" stroke="none"/></svg>';
   return mark;
+}
+
+// Organisation of the signed-in account (Entra tenant name), shown quietly next to "Help".
+let orgCache = null; // { tenantId, name }
+let orgLoading = false;
+function orgLabel() {
+  const tenantId = st.account?.tenantId;
+  if (!tenantId) return null;
+  const domain = (st.account.username || '').split('@')[1] || '';
+  if (orgCache?.tenantId !== tenantId && !orgLoading) {
+    orgLoading = true;
+    call('tenants').then((list) => {
+      const own = list.find((x) => x.tenantId === tenantId);
+      orgCache = { tenantId, name: own?.name || domain };
+      renderSidebar();
+    }, () => { orgCache = { tenantId, name: domain }; }).finally(() => { orgLoading = false; });
+  }
+  const name = orgCache?.tenantId === tenantId ? orgCache.name : domain;
+  return name ? h('span', { class: 'org-name', title: t('Angemeldet bei {org}', { org: name }) }, icon('users', 13), h('span', {}, name)) : null;
 }
 
 /** Burger next to the logo: opens the main menu; a dot when the password check reports expiring entries. */
@@ -1105,7 +1170,7 @@ function renderList() {
     call('protectionInfo', container.id).then((info) => {
       panes.list.querySelector('.list-scroll').replaceChildren(info.secure
         ? secureUnlockPanel(container, info)
-        : unlockPanel(container, info, protectCtx, () => reloadAll()));
+        : unlockPanel(container, info, protectCtx, async () => { await reloadAll(); if (container.personal && !st.settings.personalDeviceKey) personalPinPrompt(); }));
     }, (e) => panes.list.querySelector('.list-scroll').replaceChildren(notice(e.message)));
     return;
   }
@@ -1491,15 +1556,37 @@ function newFolderDialog(c, prefix) {
   setTimeout(() => name.focus(), 0);
 }
 
+/** Problems with the access (shown as a tag right of the name); the regular levels are a symbol before it (roleMark). */
 function accessBadge(c) {
   if (c.error) return h('span', { class: 'badge danger' }, t('Kein Zugriff'));
-  if (c.kind === 'file' && c.secure && c.role) return h('span', { class: 'badge accent', title: c.path }, t(ROLE_NAMES[c.role]));
-  if (c.kind === 'file') return h('span', { class: 'badge accent', title: c.path }, t('Datei'));
+  if (c.kind === 'file') return null;
   if (!c.access) return h('span', { class: 'badge' }, t('Zugriff unbekannt'));
-  if (c.access.manage && c.access.write) return h('span', { class: 'badge accent' }, t('Verwalten'));
-  if (c.access.write) return h('span', { class: 'badge accent' }, t('Bearbeiten'));
-  if (c.access.read) return h('span', { class: 'badge' }, t('Lesen'));
-  return h('span', { class: 'badge warn' }, t('Ohne Datenzugriff'));
+  if (!c.access.read && !c.access.manage) return h('span', { class: 'badge warn' }, t('Ohne Datenzugriff'));
+  return null;
+}
+
+/** Symbol left of the vault name for the own permission – eye, pen, shield, crown; hover spells it out. */
+function roleMark(c) {
+  const mark = (name, level, text) => h('span', { class: `role-mark role-${level}`, title: text, 'aria-label': text, role: 'img' }, icon(name, 18));
+  const owner = (text) => mark('crown', 'owner', text);
+  const admin = (text) => mark('shield', 'admin', text);
+  const write = (text) => mark('edit', 'write', text);
+  const read = (text) => mark('eye', 'read', text);
+  if (c.error || c.locked && c.kind !== 'file') return null;
+  if (c.personal) return owner(t('Dein persönlicher Tresor – nur du hast Zugriff'));
+  if (c.kind === 'file' && c.secure && c.role) {
+    if (c.role === 'admin') return owner(t('Admin: lesen, bearbeiten und Mitglieder einladen bzw. Berechtigungen vergeben'));
+    if (c.role === 'editor') return write(t('Bearbeiten: Einträge lesen und ändern'));
+    return read(t('Nur lesen: Einträge ansehen und kopieren, nichts ändern'));
+  }
+  if (c.kind === 'file') return write(t('Datei-Tresor: lesen und bearbeiten ({path})', { path: c.path || '' }));
+  const x = c.access;
+  if (!x) return null;
+  if (x.manage) return owner(x.read ? t('Besitzer: lesen, bearbeiten, verwalten und Berechtigungen vergeben') : t('Besitzer: darf Berechtigungen vergeben, hat selbst aber keinen Datenzugriff'));
+  if (x.admin) return admin(t('Verwalten: lesen, bearbeiten und Tresor-Einstellungen festlegen'));
+  if (x.write) return write(t('Bearbeiten: Einträge lesen und ändern'));
+  if (x.read) return read(t('Nur lesen: Einträge ansehen und kopieren, nichts ändern'));
+  return null;
 }
 
 /** Stand-alone password generator: copy, type into another window or start a new entry with it. */
@@ -1950,7 +2037,8 @@ function licenseBadge(c) {
 /** State badges next to the container name (functions: right-click in the sidebar). */
 /** List heading: the full name (wraps instead of being cut off) with the vault badges on a line below it. */
 function listTitle(title, container) {
-  return h('div', { class: 'list-title' }, h('h2', { title }, title), container ? containerBadges(container) : null);
+  return h('div', { class: 'list-title' }, h('div', { class: 'title-row' },
+    container ? roleMark(container) : null, h('h2', { title }, title), container ? containerBadges(container) : null));
 }
 
 function containerBadges(c) {
@@ -2217,7 +2305,9 @@ function folderPickDialog(containerId, keys) {
 }
 
 function moveManyDialog(list) {
-  const targets = writableContainers().filter((c) => !list.every((i) => i.containerId === c.id));
+  // The personal vault is a target only when every selected entry already comes from it.
+  const fromShared = list.some((i) => !st.containers.find((x) => x.id === i.containerId)?.personal);
+  const targets = writableContainers().filter((c) => !list.every((i) => i.containerId === c.id) && !(c.personal && fromShared));
   if (!targets.length) {
     toast(t('Kein anderer Tresor mit Schreibrechten'), 'error');
     return;
@@ -2473,6 +2563,7 @@ function containerMenu() {
     onClick();
   } }, icon(iconName, 20), h('div', {}, h('b', {}, title), h('div', { class: 'muted small' }, text)));
   const { close } = modal(t('Tresor hinzufügen'), h('div', {},
+    st.settings.personalVault ? null : option('user', t('Persönlicher Tresor (kostenlos)'), t('Nur für dich, verschlüsselt in deinem OneDrive (oder einem anderen synchronisierten Ordner bzw. Netzlaufwerk). Masterpasswort, App-PIN, optional FIDO-Stick.'), personalWizard),
     option('note', t('Neuer Datei-Tresor'), t('Verschlüsselte Datei wie bei KeePass, abgesichert mit Passkey und/oder Masterpasswort.'), createFileDialog),
     option('folder', t('Datei-Tresor öffnen'), t('Vorhandene .kvpws-Datei, z. B. von einem Netzlaufwerk.'), openFile),
     option('link', t('Vorhandenen Key Vault hinzufügen'), st.signedIn
@@ -2506,6 +2597,144 @@ function fileRiskBox() {
       h('li', {}, t('Für Teams und Firmendaten empfehlen wir einen Tresor in Azure Key Vault.'))),
     h('label', { class: 'inline' }, accept, t('Ich habe den Hinweis verstanden und bin für den sicheren Speicherort der Datei verantwortlich.')));
   return { box, accepted: () => accept.checked };
+}
+
+// ---------------------------------------------------------------- personal vault wizard
+
+/**
+ * Wizard for the personal vault: what it is → where it lives (OneDrive found automatically, or another synced folder /
+ * network drive; an existing vault there can be used) → master password and app PIN → optional FIDO key → recovery
+ * key. The vault is free and for one person only.
+ */
+async function personalWizard() {
+  const s = { step: 0, info: null, mode: 'create', id: null, recoveryKey: null };
+  const body = h('div', { class: 'wizard' });
+  const { close } = modal(t('Persönlicher Tresor'), body, []);
+  const steps = [t('Start'), t('Speicherort'), t('Schutz'), t('FIDO-Stick'), t('Fertig')];
+  const header = () => h('ol', { class: 'wizard-steps' }, ...steps.map((label, i) => h('li', { class: i === s.step ? 'on' : i < s.step ? 'done' : '' }, h('span', {}, String(i + 1)), label)));
+  const buttons = (...b) => h('div', { class: 'wizard-buttons' }, ...b);
+  const btn = (label, onClick, { primary = false, disabled = false } = {}) => h('button', { type: 'button', class: primary ? 'btn primary' : 'btn', disabled, onclick: async (e) => {
+    const el = e.currentTarget;
+    el.disabled = true;
+    try { await onClick(); } catch (err) { toast(err.message, 'error'); } finally { el.disabled = false; }
+  } }, label);
+  const go = (step) => { s.step = step; draw(); };
+  const locationLine = (info) => {
+    const loc = info?.location;
+    if (!info?.folder) return notice(t('Kein OneDrive gefunden. Richte OneDrive ein oder wähle einen anderen synchronisierten Ordner bzw. ein Netzlaufwerk.'), 'warn');
+    if (!loc || !REMOTE_KINDS.includes(loc.kind)) return notice(t('Dieser Ordner liegt lokal auf dem Gerät – bitte einen synchronisierten Ordner oder ein Netzlaufwerk wählen.'), 'warn');
+    const what = loc.kind === 'cloud' ? loc.provider || t('Cloud-Ordner') : t('Netzlaufwerk');
+    const state = loc.providerStatus === 'error' || loc.providerStatus === 'offline' ? t('Synchronisierung gestört') : loc.providerStatus === 'syncing' ? t('wird synchronisiert …') : t('bereit');
+    return notice(t('{what} · {state}', { what, state }), loc.providerStatus === 'error' || loc.providerStatus === 'offline' ? 'warn' : 'info');
+  };
+  const pinFields = () => st.pinSet
+    ? { el: field(t('App-PIN'), h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'wiz-pin' })), pin: () => body.querySelector('.wiz-pin').value, repeat: null }
+    : { el: h('div', { class: 'grid2' },
+      field(t('Neue App-PIN'), h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'wiz-pin' })),
+      field(t('Wiederholen'), h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'wiz-pin2' }))),
+    pin: () => body.querySelector('.wiz-pin').value, repeat: () => body.querySelector('.wiz-pin2').value };
+  const ensurePin = async (pf) => {
+    if (st.pinSet) return pf.pin();
+    if (pf.pin() !== pf.repeat()) throw new Error(t('Die PINs stimmen nicht überein'));
+    await call('setPin', { current: null, next: pf.pin() });
+    st = await call('state');
+    return pf.pin();
+  };
+
+  const draw = async () => {
+    let content;
+    if (s.step === 0) {
+      content = [
+        h('p', {}, t('Ein kostenloser Tresor nur für dich: verschlüsselt in deinem OneDrive (oder einem anderen synchronisierten Ordner bzw. auf einem Netzlaufwerk) und auf jedem deiner Geräte verfügbar.')),
+        h('ul', { class: 'wizard-points' },
+          h('li', {}, t('Verschlüsselt mit deinem Masterpasswort – niemand sonst kann ihn öffnen, auch kein Admin.')),
+          h('li', {}, t('Im Alltag entsperrst du mit deiner App-PIN; optional zusätzlich mit einem FIDO-Stick.')),
+          h('li', {}, t('Nicht teilbar und ohne Lizenz.'))),
+        buttons(btn(t('Abbrechen'), () => close()), btn(t('Weiter'), async () => { s.info = await call('personalInfo'); go(1); }, { primary: true })),
+      ];
+    } else if (s.step === 1) {
+      const info = s.info;
+      const ok = info?.folder && info.location && REMOTE_KINDS.includes(info.location.kind);
+      content = [
+        h('p', {}, t('Speicherort der Datei:')),
+        h('div', { class: 'wizard-path' }, icon('folder', 16), h('code', {}, info?.path || '–')),
+        locationLine(info),
+        info?.exists ? h('div', { class: 'wizard-choice' },
+          h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'pmode', checked: s.mode === 'use', onchange: () => { s.mode = 'use'; } }), t('Bestehenden Tresor verwenden (dort liegt schon einer)')),
+          h('label', { class: 'inline muted' }, h('input', { type: 'radio', name: 'pmode', disabled: true }), t('Neu erstellen – dafür einen anderen Ordner wählen'))) : null,
+        buttons(
+          btn(t('Zurück'), () => go(0)),
+          btn(t('Anderen Ordner wählen …'), async () => { const r = await call('choosePersonalFolder'); if (r) { s.info = r; s.mode = r.exists ? 'use' : 'create'; draw(); } }),
+          btn(t('Weiter'), () => { s.mode = info.exists ? 'use' : 'create'; go(2); }, { primary: true, disabled: !ok })),
+      ];
+    } else if (s.step === 2) {
+      const pw = h('input', { type: 'password', autocomplete: 'new-password' });
+      const pw2 = h('input', { type: 'password', autocomplete: 'new-password' });
+      const pf = pinFields();
+      content = s.mode === 'create' ? [
+        h('p', {}, t('Das Masterpasswort verschlüsselt den Tresor. Wähle es lang und einzigartig (mindestens 12 Zeichen) – du brauchst es auf neuen Geräten und zum Ändern der PIN.')),
+        h('div', { class: 'grid2' }, field(t('Masterpasswort'), pw), field(t('Wiederholen'), pw2)),
+        h('p', { class: 'muted small' }, st.pinSet ? t('Deine App-PIN entsperrt den Tresor auf diesem Gerät.') : t('Lege eine App-PIN fest – sie entsperrt den Tresor auf diesem Gerät.')),
+        pf.el,
+        buttons(btn(t('Zurück'), () => go(1)), btn(t('Tresor erstellen'), async () => {
+          if (pw.value.length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
+          if (pw.value !== pw2.value) throw new Error(t('Die Passwörter stimmen nicht überein'));
+          const pin = await ensurePin(pf);
+          const r = await call('createPersonal', { folder: s.info.folder, password: pw.value, pin });
+          s.id = r.id;
+          s.recoveryKey = r.recoveryKey;
+          await reloadAll();
+          go(3);
+        }, { primary: true })),
+      ] : [
+        h('p', {}, t('Entsperre den vorhandenen Tresor einmal mit seinem Masterpasswort. Danach reicht auf diesem Gerät deine App-PIN.')),
+        field(t('Masterpasswort'), pw),
+        pf.el,
+        buttons(btn(t('Zurück'), () => go(1)), btn(t('Verwenden und entsperren'), async () => {
+          const pin = await ensurePin(pf);
+          const r = await call('usePersonal', { folder: s.info.folder });
+          s.id = r.id;
+          await call('unlockContainer', r.id, { password: pw.value });
+          await call('bindPersonalWithPin', pin);
+          await reloadAll();
+          go(3);
+        }, { primary: true })),
+      ];
+    } else if (s.step === 3) {
+      content = [
+        h('p', {}, t('Optional: Ein FIDO-Stick (z. B. YubiKey) kann den Tresor zusätzlich zum Masterpasswort entsperren – praktisch auf neuen Geräten. Der Stick muss „PRF“ (hmac-secret) unterstützen.')),
+        buttons(
+          btn(t('Überspringen'), () => go(4)),
+          btn(t('FIDO-Stick hinzufügen …'), async () => {
+            const c = st.containers.find((x) => x.id === s.id);
+            if (c) await manageDialog(c, protectCtx, () => reloadAll());
+          }, { primary: true }),
+          btn(t('Weiter'), () => go(4))),
+      ];
+    } else {
+      content = [
+        h('p', {}, t('Der persönliche Tresor ist eingerichtet und steht ganz oben in der Seitenleiste.')),
+        s.recoveryKey ? h('p', {}, t('Bewahre jetzt den Wiederherstellungsschlüssel sicher auf (ausdrucken, nicht im selben Tresor) – ohne ihn sind die Daten verloren, wenn du das Masterpasswort vergisst.')) : null,
+        buttons(
+          s.recoveryKey ? btn(t('Wiederherstellungsschlüssel anzeigen'), () => showRecoveryKey(s.recoveryKey)) : null,
+          btn(t('Fertig'), () => { close(); if (s.id) select({ view: 'container', containerId: s.id }); }, { primary: true })),
+      ];
+    }
+    body.replaceChildren(header(), ...[content].flat().filter(Boolean));
+  };
+  draw();
+}
+
+/** After the personal vault was opened with its master password on this device: bind it to the PIN. */
+function personalPinPrompt() {
+  const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' });
+  modal(t('Mit PIN entsperren'), h('div', {},
+    h('p', {}, t('Gib deine App-PIN ein – dann entsperrt sie den persönlichen Tresor auf diesem Gerät, ohne Masterpasswort.')),
+    field(t('App-PIN'), pin)), [
+    { label: t('Später') },
+    { label: t('Übernehmen'), primary: true, onClick: async () => { await call('bindPersonalWithPin', pin.value); toast(t('Persönlicher Tresor mit PIN verbunden')); } },
+  ]);
+  setTimeout(() => pin.focus(), 0);
 }
 
 function createFileDialog() {
@@ -3124,7 +3353,7 @@ async function showVersion(item, v) {
 }
 
 function moveDialog(item) {
-  const targets = writableContainers().filter((c) => c.id !== item.containerId);
+  const targets = writableContainers().filter((c) => c.id !== item.containerId && !(c.personal && !st.containers.find((x) => x.id === item.containerId)?.personal));
   if (!targets.length) {
     toast(t('Kein anderer Tresor mit Schreibrechten'), 'error');
     return;

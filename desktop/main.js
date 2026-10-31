@@ -6,6 +6,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Auth, LockedError, entraSettings } from './auth.js';
@@ -473,6 +474,128 @@ function excludeFromErrorReporting() {
   const child = spawn(exe, ['--wer-exclude', path.basename(process.execPath)], { windowsHide: true, stdio: 'ignore' });
   child.on('exit', (code) => { if (code === 0) config.update({ werExcluded: app.getVersion() }); });
   child.on('error', () => {});
+}
+
+// ---------------------------------------------------------------- personal vault
+// Free file vault for one person: in a synchronised folder (OneDrive, iCloud, Dropbox …) or on a network drive, never
+// local. Encrypted with the master password (+ recovery key); on a device the PIN unlocks it – its key is stored
+// encrypted with the PIN (PBKDF2) and bound to the Windows account (DPAPI). Nobody without these opens it.
+const PERSONAL_FILE = 'Keevault-Persoenlich.kvpws';
+const fileLocations = new Map(); // file path → { kind, provider, providerStatus, inSync }
+let recentPin = null; // { pin, at } after a correct PIN – used once to bind / unlock the personal vault key
+
+/** Location of a folder or file via Keevault-Update.exe --location (Cloud Files API, drive type). */
+function locate(target) {
+  // Smoke tests: a temporary folder stands in for a network drive (never the user's real OneDrive).
+  if (smokeTest && process.env.KVPWSAFE_TEST_REMOTE && path.resolve(target).startsWith(path.resolve(process.env.KVPWSAFE_TEST_REMOTE))) return Promise.resolve(process.env.KVPWSAFE_TEST_PROVIDER ? { kind: 'cloud', provider: process.env.KVPWSAFE_TEST_PROVIDER, providerStatus: 'idle', inSync: true } : { kind: 'network', file: false });
+  const exe = helperExe();
+  if (!exe || process.platform !== 'win32') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    let out = '';
+    const child = spawn(exe, ['--location', target], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const timer = setTimeout(() => { child.kill(); resolve(null); }, 5000);
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => { clearTimeout(timer); resolve(null); });
+    child.on('exit', () => {
+      clearTimeout(timer);
+      try { resolve(JSON.parse(out)); } catch { resolve(null); }
+    });
+  });
+}
+
+/** Re-checks where every file vault lives and whether it is in sync; true when something changed. */
+async function refreshFileLocations() {
+  let changedAny = false;
+  for (const p of config.get().fileContainers || []) {
+    const info = await locate(p);
+    if (JSON.stringify(info) !== JSON.stringify(fileLocations.get(p) || null)) changedAny = true;
+    if (info) fileLocations.set(p, info);
+  }
+  return changedAny;
+}
+
+const defaultPersonalFolder = () => process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer || null;
+
+/** Where the personal vault would go (default: OneDrive root) and whether a vault file is already there. */
+async function personalInfo(folder = defaultPersonalFolder()) {
+  const s = config.get();
+  const filePath = folder ? path.join(folder, PERSONAL_FILE) : null;
+  let exists = false;
+  if (filePath) {
+    try { exists = (await fs.stat(filePath)).isFile(); } catch { /* none yet */ }
+  }
+  return { folder, path: filePath, exists, location: folder ? await locate(folder) : null, configured: s.personalVault || null, pinSet: !!s.appPin };
+}
+
+function requirePersonalLocation(info) {
+  if (!info.folder) throw new Error(t('Kein OneDrive eingerichtet – bitte OneDrive einrichten oder einen anderen synchronisierten Ordner bzw. ein Netzlaufwerk wählen.'));
+  if (!info.location || !'cloud network'.split(' ').includes(info.location.kind)) {
+    throw new Error(t('Der persönliche Tresor darf nicht lokal liegen – bitte einen synchronisierten Ordner (OneDrive, iCloud, Dropbox …) oder ein Netzlaufwerk wählen.'));
+  }
+}
+
+async function createPersonal({ folder, password, pin }) {
+  requireOpen();
+  if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
+  await api.verifyPin(String(pin || '')); // the PIN binds the key on this device
+  if (String(password || '').length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
+  const info = await personalInfo(folder || defaultPersonalFolder());
+  requirePersonalLocation(info);
+  if (info.exists) throw new Error(t('Dort liegt schon ein persönlicher Tresor – „Bestehenden verwenden“ wählen.'));
+  const r = await files.create(info.path, t('Persönlich'), { password }, actor());
+  config.update({ personalVault: info.path });
+  fileLocations.set(info.path, await locate(info.path) || info.location);
+  await bindPersonalKey({ force: true }).catch(() => {});
+  changed();
+  return { id: r.id, recoveryKey: r.recoveryKey };
+}
+
+async function usePersonal({ folder }) {
+  requireOpen();
+  if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
+  const info = await personalInfo(folder || defaultPersonalFolder());
+  requirePersonalLocation(info);
+  if (!info.exists) throw new Error(t('Dort liegt kein persönlicher Tresor.'));
+  const id = await files.open(info.path);
+  config.update({ personalVault: info.path, personalDeviceKey: null });
+  fileLocations.set(info.path, await locate(info.path) || info.location);
+  changed();
+  return { id };
+}
+
+const personalEntry = () => [...(files?.entries?.values() || [])].find((e) => e.path && e.path === config.get().personalVault);
+
+/** Stores the unlocked personal vault key for this device: PIN-derived AES-GCM, then DPAPI (Windows account). */
+async function bindPersonalKey({ force = false } = {}) {
+  const entry = personalEntry();
+  if (!entry?.vault || entry.vault.locked || !entry.vault.ck?.raw) return;
+  if (!force && config.get().personalDeviceKey) return;
+  if (!recentPin || Date.now() - recentPin.at > 10 * 60_000 || !safeStorage.isEncryptionAvailable()) return;
+  const salt = crypto.randomBytes(16);
+  const key = crypto.pbkdf2Sync(recentPin.pin, salt, 310_000, 32, 'sha256');
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(Buffer.from(`keevault-personal|${entry.id}`));
+  const ct = Buffer.concat([cipher.update(Buffer.from(entry.vault.ck.raw)), cipher.final(), cipher.getAuthTag()]);
+  const blob = JSON.stringify({ v: 1, vault: entry.id, salt: salt.toString('base64'), iv: iv.toString('base64'), ct: ct.toString('base64') });
+  config.update({ personalDeviceKey: safeStorage.encryptString(blob).toString('base64') });
+}
+
+/** A correct PIN unlocks the personal vault on this device (when its key was bound here before). */
+async function unlockPersonalWithPin(pin) {
+  const stored = config.get().personalDeviceKey;
+  const entry = personalEntry();
+  if (!stored || !entry?.vault || !entry.vault.locked) return;
+  const blob = JSON.parse(safeStorage.decryptString(Buffer.from(stored, 'base64')));
+  if (blob.vault !== entry.id) return;
+  const key = crypto.pbkdf2Sync(pin, Buffer.from(blob.salt, 'base64'), 310_000, 32, 'sha256');
+  const data = Buffer.from(blob.ct, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(blob.iv, 'base64'));
+  decipher.setAAD(Buffer.from(`keevault-personal|${entry.id}`));
+  decipher.setAuthTag(data.subarray(data.length - 16));
+  const raw = Buffer.concat([decipher.update(data.subarray(0, data.length - 16)), decipher.final()]);
+  await entry.vault.unlock(new Uint8Array(raw));
+  changed();
 }
 
 /** Keevault-Update.exe next to the app (resources) or from the Windows build (development). */
@@ -1104,6 +1227,7 @@ const api = {
       version: app.getVersion(),
       updateKind: updater?.kind || 'dev',
       passkeyAvailable: process.platform === 'win32' || !!demo,
+      smoke: !!smokeTest, // tests: no dialogs that open by themselves
       platform: process.platform,
     };
   },
@@ -1132,6 +1256,9 @@ const api = {
     if (wait) throw new Error(t('Zu viele falsche Versuche – bitte {seconds} Sekunden warten', { seconds: wait }));
     if (await verifyPin(pin, record)) {
       pinGuard.success();
+      recentPin = { pin: String(pin), at: Date.now() };
+      // The same PIN opens the personal vault on this device (one PIN for app and vault).
+      await unlockPersonalWithPin(String(pin)).catch((e) => diag(`PERSONAL pin unlock failed: ${e.message}`));
       if (config.get().pinGuard) config.update({ pinGuard: null });
       if (mirrorWanted()) await offlineMirror().unlockKey(pin).catch(() => {});
       return true;
@@ -1151,11 +1278,16 @@ const api = {
     if (!next) await offlineMirror().remove().catch(() => {});
     if (next == null) {
       if (s.requirePin) throw new Error(t('Eure Organisation verlangt eine PIN'));
+      if (s.personalVault) throw new Error(t('Der persönliche Tresor braucht eine App-PIN'));
       config.update({ appPin: null });
       return api.state();
     }
     if (String(next).length < MIN_PIN_LENGTH) throw new Error(t('Die PIN braucht mindestens {n} Zeichen', { n: MIN_PIN_LENGTH }));
     config.update({ appPin: await hashPin(next) });
+    // The personal vault key on this device is bound to the PIN: re-bind it to the new one (or drop it while locked –
+    // then the master password is asked once).
+    recentPin = { pin: String(next), at: Date.now() };
+    await bindPersonalKey({ force: true }).catch(() => config.update({ personalDeviceKey: null }));
     return api.state();
   },
   /** background: unlocked from the browser extension (PIN) – the window stays where it is. */
@@ -1660,8 +1792,24 @@ const api = {
   protectionInfo: (containerId) => vault.protectionInfo(containerId, RP_ID),
   unlockContainer: async (containerId, params) => {
     const r = await vault.unlockContainer(containerId, params);
+    // Personal vault opened with the master password: bind its key to this device and the PIN for next time.
+    if ((await vault.container(containerId).catch(() => null))?.personal) await bindPersonalKey().catch(() => {});
     changed();
     return r;
+  },
+  personalInfo: () => personalInfo(),
+  async choosePersonalFolder() {
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: t('Ordner für den persönlichen Tresor'), properties: ['openDirectory'] });
+    if (canceled || !filePaths[0]) return null;
+    return personalInfo(filePaths[0]);
+  },
+  createPersonal: (opts) => createPersonal(opts),
+  usePersonal: (opts) => usePersonal(opts),
+  /** After unlocking the personal vault with the master password: bind its key to this device and the PIN. */
+  async bindPersonalWithPin(pin) {
+    await api.verifyPin(String(pin || ''));
+    await bindPersonalKey({ force: true });
+    return true;
   },
   async unlockContainerPasskey(containerId) {
     const { c, info } = await protectionCtx(containerId);
@@ -2234,6 +2382,8 @@ app.whenReady().then(async () => {
     },
   });
   files = new FileContainers({
+    personalPath: () => config.get().personalVault || null,
+    locations: fileLocations,
     paths: () => config.get().fileContainers,
     setPaths: (paths) => config.update({ fileContainers: paths }),
     pins: () => config.get().fileIds,
@@ -2241,6 +2391,8 @@ app.whenReady().then(async () => {
     onChange: () => changed(),
   });
   await files.load();
+  refreshFileLocations().catch(() => {});
+  setInterval(() => refreshFileLocations().then((changedAny) => { if (changedAny) changed(); }).catch(() => {}), 60_000).unref?.();
   newSession();
   windows = new WindowsProvider({
     vault: () => vault,
@@ -2793,6 +2945,38 @@ function runSmokeTest() {
         await sleep(400);
         const r = await js('JSON.stringify({ folder: document.querySelector(".editor [name=folder]")?.value, title: document.querySelector(".editor input[name=title]")?.value })');
         if (!/"folder":"Monitoring"/.test(r) || !/"title":"Neuer Test"/.test(r)) errors.push(`newfolder: form did not take the folder over (${r})`);
+      }
+      if (view === 'personal') {
+        // Personal vault end to end: create (master password + PIN), free, PIN unlock after lock, not shareable,
+        // nothing moved in from a shared vault, local folders refused (screenshot/smoke only).
+        try {
+          const dir = path.join(app.getPath('temp'), `kv-personal-${process.pid}`);
+          await fs.mkdir(dir, { recursive: true });
+          process.env.KVPWSAFE_TEST_REMOTE = dir;
+          config.update({ appPin: await hashPin('2468'), pinGuard: null, personalVault: null, personalDeviceKey: null });
+          pinGuard.restore(null);
+          const r = await createPersonal({ folder: dir, password: 'Persoenlich-Test-123!', pin: '2468' });
+          if (!r.recoveryKey) errors.push('personal: no recovery key');
+          const c = await vault.container(r.id);
+          if (!c.personal) errors.push('personal: container not marked personal');
+          if (!(await vault.licenseState(r.id)).licensed) errors.push('personal: not free');
+          await vault.saveItem(r.id, { title: 'Privat', username: 'me', password: 'x' });
+          files.get(r.id).lock();
+          if (!config.get().personalDeviceKey) errors.push('personal: key not bound to the device');
+          await api.verifyPin('2468');
+          if (files.get(r.id).locked) errors.push('personal: PIN did not unlock the vault');
+          if (await files.updateKeyring(r.id, { type: 'createInvite' }, 'x').then(() => true, () => false)) errors.push('personal: invitation was allowed');
+          const shared = (await vault.containers()).find((x) => x.kind === 'keyvault' && !x.error);
+          const sharedItem = shared && (await vault.index())[shared.id]?.items?.[0];
+          if (sharedItem && await vault.moveItem(shared.id, r.id, sharedItem.id).then(() => true, () => false)) errors.push('personal: entry moved in from a shared vault');
+          const local = path.join(app.getPath('temp'), `kv-local-${process.pid}`);
+          await fs.mkdir(local, { recursive: true });
+          if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
+          changed();
+          await sleep(600);
+        } catch (e) {
+          errors.push(`personal: ${e.message}`);
+        }
       }
       if (view === 'topmenu') {
         // Variant "actions at the top": quiet ⋯ beside the title, menu open (screenshot only).

@@ -41,6 +41,8 @@ namespace Keevault.Setup
             if (args.Has("clipboard")) return Clip.Run();
             // Exclude the app from Windows Error Reporting (no crash dumps with decrypted data).
             if (args.Has("wer-exclude")) return Wer.Exclude(args.Get("wer-exclude"));
+            // Where a vault file lives (cloud sync folder / network / local) and whether it is in sync (Location.cs).
+            if (args.Has("location")) return Location.Run(args.Get("location"));
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             var window = new SetupWindow(args);
             if (args.Has("screenshot"))
@@ -174,6 +176,7 @@ namespace Keevault.Setup
         private readonly System.Windows.Shapes.Path shieldLine = new System.Windows.Shapes.Path();
         private readonly System.Windows.Shapes.Path check = new System.Windows.Shapes.Path();
         private readonly System.Windows.Shapes.Path cross = new System.Windows.Shapes.Path();
+        private readonly System.Windows.Shapes.Path keyhole = new System.Windows.Shapes.Path();
         private readonly RectangleGeometry fillClip = new RectangleGeometry(new Rect(0, 24, 24, 0));
         private readonly ScaleTransform checkScale = new ScaleTransform(0, 0, 12, 12.5);
 
@@ -342,6 +345,14 @@ namespace Keevault.Setup
             shieldLine.StrokeDashArray = new DoubleCollection { 40, 40 };
             canvas.Children.Add(shieldLine);
 
+            // Keevault mark: the keyhole in the middle of the shield (white on the fill, outlined while the shield is empty).
+            keyhole.Data = Geometry.Parse("M12 8.3a2 2 0 0 1 1.15 3.64l.6 3.56h-3.5l.6-3.56A2 2 0 0 1 12 8.3z");
+            keyhole.Fill = Theme.B(th.Surface);
+            keyhole.Stroke = Theme.B(th.Accent);
+            keyhole.StrokeThickness = 0.9;
+            keyhole.StrokeLineJoin = PenLineJoin.Round;
+            canvas.Children.Add(keyhole);
+
             check.Data = Geometry.Parse("M8.4 12.4l2.6 2.6 4.8-5.4");
             check.Stroke = Theme.B(th.OnAccent);
             check.StrokeThickness = 2;
@@ -452,6 +463,7 @@ namespace Keevault.Setup
             shieldLine.Stroke = Theme.B(th.Danger);
             shieldLine.StrokeDashOffset = 0;
             cross.Visibility = Visibility.Visible;
+            keyhole.Visibility = Visibility.Collapsed;
             var buttons = new List<Button>();
             if (retry != null) buttons.Add(new Button(this, Text.T("Erneut versuchen"), ButtonKind.Primary, async () => await retry()));
             buttons.Add(new Button(this, Text.T("Schließen"), retry == null ? ButtonKind.Primary : ButtonKind.Secondary, () => { ExitCode = 1; Close(); }));
@@ -514,6 +526,7 @@ namespace Keevault.Setup
 
         private void Stamp()
         {
+            keyhole.Visibility = Visibility.Collapsed; // the check mark takes its place
             var a = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(420)) { EasingFunction = new BackEase { Amplitude = 0.6, EasingMode = EasingMode.EaseOut } };
             checkScale.BeginAnimation(ScaleTransform.ScaleXProperty, a);
             checkScale.BeginAnimation(ScaleTransform.ScaleYProperty, a);
@@ -677,14 +690,14 @@ namespace Keevault.Setup
                     subtitle.Text = Text.T("Melde dich mit deinem Microsoft-Konto an und verbinde deinen Tresor.");
                     Show(bar, false); Show(status, false); Show(closeButton, true);
                     SetActions(new Button(this, Text.T("Keevault starten"), ButtonKind.Primary, () => { }));
-                    checkScale.ScaleX = checkScale.ScaleY = 1; break;
+                    checkScale.ScaleX = checkScale.ScaleY = 1; keyhole.Visibility = Visibility.Collapsed; break;
                 case "error":
                     ShowError(Text.T("Installation fehlgeschlagen"), Text.T("Das Setup wurde mit Code {0} beendet.", 2), () => Task.CompletedTask); break;
                 case "update":
                     ticker.Stop(); progress = 0.4; status.Text = $"{args.Get("from") ?? "0.7.17"}  →  {args.Get("to") ?? "0.7.18"}"; break;
                 case "updated":
                     ticker.Stop(); progress = 1; title.Text = Text.T("Aktualisiert auf {0}", args.Get("to") ?? "0.7.18"); subtitle.Text = Text.T("Keevault startet …");
-                    Show(bar, false); Show(status, false); checkScale.ScaleX = checkScale.ScaleY = 1; break;
+                    Show(bar, false); Show(status, false); checkScale.ScaleX = checkScale.ScaleY = 1; keyhole.Visibility = Visibility.Collapsed; break;
                 default:
                     shieldLine.StrokeDashOffset = 0; break;
             }
