@@ -13,13 +13,15 @@ export function secureFetch(url, init = {}) {
   return session.fromPartition(PARTITION).fetch(url, { ...init, cache: 'no-store' });
 }
 
-/** Before app "ready": HTTP caches of this and earlier profile folders (product renames, development). */
+/** Before app "ready": HTTP caches and crash dumps of this and earlier profile folders (product renames, development). */
 export function purgeDiskCaches() {
   const appData = app.getPath('appData');
   const dirs = new Set([app.getPath('userData'), ...['KeyVault PwSafe', 'Keevault', 'keyvault-pwsafe'].map((d) => path.join(appData, d))]);
   for (const dir of dirs) {
     try {
       fs.rmSync(path.join(dir, 'Cache'), { recursive: true, force: true });
+      // Crash dumps of earlier versions (Chromium's Crashpad folder) – may contain decrypted data.
+      fs.rmSync(path.join(dir, 'Crashpad'), { recursive: true, force: true });
     } catch {
       // In use by a second instance: cleared again on its next start.
     }

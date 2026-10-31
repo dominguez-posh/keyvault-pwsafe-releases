@@ -11,6 +11,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const publish = process.argv.includes('--publish');
@@ -227,6 +228,19 @@ if (previews) {
   }
 }
 for (const a of assets) if (!existsSync(a)) throw new Error(`${a} fehlt`);
+
+// Software bill of materials (CycloneDX, production dependencies) and SHA-256 checksums of every asset: published
+// with the release and on the download page, so a download can be checked against what was built here.
+step('SBOM (CycloneDX)', () => {
+  const sbom = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['sbom', '--sbom-format', 'cyclonedx', '--omit', 'dev'], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
+  writeFileSync(R(`release/Keevault-${version}-sbom.cdx.json`), sbom);
+  assets.push(R(`release/Keevault-${version}-sbom.cdx.json`));
+});
+step('Prüfsummen (SHA256SUMS.txt)', () => {
+  const lines = assets.map((a) => `${createHash('sha256').update(readFileSync(a)).digest('hex')}  ${basename(a)}`);
+  writeFileSync(R('release/SHA256SUMS.txt'), `${lines.join('\n')}\n`);
+  assets.push(R('release/SHA256SUMS.txt'));
+});
 console.log(`\x1b[32mFertig: ${setup}\x1b[0m`);
 
 // --- 6. Publish -----------------------------------------------------------------------------------------------------

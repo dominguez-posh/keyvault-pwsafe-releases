@@ -4,6 +4,8 @@
 import { app, BrowserWindow, ipcMain, shell, clipboard, dialog, powerMonitor, protocol, net, nativeTheme, session, Tray, Menu, nativeImage, globalShortcut, Notification, safeStorage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { statSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Auth, LockedError, entraSettings } from './auth.js';
@@ -71,6 +73,9 @@ if (!primaryInstance) app.quit();
 if (smokeTest) app.commandLine.appendSwitch('disable-features', 'WebAuthenticationUseNativeWinApi');
 // No HTTP cache on disk at all (the app only loads its own files); Azure traffic runs in memory (secure-net.js).
 app.commandLine.appendSwitch('disable-http-cache');
+// No crash dumps: a dump of this process could contain decrypted entries. Chromium's crash reporter stays off, old
+// dumps go at start (purgeCrashDumps), and Windows Error Reporting excludes the app (excludeFromErrorReporting).
+app.commandLine.appendSwitch('disable-crash-reporter');
 if (primaryInstance) purgeDiskCaches();
 
 class DemoAuth {
@@ -455,6 +460,40 @@ async function containerResource(containerId) {
   return found.resourceId;
 }
 
+let psClipboardBlocked = false;
+
+/**
+ * Installed app on Windows: exclude Keevault.exe from Windows Error Reporting once per version, so a crash never
+ * leaves (or uploads) a memory dump with decrypted entries. Runs quietly in the background.
+ */
+function excludeFromErrorReporting() {
+  if (process.platform !== 'win32' || !app.isPackaged || config.get().werExcluded === app.getVersion()) return;
+  const exe = helperExe();
+  if (!exe) return;
+  const child = spawn(exe, ['--wer-exclude', path.basename(process.execPath)], { windowsHide: true, stdio: 'ignore' });
+  child.on('exit', (code) => { if (code === 0) config.update({ werExcluded: app.getVersion() }); });
+  child.on('error', () => {});
+}
+
+/** Keevault-Update.exe next to the app (resources) or from the Windows build (development). */
+function helperExe() {
+  const candidates = [path.join(process.resourcesPath || '', 'Keevault-Update.exe'), path.join(appRoot, 'windows', 'out', 'Keevault-Update.exe')];
+  return candidates.find((p) => { try { return statSync(p).isFile(); } catch { return false; } }) || null;
+}
+
+/** Clipboard with history/cloud markers through the own helper (stdin, no command line, no window). */
+function copyViaHelperExe(text) {
+  const exe = helperExe();
+  if (!exe) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const child = spawn(exe, ['--clipboard'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    const timer = setTimeout(() => { child.kill(); resolve(false); }, 4000);
+    child.on('error', () => { clearTimeout(timer); resolve(false); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve(code === 0); });
+    child.stdin.end(Buffer.from(text, 'utf8'));
+  });
+}
+
 /**
  * Copies a value. On Windows with the markers that keep it out of the clipboard history (Win+V) and the
  * cloud clipboard – a copied password must not end up in a history or on other devices.
@@ -463,10 +502,17 @@ async function copyToClipboard(text) {
   if (process.platform === 'win32' && !smokeTest && !demo) {
     // The helper is a PowerShell process; endpoint protection may block or stall it (Sophos, 2026-10-31) – then
     // copy plainly after 1.5 s instead of hanging without any feedback.
-    const viaHelper = copySecret(text).then(() => true, () => false);
-    const ok = await Promise.race([viaHelper, new Promise((r) => setTimeout(() => r(false), 1500))]);
+    // Order: the PowerShell helper (warm, fast); if it is blocked (endpoint protection, Constrained Language Mode),
+    // Keevault-Update.exe --clipboard (windows/Setup/Clip.cs) sets the same markers. Only if both fail the text goes
+    // to the clipboard without them – noted in the diagnostics log.
+    let ok = !psClipboardBlocked && await Promise.race([copySecret(text).then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 1500))]);
+    if (!ok && !psClipboardBlocked) {
+      psClipboardBlocked = true;
+      diag('COPY PowerShell helper unavailable – using Keevault-Update.exe');
+    }
+    if (!ok) ok = await copyViaHelperExe(text);
     if (!ok) {
-      diag('COPY helper unavailable – plain clipboard');
+      diag('COPY no helper – plain clipboard (without history/cloud markers)');
       clipboard.writeText(text);
     }
   } else {
@@ -962,18 +1008,14 @@ async function setupWindowsProvider() {
 }
 
 /**
- * View settings: zoom of the window content and the see-through ground (Windows 11 acrylic behind the window; the
- * renderer makes only the ground and the top bar translucent, the cards with data stay opaque).
+ * View settings: zoom of the window content and the transparency of the whole window (programs behind it shine through).
  */
 function applyView() {
   if (!win || win.isDestroyed()) return;
   const v = config.get();
   win.webContents.setZoomFactor(Math.min(1.5, Math.max(0.8, Number(v.zoom) || 1)));
-  if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
-    const see = v.transparency === 'light' || v.transparency === 'strong';
-    win.setBackgroundMaterial(see ? 'acrylic' : 'none');
-    win.setBackgroundColor(see ? '#00000000' : nativeTheme.shouldUseDarkColors ? '#18191d' : '#f5f6f8');
-  }
+  // Transparency: the whole window becomes see-through, the programs behind it shine through (light 90 %, strong 75 %).
+  win.setOpacity(v.transparency === 'strong' ? 0.75 : v.transparency === 'light' ? 0.9 : 1);
 }
 
 /** Window buttons over the hidden title bar: the ground colour of the app (extension/styles/app.css --bg). */
@@ -2273,6 +2315,7 @@ app.whenReady().then(async () => {
   });
   updater.start();
   applyStartWithWindows();
+  excludeFromErrorReporting();
   if (smokeTest) runSmokeTest();
 });
 

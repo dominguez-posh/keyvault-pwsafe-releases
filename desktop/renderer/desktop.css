@@ -441,13 +441,7 @@ body { overflow: hidden; }
 .main-menu .seg button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 26, 38, .12); }
 .main-menu { width: 300px; }
 
-/* See-through ground (View → Transparency): only the ground and the top bar let the desktop shine through (acrylic);
-   cards with data stay opaque. */
-html.see-through, html.see-through body { background: transparent; }
-html.see-through .shell, html.see-through .splash { background: color-mix(in srgb, var(--bg) 72%, transparent); }
-html.see-through-strong .shell, html.see-through-strong .splash { background: color-mix(in srgb, var(--bg) 42%, transparent); }
-html.see-through .sidebar-foot { background: none; }
-html.see-through .menu-dot { box-shadow: none; }
+
 .frameless .list-pane, .frameless .detail-pane { margin-top: 52px; }
 .frameless .splitter { top: 52px; }
 .frameless .sidebar { padding-top: 8px; }

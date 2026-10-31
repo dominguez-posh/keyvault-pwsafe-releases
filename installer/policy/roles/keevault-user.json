@@ -1,0 +1,20 @@
+{
+  "Name": "Keevault User",
+  "IsCustom": true,
+  "Description": "Keevault: read, create, change and delete entries (secrets) of a vault; restore deleted ones from a Keevault backup. No final deletion (purge), no keys, certificates, roles or vault settings.",
+  "Actions": [
+    "Microsoft.KeyVault/vaults/read"
+  ],
+  "NotActions": [],
+  "DataActions": [
+    "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+    "Microsoft.KeyVault/vaults/secrets/getSecret/action",
+    "Microsoft.KeyVault/vaults/secrets/setSecret/action",
+    "Microsoft.KeyVault/vaults/secrets/delete",
+    "Microsoft.KeyVault/vaults/secrets/recover/action"
+  ],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000"
+  ]
+}

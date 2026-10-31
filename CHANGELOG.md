@@ -4,17 +4,31 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.3 – 2026-10-31
+- Sicherheit nachgeschärft (Review-Findings): Kopieren setzt die Kennzeichen gegen Zwischenablage-Verlauf und Cloud-Zwischenablage jetzt auch, wenn der PowerShell-Hilfsprozess blockiert ist (eigenes Hilfsprogramm); Absturzabbilder abgeschaltet, alte gelöscht, Keevault von der Windows-Fehlerberichterstattung ausgenommen; Tresor-Infos zeigen, welche Metadaten ohne Zusatzschutz im Klartext lesbar sind.
+- Schmale Azure-Rollen „Keevault User“ und „Keevault Reader“ im Richtlinien-Paket (ohne Purge, Schlüssel, Zertifikate, Rollen).
+- Jedes Release mit SHA256SUMS.txt und SBOM (CycloneDX); CodeQL und Dependabot im Repository.
+- Sicherheitsmodell überarbeitet (Datenhaltung, Anmeldung und App-Registrierung, Rollen, Passkey-Threat-Model, Telemetrie und Verbindungen, Lieferkette, Reifegrad); Website mit FAQ und „Wichtige Sicherheitsfragen“, Hilfe in der App verlinkt beides.
+- Transparenz macht jetzt das ganze Fenster durchsichtig (Leicht 90 %, Stark 75 %).
+
+### English
+- Security hardening (review findings): copying sets the markers against clipboard history and cloud clipboard also when the PowerShell helper is blocked (own helper); crash dumps off, old ones deleted, Keevault excluded from Windows Error Reporting; vault info shows which metadata is readable in plain text without extra protection.
+- Narrow Azure roles “Keevault User” and “Keevault Reader” in the policy package (no purge, keys, certificates, roles).
+- Every release with SHA256SUMS.txt and an SBOM (CycloneDX); CodeQL and Dependabot in the repository.
+- Security model reworked (data storage, sign-in and app registration, roles, passkey threat model, telemetry and connections, supply chain, maturity); website with FAQ and “Key security questions”, the in-app help links both.
+- Transparency now makes the whole window see-through (light 90 %, strong 75 %).
+
 ## 0.8.2 – 2026-10-31
 - Löschen ohne eigenen Papierkorb: Wiederhergestellt wird mit Bordmitteln im Azure-Portal (Key Vault → Secrets → Verwaltete gelöschte Secrets). Der Löschdialog nennt die Aufbewahrungsfrist des Tresors („nur 90 Tage wiederherstellbar“), bei Datei-Tresoren „keine Aufbewahrungsfrist“.
 - Suchleiste neu: bündig mit der mittleren Spalte, mit Luft zur Liste, Fokus-Ring und Umschalter Tresor | Alle im Feld.
 - Website: Live-Demo unter keevault.de/demo.html – dieselbe Oberfläche wie die App mit Beispieldaten, komplett im Browser; Screenshots der Website hell und dunkel (passend zum Design der Seite), das Hauptbild automatisch aus der Demo (npm run demo:shots).
-- Menü → Ansicht: Zoom (auch Strg + / Strg − / Strg 0) und Transparenz (Aus, Leicht, Stark – Acryl-Effekt von Windows 11; die Karten mit Daten bleiben deckend).
+- Menü → Ansicht: Zoom (auch Strg + / Strg − / Strg 0) und Transparenz (Aus, Leicht, Stark).
 
 ### English
 - Deleting without a trash of its own: recovery happens with Azure's own tools in the portal (Key Vault → Secrets → Manage deleted secrets). The delete dialog names the vault's retention period ("recoverable for 90 days only"), for file vaults "no retention period".
 - New search bar: flush with the middle column, with room above the list, a focus ring and the Vault | All switch inside the field.
 - Website: live demo at keevault.de/en/demo.html – the same interface as the app with sample data, entirely in the browser; website screenshots in light and dark (matching the page's theme), the main picture taken automatically from the demo (npm run demo:shots).
-- Menu → View: zoom (also Ctrl + / Ctrl − / Ctrl 0) and transparency (off, light, strong – Windows 11 acrylic; the cards with data stay opaque).
+- Menu → View: zoom (also Ctrl + / Ctrl − / Ctrl 0) and transparency (off, light, strong).
 
 ## 0.8.1 – 2026-10-31
 - „Link kopieren“ für Einträge (Aktionen, Rechtsklick, Popup der Erweiterung): ein Web-Link, der in Teams und E-Mail anklickbar ist und den Eintrag direkt in Keevault öffnet. Tresor und Eintrag stehen nur hinter dem # und erreichen keinen Server; der Link gibt keinen Zugriff – öffnen kann ihn nur, wer Rechte auf den Tresor hat. Fehlt der Tresor in der App, bietet Keevault an, ihn hinzuzufügen; ist die App gesperrt, öffnet sich der Eintrag nach dem Entsperren.

@@ -5,6 +5,7 @@
 //   Keevault-Update.exe --update <setup.exe> --from 0.7.17 --to 0.7.18 --pid <app pid> [--x <dip> --y <dip>]
 //                                              started by the app for an update: waits for the app to quit, installs,
 //                                              starts the new version with --updated-from=<old version>
+//   Keevault-Update.exe --clipboard            stdin text → clipboard, kept out of history and cloud clipboard (Clip.cs)
 //   … --screenshot <png> --page welcome|progress|done|error|update|updated [--theme light|dark] [--lang de|en]
 //                                              renders one page into a PNG without showing a window (tests, docs)
 
@@ -36,6 +37,10 @@ namespace Keevault.Setup
         private static int Main(string[] argv)
         {
             var args = Args.Parse(argv);
+            // Clipboard with history/cloud markers for the app (no window, no WPF).
+            if (args.Has("clipboard")) return Clip.Run();
+            // Exclude the app from Windows Error Reporting (no crash dumps with decrypted data).
+            if (args.Has("wer-exclude")) return Wer.Exclude(args.Get("wer-exclude"));
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             var window = new SetupWindow(args);
             if (args.Has("screenshot"))

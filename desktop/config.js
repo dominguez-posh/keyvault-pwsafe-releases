@@ -53,6 +53,8 @@ const DEFAULTS = {
   // View (main menu): zoom factor of the window and see-through ground (off | light | strong, Windows 11 acrylic).
   zoom: 1,
   transparency: 'off',
+  // Version for which Keevault.exe was excluded from Windows Error Reporting (no crash dumps).
+  werExcluded: '',
 };
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled', 'offlineMirror',
   'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];

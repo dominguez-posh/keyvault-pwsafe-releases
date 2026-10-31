@@ -1,7 +1,7 @@
 // Live demo check and website screenshots from it: serves the built website (npm run website → website/dist/htdocs),
 // opens /demo/ in headless Edge/Chrome (DevTools protocol over a pipe), fails on script errors and – with --out –
 // writes screenshots in light and dark, German and English (<out>/<name>.png, <out>/dark/…, <out>/en/…).
-// Usage: node scripts/demo-shots.mjs [--out=docs/images] [--browser=<path>]
+// Usage: node scripts/demo-shots.mjs [--out=docs/images] [--browser=<path>] [--page=index.html --page-out=x.png]
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
@@ -125,6 +125,19 @@ if (out) {
       }
     }
   }
+}
+
+// --page=<path> --page-out=<png> [--page-theme=dark]: screenshot of a website page (layout checks).
+if (arg('page')) {
+  const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
+  const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+  await send('Page.enable', {}, sessionId);
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: arg('page-theme') || 'light' }] }, sessionId);
+  await send('Page.navigate', { url: `${origin}/${arg('page')}` }, sessionId);
+  await sleep(1500);
+  const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
+  writeFileSync(arg('page-out'), Buffer.from(data, 'base64'));
 }
 
 proc.kill();

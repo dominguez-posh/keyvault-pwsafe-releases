@@ -1,0 +1,17 @@
+{
+  "Name": "Keevault Reader",
+  "IsCustom": true,
+  "Description": "Keevault: read entries (secrets) of a vault – no changes, no deletion, no keys, certificates, roles or vault settings.",
+  "Actions": [
+    "Microsoft.KeyVault/vaults/read"
+  ],
+  "NotActions": [],
+  "DataActions": [
+    "Microsoft.KeyVault/vaults/secrets/readMetadata/action",
+    "Microsoft.KeyVault/vaults/secrets/getSecret/action"
+  ],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/00000000-0000-0000-0000-000000000000"
+  ]
+}
