@@ -14,3 +14,10 @@ body.popup { width: 390px; height: 580px; display: flex; flex-direction: column;
 .toolbar { display: flex; gap: 8px; align-items: center; }
 .toolbar .search { flex: 1; }
 .locked-row { display: flex; align-items: center; gap: 8px; margin: 0; }
+
+/* Context menu of an entry (right-click), same look as in the desktop app. */
+.context-menu { position: fixed; z-index: 1000; min-width: 200px; padding: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.context-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px; border: 0; border-radius: 5px; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.context-menu button:hover, .context-menu button:focus-visible { background: var(--accent-soft); outline: none; }
+.context-menu button.danger { color: var(--danger); }
+.context-menu hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2px; }

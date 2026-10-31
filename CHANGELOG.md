@@ -4,6 +4,18 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.15 – 2026-10-31
+- Nach dem Speichern eines Passkeys öffnet sich das Popup der Erweiterung mit dem neuen Eintrag zum Bearbeiten (Titel, Ordner, Logo …). Braucht Edge/Chrome 127 oder neuer, sonst beim nächsten Öffnen des Popups.
+- Browser-Erweiterung: Rechtsklick auf einen Eintrag im Popup öffnet ein eigenes Menü – Öffnen, Bearbeiten, Ausfüllen, Benutzername/Passwort kopieren, Löschen.
+- Hängt eine Anfrage an Key Vault, wird sie nach 30 Sekunden abgebrochen und wiederholt, statt den Tresor endlos „laden“ zu lassen.
+- Diagnose: offene Anfragen und Token-Abrufe nach 10 Sekunden sowie lange Ladezeiten je Tresor stehen im Diagnose-Log.
+
+### English
+- After saving a passkey the extension popup opens with the new entry in edit mode (title, folder, logo …). Needs Edge/Chrome 127 or later, otherwise the next time the popup opens.
+- Browser extension: right-clicking an entry in the popup opens its own menu – open, edit, fill, copy user name/password, delete.
+- A Key Vault request that hangs is aborted after 30 seconds and retried instead of keeping the vault “loading” forever.
+- Diagnostics: requests and token requests still open after 10 seconds and long loading times per vault are written to the diagnostics log.
+
 ## 0.7.14 – 2026-10-31
 - Das Passkey-Fenster der Erweiterung fragt bei gesperrter App ebenfalls direkt nach der PIN (wie Popup und Leiste).
 - Entsperren mit PIN aus der Erweiterung holt die Desktop-App nicht mehr in den Vordergrund.

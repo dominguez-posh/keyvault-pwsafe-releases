@@ -609,22 +609,39 @@ async function webauthnApprove({ requestId, containerId, itemId, credentialId, t
     credProps: !!req.options.extensions?.credProps,
   });
   // Store first: a passkey the site knows but the vault lost would lock the user out.
+  let saved;
   if (itemId) {
     const item = await vault.getItem(containerId, itemId, { fresh: true });
-    await vault.saveItem(containerId, {
+    saved = await vault.saveItem(containerId, {
       ...item,
       passkeys: [...item.passkeys, passkey],
       urls: item.urls.length ? item.urls : [req.origin],
       username: item.username || req.options.user?.name || '',
     }, { expectedVersion: item.version });
   } else {
-    await vault.saveItem(containerId, {
+    saved = await vault.saveItem(containerId, {
       type: 'login', title: title || req.options.rp?.name || req.rpId, username: req.options.user?.name || '', urls: [req.origin], passkeys: [passkey], icon: await tabIcon(req.tabId),
     });
   }
   await updateSettings({ defaultContainer: containerId });
   await finishRequest(requestId, { result: response });
+  editInPopup(containerId, saved?.id || itemId, req.tabId);
   return { done: true };
+}
+
+/**
+ * After saving a passkey: the popup opens with the entry in edit mode (title, folder, logo, …). The popup picks the
+ * entry up from session storage; chrome.action.openPopup needs Chrome/Edge 127 – older ones just skip it.
+ */
+async function editInPopup(containerId, id, tabId) {
+  if (!containerId || !id) return;
+  await chrome.storage.session.set({ editAfter: { containerId, id, at: Date.now() } });
+  try {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    await chrome.action.openPopup(tab ? { windowId: tab.windowId } : undefined);
+  } catch {
+    // No popup API or no focused window: the entry is offered the next time the popup opens (within a minute).
+  }
 }
 
 /** The page's content script picked a passkey (conditional field menu or the in-page chooser bar). */

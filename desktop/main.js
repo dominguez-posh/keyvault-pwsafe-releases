@@ -143,27 +143,40 @@ function diag(line) {
     }
   });
 }
+// A request without an answer would keep a vault "loading" forever: after REQUEST_TIMEOUT_MS it is aborted (the
+// Key Vault client retries network errors twice); after PENDING_MS a still open request is logged as PENDING.
+const REQUEST_TIMEOUT_MS = 30_000;
+const busySince = new Map(); // containerId → start of loading (diagnostics)
+const PENDING_MS = 10_000;
 async function timedFetch(url, init = {}) {
   const started = Date.now();
   let status = 'ERR';
+  let where = String(url);
+  try { const u = new URL(url); where = u.host + u.pathname; } catch { /* keep */ }
+  const controller = init.signal ? null : new AbortController();
+  const timeout = controller && setTimeout(() => controller.abort(new Error(`Zeitüberschreitung nach ${REQUEST_TIMEOUT_MS / 1000} s`)), REQUEST_TIMEOUT_MS);
+  const pending = setTimeout(() => diag(`PENDING ${init.method || 'GET'} ${where} >${PENDING_MS}ms`), PENDING_MS);
   try {
-    const res = await secureFetch(url, init);
+    const res = await secureFetch(url, controller ? { ...init, signal: controller.signal } : init);
     status = res.status;
     return res;
+  } catch (e) {
+    if (controller?.signal.aborted) status = 'TIMEOUT';
+    throw e;
   } finally {
+    clearTimeout(timeout);
+    clearTimeout(pending);
     const ms = Date.now() - started;
-    if (ms > SLOW_MS || status === 'ERR' || status >= 400) {
-      let where = String(url);
-      try { const u = new URL(url); where = u.host + u.pathname; } catch { /* keep */ }
-      diag(`${init.method || 'GET'} ${where} ${status} ${ms}ms`);
-    }
+    if (ms > SLOW_MS || status === 'ERR' || status === 'TIMEOUT' || status >= 400) diag(`${init.method || 'GET'} ${where} ${status} ${ms}ms`);
   }
 }
 async function timedToken(scope, opts) {
   const started = Date.now();
+  const pending = setTimeout(() => diag(`PENDING TOKEN ${String(scope).replace(/^https:\/\//, '')} tenant=${opts?.tenantId || 'home'} >${PENDING_MS}ms`), PENDING_MS);
   try {
     return await auth.getToken(scope, opts);
   } finally {
+    clearTimeout(pending);
     const ms = Date.now() - started;
     if (ms > SLOW_MS) diag(`TOKEN ${String(scope).replace(/^https:\/\//, '')} tenant=${opts?.tenantId || 'home'} force=${!!opts?.forceRefresh} ${ms}ms`);
   }
@@ -181,7 +194,16 @@ function newSession() {
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.
     multiTenant: true,
     // The sidebar spins the refresh icon of the vault that is being loaded or reconciled right now.
-    onBusy: (containerId, busy) => send({ type: 'busy', containerId, busy }),
+    onBusy: (containerId, busy) => {
+      send({ type: 'busy', containerId, busy });
+      // Diagnostics: how long a vault was loading or reconciling (only when it took noticeably long).
+      if (busy) busySince.set(containerId, Date.now());
+      else if (busySince.has(containerId)) {
+        const ms = Date.now() - busySince.get(containerId);
+        busySince.delete(containerId);
+        if (ms > 5000) diag(`BUSY ${containerId} ${ms}ms`);
+      }
+    },
     // Listing progress (pages of 25) → progress card: per vault for a manual refresh, summed for the reconcile.
     onProgress: reportListing,
   });

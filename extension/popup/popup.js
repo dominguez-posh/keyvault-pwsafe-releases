@@ -149,7 +149,7 @@ function renderList() {
         listTab === 'site' && !query ? t('Keine Einträge für {host}', { host: host || t('diese Seite') }) : t('Keine Treffer')));
       return;
     }
-    listEl.replaceChildren(...rows.map((s) => h('li', { class: 'row-item', onclick: () => renderDetail(s) },
+    listEl.replaceChildren(...rows.map((s) => h('li', { class: 'row-item', onclick: () => renderDetail(s), oncontextmenu: (e) => entryMenu(e, s) },
       avatar(s.title, 'avatar', s.icon),
       h('div', { class: 'row-text' },
         h('div', { class: 'row-title' }, s.title, s.rpIds.length ? h('span', { class: 'badge passkey', title: t('Passkey') }, icon('key', 11)) : null),
@@ -206,6 +206,55 @@ async function fillItem(s, force = false) {
     }
     toast(e.message, 'error');
   }
+}
+
+/** Right-click on an entry: open, edit, fill, copy, delete – instead of the browser's own menu. */
+let openMenu = null;
+function closeMenu() {
+  openMenu?.remove();
+  openMenu = null;
+}
+document.addEventListener('click', closeMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+function entryMenu(e, s) {
+  e.preventDefault();
+  closeMenu();
+  const entry = (iconName, label, fn, cls = '') => h('button', { type: 'button', class: cls, onclick: (ev) => { ev.stopPropagation(); closeMenu(); fn(); } }, icon(iconName, 15), label);
+  const load = () => call('item', { containerId: s.containerId, id: s.id, fresh: true });
+  const menu = h('div', { class: 'context-menu', role: 'menu' },
+    entry('eye', t('Öffnen'), () => renderDetail(s)),
+    entry('edit', t('Bearbeiten'), async () => {
+      try {
+        renderEdit(await load());
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }),
+    matchesSite(s) ? entry('fill', t('Ausfüllen'), () => fillItem(s)) : null,
+    s.username ? entry('user', t('Benutzername kopieren'), () => copy(s.username, t('Benutzername'))) : null,
+    s.type === 'login' ? entry('copy', t('Passwort kopieren'), async () => {
+      const item = await load().catch(() => null);
+      if (item?.password) copy(item.password, t('Passwort'));
+      else toast(t('Kein Passwort gespeichert'));
+    }) : null,
+    h('hr'),
+    entry('trash', t('Löschen'), async () => {
+      if (!(await confirmDialog(t('Eintrag löschen'), t('„{title}“ in den Papierkorb des Tresors verschieben? Wiederherstellen ist in der Desktop-App möglich.', { title: s.title }), { confirmLabel: t('Löschen'), danger: true }))) return;
+      try {
+        await call('delete', { containerId: s.containerId, id: s.id });
+        toast(t('Gelöscht'));
+        await reload();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }, 'danger'));
+  document.body.append(menu);
+  // Inside the popup: open where clicked, shifted so it stays fully visible.
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - r.width - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(e.clientY, window.innerHeight - r.height - 4))}px`;
+  openMenu = menu;
+  menu.querySelector('button')?.focus();
 }
 
 async function renderDetail(s, fresh = false) {
@@ -312,6 +361,13 @@ chrome.runtime.onMessage.addListener((m) => {
   [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
     await reload();
+    // Just saved a passkey on a website: continue with that entry in edit mode (title, folder, logo, …).
+    const { editAfter } = await chrome.storage.session.get('editAfter').catch(() => ({}));
+    if (editAfter && Date.now() - editAfter.at < 60_000 && st?.open) {
+      await chrome.storage.session.remove('editAfter');
+      const item = await call('item', { containerId: editAfter.containerId, id: editAfter.id, fresh: true }).catch(() => null);
+      if (item) renderEdit({ ...item, containerId: editAfter.containerId });
+    }
   } catch (e) {
     setView(h('div', { class: 'notice error' }, e.message));
   }

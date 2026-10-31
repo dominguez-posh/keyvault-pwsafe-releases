@@ -125,8 +125,24 @@ async function shadowNode(sessionId, hostSelector, selector) {
   const { nodeId } = await send('DOM.querySelector', { nodeId: nodeIds[0], selector }, sessionId);
   return nodeId || null;
 }
-/** Trusted click in the middle of a node (the content script ignores synthetic clicks). */
-async function clickNode(sessionId, nodeId) {
+/**
+ * Trusted click in the middle of a node (the content script ignores synthetic clicks). A selector inside the UI's
+ * shadow root is looked up right before the click and retried – the bar re-renders while it slides in.
+ */
+async function clickNode(sessionId, target) {
+  if (typeof target === 'string') {
+    for (let i = 0; ; i++) {
+      try {
+        const id = await shadowNode(sessionId, 'kvpwsafe-ui', target);
+        if (!id) throw new Error(`${target} nicht gefunden`);
+        return await clickNode(sessionId, id);
+      } catch (e) {
+        if (i >= 4) throw e;
+        await sleep(250);
+      }
+    }
+  }
+  const nodeId = target;
   const { model } = await send('DOM.getBoxModel', { nodeId }, sessionId);
   const q = model.content;
   const x = (q[0] + q[2] + q[4] + q[6]) / 4;
@@ -197,6 +213,23 @@ try {
   const popup = await open(`${ext}/popup/popup.html`);
   check(await waitFor(() => evaluate(popup.sessionId, 'document.querySelectorAll(".row-item").length > 0')), 'Popup zeigt keine Einträge');
   await shot(popup.sessionId, 'ext-popup');
+  // Right-click on an entry: own context menu, "Edit" opens the form.
+  const rowBox = JSON.parse(await evaluate(popup.sessionId, 'JSON.stringify(document.querySelector("li.row-item")?.getBoundingClientRect() || null)') || 'null');
+  check(rowBox, 'Popup: keine Einträge für das Kontextmenü');
+  if (rowBox) {
+    const x = rowBox.left + 40;
+    const y = rowBox.top + rowBox.height / 2;
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'right', clickCount: 1 }, popup.sessionId);
+    const menu = await waitFor(() => evaluate(popup.sessionId, '!!document.querySelector(".context-menu")'));
+    check(menu, 'Popup: Kontextmenü erschien nicht');
+    if (menu) {
+      await shot(popup.sessionId, 'ext-popup-menu');
+      await evaluate(popup.sessionId, '[...document.querySelectorAll(".context-menu button")].find((b) => /Bearbeiten|Edit/.test(b.textContent)).click(), true');
+      check(await waitFor(() => evaluate(popup.sessionId, '!!document.querySelector("input[name=title]")')), 'Popup: „Bearbeiten“ öffnete kein Formular');
+      await evaluate(popup.sessionId, 'location.reload(), true');
+      await sleep(800);
+    }
+  }
   // Entry icon from a website's favicon: a 32×32 PNG becomes a small data URL; SVG and non-images give ''.
   const favicon = await evaluate(popup.sessionId, `(async () => {
     const c = new OffscreenCanvas(32, 32); const g = c.getContext('2d'); g.fillStyle = '#0f6cbd'; g.fillRect(0, 0, 32, 32);
@@ -226,9 +259,28 @@ try {
   if (save) {
     await sleep(500);
     await shot(tab.sessionId, 'ext-inline-create');
-    await clickNode(tab.sessionId, save);
+    await clickNode(tab.sessionId, '.pill .use');
     const r = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).create && evaluate(tab.sessionId, 'results'));
     check(r?.create === 'resolved' && r.isPkc, `create(): ${r?.create}`);
+    // The new entry waits for the popup in edit mode (headless has no toolbar popup: open the page directly).
+    // chrome.action.openPopup may already have opened the real popup – then that one shows the form.
+    await sleep(1200);
+    let editPopup = null;
+    let editForm = '';
+    const popups = (await send('Target.getTargets')).targetInfos.filter((x) => x.url.startsWith(`${ext}/popup/popup.html`) && x.targetId !== popup.targetId);
+    for (const p of popups) {
+      const sessionId = await attach(p.targetId);
+      const v = await waitFor(() => evaluate(sessionId, 'document.querySelector("input[name=title]")?.value || ""'), 3000);
+      if (v) { editPopup = { targetId: p.targetId, sessionId }; editForm = v; break; }
+    }
+    if (!editPopup) {
+      editPopup = await open(`${ext}/popup/popup.html`);
+      editForm = await waitFor(() => evaluate(editPopup.sessionId, 'document.querySelector("input[name=title]")?.value || ""'));
+    }
+    if (process.env.KV_SMOKE_DEBUG) console.log(`[debug] edit popup: ${popups.length} opened by the extension, form: ${editForm}`);
+    check(editForm, 'Nach dem Speichern des Passkeys öffnete das Popup den Eintrag nicht zum Bearbeiten');
+    if (editForm) await shot(editPopup.sessionId, 'ext-popup-edit-after-passkey');
+    await send('Target.closeTarget', { targetId: editPopup.targetId }).catch(() => {});
     if (r?.createJson) {
       const reg = await verifyRegistrationResponse({ response: r.createJson, expectedChallenge: r.createChallenge, expectedOrigin: origin, expectedRPID: 'localhost' });
       check(reg.verified, 'Registrierung nicht verifiziert');
@@ -239,7 +291,7 @@ try {
       if (use) {
         await sleep(500); // the bar slides in – click only once it has settled
         await shot(tab.sessionId, 'ext-inline-get');
-        await clickNode(tab.sessionId, use);
+        await clickNode(tab.sessionId, '.pill .use');
         const r2 = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).get && evaluate(tab.sessionId, 'results'));
         check(r2?.get === 'resolved', `get() über die Leiste: ${r2?.get}`);
         if (process.env.KV_SMOKE_DEBUG && r2?.get !== 'resolved') {
@@ -267,7 +319,7 @@ try {
           const xbox = await send('DOM.getBoxModel', { nodeId: await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .x') }, tab.sessionId).catch((e) => ({ error: e.message }));
           console.log(`[debug] before click: more=${JSON.stringify(box.model?.content || box.error)} x=${JSON.stringify(xbox.model?.content || xbox.error)}`);
         }
-        await clickNode(tab.sessionId, more);
+        await clickNode(tab.sessionId, '.pill .more');
         const other = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill-list .other'));
         check(other, 'Liste der Leiste erschien nicht');
         if (process.env.KV_SMOKE_DEBUG && !other) {
@@ -279,7 +331,7 @@ try {
         if (other) {
           await sleep(300);
           await shot(tab.sessionId, 'ext-inline-list');
-          await clickNode(tab.sessionId, other);
+          await clickNode(tab.sessionId, '.pill-list .other');
         }
         prompt = await waitFor(() => findTarget(`${ext}/prompt/prompt.html#get:`));
         check(prompt, 'Passkey-Dialog (get) wurde nicht geöffnet');
