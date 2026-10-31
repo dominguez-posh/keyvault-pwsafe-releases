@@ -36,6 +36,11 @@ async function call(method, ...args) {
 }
 
 const root = document.getElementById('app');
+// Windows: the window has no title bar (desktop/main.js) – a drag strip at the top and room for the window buttons.
+if (/Win/.test(navigator.platform)) document.documentElement.classList.add('frameless');
+document.body.prepend(h('div', { class: 'drag-strip', 'aria-hidden': 'true' }));
+// Search field in the top bar (above list and details); renderList puts the current view's field into it.
+const topSearch = h('div', { class: 'top-search' });
 const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { class: 'list-pane' }), detail: h('section', { class: 'detail-pane' }) };
 const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '' };
 // Vaults that fit in the sidebar without scrolling; with more, the list scrolls and a search appears above it.
@@ -344,7 +349,7 @@ async function render() {
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
-  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail);
+  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch);
   root.replaceChildren(shell);
   setupSplitters(shell);
   renderSidebar();
@@ -612,19 +617,17 @@ function renderSidebar() {
       refresh);
   });
   setChildren(panes.sidebar,
-    h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), 'Keevault',
-      st.offline ? h('span', { class: 'badge warn', title: t('Letzter Stand: {date}', { date: formatDateTime(st.offlineAt) }) }, t('Offline – nur lesen')) : null),
+    h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), h('span', { class: 'brand-name' }, 'Keevault'),
+      st.offline ? h('span', { class: 'badge warn', title: t('Letzter Stand: {date}', { date: formatDateTime(st.offlineAt) }) }, t('Offline')) : null,
+      h('span', { class: 'spacer' }),
+      iconButton('lock', t('Sperren'), () => call('lock')),
+      mainMenuButton()),
     nav('all', t('Alle Einträge'), 'shield', items.length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite).length),
     nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
     h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length ? h('span', { class: 'count' }, containers.length) : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
-    h('div', { class: 'nav-section' }, h('span', {}, t('Werkzeuge'))),
-    h('button', { class: 'nav', onclick: generatorDialog }, icon('key'), h('span', { class: 'nav-label' }, t('Passwort-Generator'))),
-    h('button', { class: 'nav', onclick: () => healthDialog(reportCtx()) }, icon('shield'), h('span', { class: 'nav-label' }, t('Passwort-Check')),
-      expiringEntries(items).length ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiringEntries(items).length) : null),
-    st.signedIn ? h('button', { class: 'nav', onclick: () => accessReportDialog(reportCtx()) }, icon('users'), h('span', { class: 'nav-label' }, t('Zugriffsbericht'))) : null,
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
         await call('signIn');
@@ -633,15 +636,68 @@ function renderSidebar() {
         toast(e.message, 'error');
       }
     } }, icon('unlock', 14), t('Key-Vault-Tresore anmelden')) : null,
-    h('div', { class: 'spacer' }),
-    h('div', { class: 'account' },
-      h('div', { class: 'account-text' },
-        h('div', { class: 'row-title' }, st.account?.name || st.account?.username || t('Lokal')),
-        h('div', { class: 'row-sub' }, st.account?.username || t('Nur Datei-Tresore'))),
-      iconButton('refresh', t('Neu laden'), refresh),
-      iconButton('settings', t('Einstellungen'), settingsDialog),
-      iconButton('lock', t('Sperren'), () => call('lock'))),
   );
+}
+
+/** Burger next to the logo: opens the main menu; a dot when the password check reports expiring entries. */
+function mainMenuButton() {
+  const b = iconButton('menu', t('Menü'), (e) => mainMenu(e.currentTarget));
+  b.classList.add('menu-btn');
+  b.setAttribute('aria-haspopup', 'menu');
+  if (expiringEntries(items).length) b.append(h('span', { class: 'menu-dot', 'aria-hidden': 'true' }));
+  return b;
+}
+
+/** Main menu (account, reload, settings, tools, lock) as a card under the burger. */
+function mainMenu(anchor) {
+  const existing = document.querySelector('.main-menu');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+  const name = st.account?.name || st.account?.username || t('Lokal');
+  const initials = name.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((x) => x[0].toUpperCase()).join('') || 'K';
+  const expiring = expiringEntries(items).length;
+  const entry = (action, iconName, label, onClick, extra = null) => h('button', { type: 'button', role: 'menuitem', dataset: { action }, onclick: () => {
+    close();
+    onClick();
+  } }, icon(iconName, 16), h('span', { class: 'grow' }, label), extra);
+  const menu = h('div', { class: 'main-menu', role: 'menu', 'aria-label': t('Menü') },
+    h('div', { class: 'main-menu-account' },
+      h('span', { class: 'main-menu-avatar' }, initials),
+      h('span', { class: 'main-menu-who' }, h('b', {}, name), h('span', {}, st.account?.username || t('Nur Datei-Tresore')))),
+    entry('reload', 'refresh', t('Neu laden'), refresh),
+    entry('settings', 'settings', t('Einstellungen'), settingsDialog),
+    h('div', { class: 'main-menu-label' }, t('Werkzeuge')),
+    entry('generator', 'key', t('Passwort-Generator'), generatorDialog),
+    entry('health', 'shield', t('Passwort-Check'), () => healthDialog(reportCtx()), expiring ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiring) : null),
+    st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
+    h('div', { class: 'context-sep' }),
+    entry('lock', 'lock', t('Sperren'), () => call('lock')));
+  const close = () => {
+    menu.classList.add('closing');
+    setTimeout(() => menu.remove(), 120);
+    window.removeEventListener('mousedown', outside, true);
+    window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('blur', close);
+  };
+  const outside = (e) => {
+    if (!menu.contains(e.target) && !anchor.contains(e.target)) close();
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      close();
+      anchor.focus();
+    }
+  };
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 8}px`;
+  menu.style.left = `${Math.max(10, r.right - menu.offsetWidth)}px`;
+  window.addEventListener('mousedown', outside, true);
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('blur', close);
+  menu.querySelector('button')?.focus();
 }
 
 /**
@@ -833,8 +889,9 @@ function renderList() {
     ui.folderOf = ui.containerId;
   }
   if (container?.locked && !container.error) {
+    topSearch.replaceChildren();
     setChildren(panes.list,
-      h('div', { class: 'list-head' }, h('h2', {}, title), containerBadges(container)),
+      h('div', { class: 'list-head' }, listTitle(title, container)),
       h('div', { class: 'list-scroll' }, h('span', { class: 'spinner' })));
     call('protectionInfo', container.id).then((info) => {
       panes.list.querySelector('.list-scroll').replaceChildren(info.secure
@@ -846,7 +903,7 @@ function renderList() {
 
   setChildren(panes.list,
     h('div', { class: 'list-head' }, container && logos.get(container.id) ? h('img', { class: 'container-logo large', src: logos.get(container.id), alt: '' }) : null,
-      h('h2', {}, title), container ? containerBadges(container) : null, h('span', { class: 'spacer' }),
+      listTitle(title, container),
       h('button', { class: 'btn primary', title: t('Neuer Eintrag (Strg+N)'), onclick: (e) => {
         // Choose what to create right at the button.
         const r = e.currentTarget.getBoundingClientRect();
@@ -897,10 +954,10 @@ function renderList() {
         toast(err.message, 'error');
       }
     } }, icon('unlock'), t('Im Tenant des Key Vaults anmelden')) : null,
-    h('div', { class: 'search' }, icon('search'), search),
     typePills(visibleItems({ ignoreType: true })),
     h('div', { class: 'list-scroll' }, rowsEl),
   );
+  topSearch.replaceChildren(h('div', { class: 'search' }, icon('search'), search, h('kbd', { 'aria-hidden': 'true' }, t('Strg F'))));
   renderRows();
   if (container && !container.error) {
     call('folders', container.id).then((f) => {
@@ -1664,6 +1721,11 @@ function licenseBadge(c) {
 }
 
 /** State badges next to the container name (functions: right-click in the sidebar). */
+/** List heading: the full name (wraps instead of being cut off) with the vault badges on a line below it. */
+function listTitle(title, container) {
+  return h('div', { class: 'list-title' }, h('h2', { title }, title), container ? containerBadges(container) : null);
+}
+
 function containerBadges(c) {
   return h('span', { class: 'head-badges' },
     accessBadge(c),

@@ -4,6 +4,18 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.0 – 2026-10-31
+- Fenster ohne Titelleiste: Das Logo sitzt nahtlos oben links, die Windows-Knöpfe in den Farben der App oben rechts.
+- Hauptmenü hinter dem Burger neben dem Logo: Konto, Neu laden, Einstellungen, Werkzeuge (Passwort-Generator, Passwort-Check, Zugriffsbericht) und Sperren; Sperren zusätzlich als eigener Knopf.
+- Suche in der oberen Leiste, mittig über Liste und Details (Strg+F).
+- Listenkopf: Der Tresorname steht voll da, die Markierungen (Verwalten, Demo …) darunter; Zähler, Knöpfe und Markierungen auf gemeinsamen Linien.
+
+### English
+- Window without title bar: the logo sits seamlessly top left, the Windows buttons in the app's colours top right.
+- Main menu behind the burger next to the logo: account, reload, settings, tools (password generator, password check, access report) and lock; lock also as its own button.
+- Search in the top bar, centred above list and details (Ctrl+F).
+- List heading: the vault name in full, the badges (Manage, Demo …) below; counts, buttons and badges on shared lines.
+
 ## 0.7.18 – 2026-10-31
 - Neues, modernes Design (hell und dunkel): Liste und Details als helle Karte mit großen Radien, Felder eines Eintrags als Karte mit Trennlinien, Filter-Pillen (Alle, Logins, Passkeys, Notizen …), zentrierter Sperrbildschirm und KI-Agent-Dialog, aufgeräumtes Popup der Erweiterung.
 - Tresore in der Seitenleiste: Anzahl neben der Überschrift; bei mehr als fünf Tresoren erscheinen „Tresore suchen“ und eine eigene Scrollleiste.

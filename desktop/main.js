@@ -961,6 +961,12 @@ async function setupWindowsProvider() {
   if (r.response === 0) shell.openExternal('ms-settings:savedpasskeys');
 }
 
+/** Window buttons over the hidden title bar: the ground colour of the app (extension/styles/app.css --bg). */
+function titleBarColors() {
+  const dark = nativeTheme.shouldUseDarkColors;
+  return { color: dark ? '#18191d' : '#f5f6f8', symbolColor: dark ? '#eceef2' : '#1b1d22', height: 40 };
+}
+
 /** Windows login item of the installed app (tray only, --background); development and MSIX stay untouched. */
 function applyStartWithWindows() {
   if (!app.isPackaged || process.platform !== 'win32' || process.windowsStore || demo) return;
@@ -2081,6 +2087,9 @@ function createWindow() {
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#18191d' : '#f5f6f8',
     autoHideMenuBar: true,
     show: false,
+    // Windows: no title bar – the app's ground colour runs up to the top edge with the logo top left; minimise,
+    // maximise and close stay native as an overlay top right (colours follow light/dark).
+    ...(process.platform === 'win32' ? { titleBarStyle: 'hidden', titleBarOverlay: titleBarColors() } : {}),
     webPreferences: {
       preload: path.join(here, 'preload.cjs'),
       contextIsolation: true,
@@ -2090,6 +2099,11 @@ function createWindow() {
     },
   });
   win.removeMenu();
+  if (process.platform === 'win32') {
+    const recolor = () => { if (win && !win.isDestroyed()) win.setTitleBarOverlay(titleBarColors()); };
+    nativeTheme.on('updated', recolor);
+    win.once('closed', () => nativeTheme.off('updated', recolor));
+  }
   win.loadURL('app://pwsafe/desktop/renderer/index.html');
   win.once('ready-to-show', () => {
     // Started with Windows (setting "Start with Windows"): only in the tray, the window opens on demand.
@@ -2563,7 +2577,7 @@ function runSmokeTest() {
         if (view === 'members') await menuAction('members');
         if (view === 'changelog') await menuAction('changelog');
       }
-      if (view?.startsWith('settings')) await js('document.querySelector(".sidebar .icon-btn[title=Einstellungen]")?.click()');
+      if (view?.startsWith('settings')) await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=settings]")?.click()');
       // Settings tab: settings-mcp (AI agents) or settings-<n> (n-th tab, 0-based).
       if (view === 'settings-mcp' || /^settings-\d$/.test(view || '')) {
         await new Promise((r) => setTimeout(r, 600));
@@ -2611,10 +2625,11 @@ function runSmokeTest() {
         send({ type: 'busy', containerId: (await vault.containers())[0]?.id, busy: true });
         await sleep(600);
       }
-      if (view === 'health') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Passwort-Check|Password check/.test(n.textContent))?.click()');
-      if (view === 'access') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Zugriffsbericht|Access report/.test(n.textContent))?.click()');
+      if (view === 'health') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=health]")?.click()');
+      if (view === 'access') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=access]")?.click()');
+      if (view === 'mainmenu') await js('document.querySelector(".menu-btn")?.click()');
       if (view === 'multi') {
-        await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Alle Einträge|All entries/.test(n.textContent))?.click()');
+        await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Alle Einträge|All entries|All items/.test(n.textContent))?.click()');
         await sleep(400);
         await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
         await sleep(200);
@@ -2649,6 +2664,11 @@ function runSmokeTest() {
         await js('document.querySelectorAll("dialog[open] .option-card")[2]?.click()');
       }
       if (view) await sleep(1200);
+      // Layout check (development): KVPWSAFE_MEASURE="<selector>[,<selector>…]" prints each match's box.
+      if (process.env.KVPWSAFE_MEASURE) {
+        const sel = JSON.stringify(process.env.KVPWSAFE_MEASURE);
+        console.log(await js(`JSON.stringify(${sel}.split(',').flatMap((q) => [...document.querySelectorAll(q)].slice(0, 6).map((e) => { const r = e.getBoundingClientRect(); return [q, (e.textContent || '').trim().slice(0, 18), Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; })))`));
+      }
     }
     for (const f of missingFiles) errors.push(`missing file: ${f}`);
     if (screenshot) {

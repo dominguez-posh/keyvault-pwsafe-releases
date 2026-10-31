@@ -294,3 +294,73 @@ body { overflow: hidden; }
 .splash .card-top { justify-content: center; position: relative; }
 .splash .card-top > :not(.splash-logo) { position: absolute; top: 0; right: 0; }
 .splash .card > p { text-align: center; }
+/* List heading: name on its own line (up to two lines), badges below. */
+.list-head { align-items: flex-start; }
+.list-title { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.list-title h2, .list-head .list-title h2 { white-space: normal; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; line-height: 1.25; }
+.list-title .head-badges { margin-left: 0; flex-wrap: wrap; }
+.list-title .head-badges:empty { display: none; }
+.list-head .btn.primary { margin-top: 2px; }
+
+/* Windows without title bar: the top 40 px move the window (the native buttons sit top right, 138 px). The logo in
+   the sidebar sits in that strip; list and detail start below it so nothing clickable is covered. */
+.drag-strip { display: none; }
+.frameless .drag-strip { display: block; position: fixed; top: 0; left: 0; right: 138px; height: 40px; -webkit-app-region: drag; z-index: 2; }
+.frameless .sidebar { padding-top: 4px; }
+.frameless .brand { height: 36px; padding-top: 0; padding-bottom: 0; margin-bottom: 12px; }
+.frameless .list-pane, .frameless .detail-pane { margin-top: 40px; }
+.frameless .splitter { top: 40px; }
+.frameless .splash { padding-top: 48px; }
+.frameless dialog, .frameless .modal, .frameless .context-menu, .frameless .progress-toast { -webkit-app-region: no-drag; }
+
+/* Symmetry and lines (measured): one badge height, one column for all counts in the sidebar (aligned with the vault
+   counts, the + with the refresh buttons), the "New" button centred on the title block. */
+.head-badges { align-items: center; gap: 6px; }
+.head-badges > span:not(.badge) { display: contents; }
+.head-badges .badge { box-sizing: border-box; height: 20px; display: inline-flex; align-items: center; padding: 0 8px; margin: 0; font-size: 11px; line-height: 1; border: 0; vertical-align: middle; }
+.list-head { align-items: center; }
+.list-head .btn.primary { margin-top: 0; }
+.sidebar > .nav .count { margin-right: 32px; min-width: 14px; text-align: right; }
+.vault-list .count { min-width: 14px; text-align: right; }
+.nav-section { padding-right: 0; }
+.nav-section .count { margin-right: 8px; min-width: 14px; text-align: right; }
+
+/* Brand row with lock and burger; the main menu as a card under the burger. */
+.brand { align-items: center; }
+.brand .spacer { flex: 1; }
+.brand .icon-btn { -webkit-app-region: no-drag; width: 32px; height: 32px; border-radius: 9px; }
+.brand-name { white-space: nowrap; }
+.menu-btn { position: relative; }
+.menu-dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: #e8a400; box-shadow: 0 0 0 2px var(--bg); }
+.main-menu { position: fixed; z-index: 1000; width: 270px; padding: 6px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
+  box-shadow: 0 18px 40px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 14px rgba(20, 26, 38, .12); -webkit-app-region: no-drag;
+  transform-origin: top right; animation: menu-in .14s cubic-bezier(.2, .9, .3, 1.1); }
+.main-menu.closing { animation: menu-out .12s ease-in forwards; }
+.main-menu-account { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; padding: 10px; border-radius: 12px; background: var(--bg); }
+.main-menu-avatar { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
+.main-menu-who { min-width: 0; display: grid; }
+.main-menu-who b, .main-menu-who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main-menu-who span { font-size: 12px; color: var(--muted); }
+.main-menu button { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 36px; padding: 0 10px; border: 0; border-radius: 9px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.main-menu button:hover, .main-menu button:focus-visible { background: var(--accent-soft); outline: none; }
+.main-menu button > .icon { color: var(--muted); }
+.main-menu button:hover > .icon { color: var(--accent); }
+.main-menu .grow { flex: 1; }
+.main-menu-label { padding: 10px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+@keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes menu-out { to { opacity: 0; transform: translateY(-4px) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .main-menu, .main-menu.closing { animation-duration: .01s; } }
+.frameless .brand, .brand { padding-right: 0; }
+.brand .icon-btn { width: 30px; height: 30px; }
+
+/* Top bar on every platform: logo + menu on the left, the search centred above list and details. Only the field
+   itself takes clicks; the rest of the bar moves the window (frameless, Windows). */
+.sidebar { padding-top: 4px; }
+.brand { height: 36px; padding-top: 0; padding-bottom: 0; margin-bottom: 12px; }
+.list-pane, .detail-pane { margin-top: 40px; }
+.splitter { top: 40px; }
+.top-search { position: absolute; top: 4px; height: 32px; left: var(--sidebar-w, 250px); right: 150px; display: flex; justify-content: center; z-index: 3; pointer-events: none; }
+.top-search .search { pointer-events: auto; width: min(560px, 100%); -webkit-app-region: no-drag; }
+.top-search input { min-height: 32px; padding-top: 4px; padding-bottom: 4px; padding-right: 64px; border-radius: 10px; background: var(--surface); font-size: 13px; }
+.top-search kbd { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); padding: 1px 6px; border: 1px solid var(--border); border-radius: 6px; font: 11px var(--font); color: var(--muted); pointer-events: none; }
+.top-search { top: 6px; }
