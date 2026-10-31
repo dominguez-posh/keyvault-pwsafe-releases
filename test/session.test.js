@@ -436,3 +436,15 @@ test('fast index: protected container seals the shards; without the key the fast
   const open = await other.refreshIndexFast();
   assert.equal(open[cid].items[0].title, 'Geheim');
 });
+
+test('fast index: a deleted entry does not come back when refreshing right after deleting', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  for (const n of ['Alpha', 'Beta']) await session.saveItem(cid, { title: n, password: 'x' });
+  await session.flushFastIndex();
+  const victim = (await session.index())[cid].items.find((i) => i.title === 'Alpha');
+  await session.deleteItem(cid, victim.id);
+  // "Refresh" a moment later – before the debounced index write: the own deletion is written first.
+  const index = await session.refreshIndexFast([cid]);
+  assert.deepEqual(index[cid].items.map((i) => i.title), ['Beta']);
+});

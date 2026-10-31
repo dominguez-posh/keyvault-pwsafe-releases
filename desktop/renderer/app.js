@@ -1614,6 +1614,7 @@ function containerActionsFlat(c) {
     may('rename') ? { action: 'rename', icon: 'edit', label: t('Umbenennen'), disabled: !!c.error || (isFile && !ready), onClick: () => renameContainerDialog(c) } : null,
     may('import') ? { action: 'import', icon: 'upload', label: t('Importieren'), disabled: !canWrite, onClick: () => openImport(c) } : null,
     !isFile && may('export') ? { action: 'export', icon: 'download', label: t('Einträge exportieren (CSV)'), disabled: !ready, onClick: () => exportDialog(c) } : null,
+    { action: 'trash', icon: 'trash', label: t('Papierkorb'), disabled: !ready, onClick: () => trashDialog(c) },
     { action: 'license', icon: 'key', label: t('Lizenz'), disabled: !ready, onClick: () => licenseDialog(c) },
     isFile ? null : { action: 'backup', icon: 'download', label: t('Backup erstellen (Owner)'), disabled: !!c.error, onClick: () => backupDialog(c) },
     isFile ? null : { action: 'restore', icon: 'history', label: t('Backup wiederherstellen (Owner)'), disabled: !!c.error, onClick: () => restoreDialog(c) },
@@ -1638,8 +1639,7 @@ function containerActionsFlat(c) {
 
 // ---------------------------------------------------------------- vault settings (Key Vault administrators)
 
-// "purge" (final deletion from the trash) stays a known policy key but has no switch: the app has no trash any more.
-const POLICY_ORDER = ['folders', 'rename', 'logo', 'import', 'export', 'protection'];
+const POLICY_ORDER = ['folders', 'rename', 'logo', 'import', 'export', 'protection', 'purge'];
 const POLICY_TEXT = {
   folders: 'Ordner anlegen, umbenennen und löschen',
   rename: 'Tresor umbenennen',
@@ -1920,13 +1920,52 @@ async function openItemLink(link) {
 // Retention per vault (days, from the vault's Azure properties); null when it cannot be read (no ARM access).
 const retentionCache = new Map();
 
+/** Trash of a vault: deleted entries until the end of the retention period – restore, or purge if the vault settings allow it. */
+function trashDialog(container) {
+  const listEl = h('div', {}, h('span', { class: 'spinner' }));
+  const load = async () => {
+    const entries = await call('trash', container.id);
+    listEl.replaceChildren(...(entries.length ? entries.map((e) => h('div', { class: 'member' },
+      icon('trash'),
+      h('div', { class: 'row-text' },
+        h('div', { class: 'row-title' }, e.title),
+        h('div', { class: 'row-sub' }, e.scheduledPurgeDate
+          ? t('gelöscht {deleted} · endgültig ab {purge}', { deleted: formatDateTime(e.deletedDate), purge: formatDateTime(e.scheduledPurgeDate) })
+          : t('gelöscht {deleted}', { deleted: formatDateTime(e.deletedDate) }))),
+      h('button', { type: 'button', class: 'btn small', onclick: async (ev) => {
+        ev.currentTarget.disabled = true;
+        try {
+          await call('restore', container.id, e.id);
+          toast(t('Wiederhergestellt'));
+          await reloadAll();
+          await load();
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      } }, t('Wiederherstellen')),
+      !featureAllowed(container, 'purge') ? null : h('button', { type: 'button', class: 'btn small danger', onclick: async () => {
+        if (!(await confirmDialog(t('Endgültig löschen'), t('„{title}“ endgültig löschen? Das lässt sich nicht rückgängig machen.', { title: e.title }), { confirmLabel: t('Endgültig löschen'), danger: true }))) return;
+        try {
+          await call('purge', container.id, e.id);
+          await load();
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      } }, t('Endgültig löschen')))) : [h('p', { class: 'muted' }, t('Der Papierkorb ist leer.'))]));
+  };
+  modal(t('Papierkorb – {name}', { name: container.name }), h('div', {},
+    container.kind === 'file' ? null : h('p', { class: 'muted small' }, t('Gelöschte Einträge bleiben im Key Vault (Soft Delete) bis zum Ende der Aufbewahrungsfrist und lassen sich bis dahin hier oder im Azure-Portal wiederherstellen. Mit Löschschutz ist endgültiges Löschen erst danach möglich.')),
+    listEl), [{ label: t('Schließen') }]);
+  load().catch((e) => listEl.replaceChildren(notice(e.message)));
+}
+
 /**
  * Text for delete confirmations. Key Vault keeps deleted secrets for its retention period (soft delete, always on):
- * recovery happens in the Azure portal, Keevault has no trash of its own. File vaults have no retention at all.
+ * they can be restored from the trash (vault menu) or in the Azure portal. File vaults keep deleted entries in their own trash.
  */
 async function deleteNotice(container) {
   if (!container) return '';
-  if (container.kind === 'file') return t('Achtung: keine Aufbewahrungsfrist – gelöschte Einträge lassen sich nicht wiederherstellen.');
+  if (container.kind === 'file') return t('Der Eintrag bleibt im Papierkorb des Datei-Tresors, bis er dort endgültig gelöscht wird.');
   if (!retentionCache.has(container.id)) {
     const days = await Promise.race([
       call('vaultInfo', container.id).then((x) => x?.retentionDays || null, () => null),
@@ -1936,8 +1975,8 @@ async function deleteNotice(container) {
   }
   const days = retentionCache.get(container.id);
   return days
-    ? t('Wiederherstellbar nur {days} Tage lang im Azure-Portal (Key Vault → Secrets → Verwaltete gelöschte Secrets), danach endgültig gelöscht.', { days })
-    : t('Wiederherstellbar nur während der Aufbewahrungsfrist des Key Vaults (7–90 Tage) im Azure-Portal, danach endgültig gelöscht.');
+    ? t('{days} Tage lang im Papierkorb wiederherstellbar (Rechtsklick auf den Tresor → Papierkorb, oder im Azure-Portal), danach endgültig gelöscht.', { days })
+    : t('Während der Aufbewahrungsfrist des Key Vaults (7–90 Tage) im Papierkorb wiederherstellbar, danach endgültig gelöscht.');
 }
 
 function itemActions(i) {
@@ -1968,7 +2007,7 @@ function itemActions(i) {
       if (!(await confirmDialog(t('Eintrag löschen'), `${t('„{title}“ löschen?', { title: i.title })} ${await deleteNotice(c)}`, { confirmLabel: t('Löschen'), danger: true }))) return;
       await call('delete', containerId, id);
       if (ui.selected === i.key) ui.selected = null;
-      toast(t('Gelöscht'));
+      toast(t('In den Papierkorb verschoben'));
       await reloadAll();
     } },
   ];
@@ -2034,7 +2073,7 @@ async function deleteManyDialog(list) {
   const notices = [...new Set(await Promise.all([...new Set(list.map((i) => i.containerId))].map((id) => deleteNotice(st.containers.find((x) => x.id === id)))))];
   if (!(await confirmDialog(t('Einträge löschen'), `${t('{n} Einträge löschen?', { n: list.length })} ${notices.join(' ')}`, { confirmLabel: t('Löschen'), danger: true }))) return;
   const failed = await deleteMany(list.map((i) => i.key));
-  toast(failed ? t('{n} Einträge konnten nicht gelöscht werden', { n: failed }) : t('{n} Einträge gelöscht', { n: list.length }), failed ? 'error' : undefined);
+  toast(failed ? t('{n} Einträge konnten nicht gelöscht werden', { n: failed }) : t('{n} Einträge in den Papierkorb verschoben', { n: list.length }), failed ? 'error' : undefined);
   await reloadAll();
 }
 
@@ -2198,26 +2237,31 @@ async function renderDetail() {
         toast(e.message, 'error');
       }
     } : null,
+    // "⋯" in the head opens the same menu as a right-click in the list.
+    menu: (anchor, items) => {
+      const r = anchor.getBoundingClientRect();
+      contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: r.bottom + 6 }, items);
+    },
     actions: [
       canWrite ? { icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: () => {
         ui.editing = 'edit';
         ui.editingItem = item;
         renderDetail();
       } } : null,
-      canWrite ? { icon: 'move', label: t('Verschieben'), onClick: () => moveDialog(item) } : null,
-      canWrite ? { icon: 'copy', label: t('Duplizieren'), onClick: () => duplicateItem(containerId, id) } : null,
-      canWrite ? { icon: 'star', label: item.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), onClick: () => toggleFavorite(item) } : null,
-      { icon: 'history', label: t('Verlauf'), onClick: () => historyDialog(item) },
+      canWrite ? { icon: 'star', quick: true, on: !!item.favorite, label: item.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), onClick: () => toggleFavorite(item) } : null,
+      canWrite ? { action: 'move', icon: 'move', label: t('Verschieben'), onClick: () => moveDialog(item) } : null,
+      canWrite ? { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), onClick: () => duplicateItem(containerId, id) } : null,
+      { action: 'history', icon: 'history', label: t('Verlauf'), onClick: () => historyDialog(item) },
       buildItemLink(st.containers.find((c) => c.id === containerId), id)
-        ? { icon: 'link', label: t('Link kopieren'), onClick: () => copyItemLink(st.containers.find((c) => c.id === containerId), id) } : null,
+        ? { icon: 'link', quick: true, label: t('Link kopieren'), onClick: () => copyItemLink(st.containers.find((c) => c.id === containerId), id) } : null,
       st.containers.find((c) => c.id === containerId)?.secure
         ? { icon: 'clock', label: t('Änderungsprotokoll'), onClick: () => changelogDialog(st.containers.find((c) => c.id === containerId), id) } : null,
-      canWrite ? { icon: 'trash', label: t('Löschen'), danger: true, onClick: async () => {
+      canWrite ? { action: 'delete', icon: 'trash', label: t('Löschen'), danger: true, onClick: async () => {
         if (!(await confirmDialog(t('Eintrag löschen'), `${t('„{title}“ löschen?', { title: item.title })} ${await deleteNotice(st.containers.find((x) => x.id === containerId))}`, { confirmLabel: t('Löschen'), danger: true }))) return;
         try {
           await call('delete', containerId, id);
           ui.selected = null;
-          toast(t('Gelöscht'));
+          toast(t('In den Papierkorb verschoben'));
           await reloadAll();
         } catch (e) {
           toast(e.message, 'error');

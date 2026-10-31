@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.4 – 2026-10-31
+- Papierkorb wieder da (Rechtsklick auf den Tresor → Papierkorb): gelöschte Einträge mit Löschdatum und Frist, Wiederherstellen mit einem Klick, endgültig löschen nur wenn die Tresor-Einstellungen es erlauben. Der Löschdialog verweist darauf.
+- Website: Wissensartikel „Den Key Vault richtig betreiben“ (Aufbewahrung, Löschschutz, Wiederherstellung, Backups, Rollen, Protokolle, Netzwerk, Checkliste).
+- Gelöschte Einträge tauchen beim Aktualisieren nicht mehr kurz wieder auf: Eigene Änderungen schreiben den Schnell-Index nach 1,5 s statt nach bis zu 20 s, und Aktualisieren schreibt ausstehende Änderungen vor dem Laden.
+
+### English
+- Trash is back (right-click the vault → Trash): deleted entries with deletion date and period, restore with one click, delete for good only if the vault settings allow it. The delete dialog points to it.
+- Website: article “Running the Key Vault well” (retention, purge protection, recovery, backups, roles, logs, network, checklist).
+- Deleted entries no longer reappear briefly when refreshing: own changes write the fast index after 1.5 s instead of up to 20 s, and refreshing writes pending changes before loading.
+
 ## 0.8.3 – 2026-10-31
 - Sicherheit nachgeschärft (Review-Findings): Kopieren setzt die Kennzeichen gegen Zwischenablage-Verlauf und Cloud-Zwischenablage jetzt auch, wenn der PowerShell-Hilfsprozess blockiert ist (eigenes Hilfsprogramm); Absturzabbilder abgeschaltet, alte gelöscht, Keevault von der Windows-Fehlerberichterstattung ausgenommen; Tresor-Infos zeigen, welche Metadaten ohne Zusatzschutz im Klartext lesbar sind.
 - Schmale Azure-Rollen „Keevault User“ und „Keevault Reader“ im Richtlinien-Paket (ohne Purge, Schlüssel, Zertifikate, Rollen).

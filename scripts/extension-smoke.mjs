@@ -235,7 +235,7 @@ try {
     const c = new OffscreenCanvas(32, 32); const g = c.getContext('2d'); g.fillStyle = '#0f6cbd'; g.fillRect(0, 0, 32, 32);
     const b = new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
     const png = 'data:image/png;base64,' + btoa(String.fromCharCode(...b));
-    const m = await import('../core/image.js');
+    const m = await import(chrome.runtime.getURL('core/image.js'));
     return JSON.stringify({ png: (await m.faviconToDataUrl(png)).slice(0, 15), svg: await m.faviconToDataUrl('data:image/svg+xml;base64,PHN2Zy8+'), none: await m.faviconToDataUrl('') });
   })()`);
   const fav = JSON.parse(favicon || '{}');

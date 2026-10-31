@@ -2721,6 +2721,25 @@ function runSmokeTest() {
         await sleep(500);
       }
       if (view === 'help') await js('document.querySelector(".help-btn")?.click()');
+      if (view === 'trash') {
+        // Trash round trip: delete an entry, it shows up in the trash, restore brings it back (screenshot/smoke only).
+        const c = (await vault.containers()).find((x) => /kv-pws-demo-team/.test(x.vaultUrl || ''));
+        const entry = (await vault.index())[c.id].items.find((x) => x.title === 'Grafana');
+        await api.delete(c.id, entry.id);
+        const inTrash = (await api.trash(c.id)).some((x) => x.id === entry.id);
+        if (!inTrash) errors.push('trash: deleted entry missing in the trash');
+        await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => /Team Infrastruktur/.test(r.textContent)); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); document.querySelector(".context-menu [data-action=trash]")?.click(); })()`);
+        await sleep(800);
+        const shown = await js('document.querySelector("dialog[open]")?.textContent || ""');
+        if (!/Grafana/.test(shown)) errors.push('trash: dialog does not list the entry');
+        await api.restore(c.id, entry.id);
+        if (!(await api.items()).some((x) => x.id === entry.id)) errors.push('trash: restore did not bring the entry back');
+        await api.delete(c.id, entry.id);
+        await js('(() => { document.querySelector("dialog[open] .modal-head button, dialog[open] button")?.click(); })()');
+        await sleep(300);
+        await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => /Team Infrastruktur/.test(r.textContent)); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); document.querySelector(".context-menu [data-action=trash]")?.click(); })()`);
+        await sleep(800);
+      }
       if (view === 'searchall') {
         // Search scope: "o" in the team vault finds only its entries, switched to "All" also the personal ones.
         const typeInto = (v) => js(`(() => { const s = document.getElementById("search"); s.value = ${JSON.stringify(v)}; s.dispatchEvent(new Event("input", { bubbles: true })); })()`);

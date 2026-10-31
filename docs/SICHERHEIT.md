@@ -172,9 +172,10 @@ aber **Software-Schlüssel**, keine Hardware-Schlüssel.
 ## Löschen, Wiederherstellen, Export
 
 - Löschen nutzt das **Soft Delete** von Key Vault: Der Eintrag lässt sich während der Aufbewahrungsfrist des Tresors
-  (7–90 Tage) im **Azure-Portal** wiederherstellen (Key Vault → Secrets → Verwaltete gelöschte Secrets); der
-  Löschdialog nennt die Frist. Keevault hat bewusst keinen eigenen Papierkorb. Datei-Tresore haben **keine**
-  Aufbewahrungsfrist.
+  (7–90 Tage) wiederherstellen – im **Papierkorb** von Keevault (Rechtsklick auf den Tresor) oder im **Azure-Portal**
+  (Key Vault → Secrets → Verwaltete gelöschte Secrets). Der Löschdialog nennt die Frist. Endgültiges Löschen aus dem
+  Papierkorb erlauben die Tresor-Einstellungen nur, wenn ein Admin es freigibt; mit Löschschutz geht es erst nach Ablauf
+  der Frist. Datei-Tresore behalten gelöschte Einträge in ihrem Papierkorb, bis sie dort endgültig gelöscht werden.
 - **Verschlüsselte Backups** (Tresor-Menü): AES-256-GCM, Schlüssel per PBKDF2 aus einem generierten Passwort; nur für
   Besitzer der Subscription.
 - **Export als CSV** schreibt die Einträge **im Klartext** in eine Datei. Tresor-Admins können den Export in den

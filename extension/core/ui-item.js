@@ -38,21 +38,51 @@ export function itemDetail(item, ctx) {
   for (const f of item.fields) rows.push(customField(f, ctx));
   if (item.notes) rows.push(h('div', { class: 'field' }, h('label', {}, t('Notizen')), h('div', { class: 'notes' }, item.notes)));
 
+  // With ctx.menu (desktop): the actions sit in the head – main action as a button, "quick" ones as icons, the rest
+  // behind "⋯". Without it (popup): the classic row of buttons below the fields.
+  const toolbar = ctx.menu && ctx.actions?.length ? itemToolbar(ctx) : null;
   return h('div', { class: 'item-detail' },
     h('div', { class: 'item-head' },
       avatar(item.title, 'avatar large', item.icon),
       h('div', { class: 'item-head-text' },
         h('h2', {}, item.favorite ? icon('star', 14) : null, item.title),
         h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type])].filter(Boolean).join(' · ')),
-        expiryBadge(item.expires))),
+        expiryBadge(item.expires)),
+      toolbar),
     // Fields as one card with dividers (modern design); the action bar and meta line stay outside.
     rows.length ? h('div', { class: 'field-card' }, ...rows) : h('p', { class: 'muted' }, t('Keine Felder')),
     h('div', { class: 'meta muted' }, item.updatedBy
       ? t('Geändert {date} von {user}', { date: formatDateTime(item.updated), user: item.updatedBy })
       : t('Geändert {date}', { date: formatDateTime(item.updated) })),
-    ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
+    !toolbar && ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
       type: 'button', class: a.danger ? 'btn danger' : a.primary ? 'btn primary' : 'btn', onclick: a.onClick,
     }, icon(a.icon), a.label))) : null);
+}
+
+/** Head toolbar: primary actions as buttons, quick actions as icon buttons, everything else in the "⋯" menu. */
+function itemToolbar(ctx) {
+  const primary = ctx.actions.filter((a) => a.primary);
+  const quick = ctx.actions.filter((a) => a.quick && !a.primary);
+  const rest = ctx.actions.filter((a) => !a.primary && !a.quick);
+  const more = rest.length ? iconButton('more', t('Weitere Aktionen'), (e) => {
+    const items = [];
+    rest.forEach((a, i) => {
+      if (a.danger && i > 0) items.push('-');
+      items.push({ action: a.action || '', icon: a.icon, label: a.label, danger: a.danger, onClick: a.onClick });
+    });
+    ctx.menu(e.currentTarget, items);
+  }) : null;
+  more?.classList.add('item-more');
+  more?.setAttribute('aria-haspopup', 'menu');
+  return h('div', { class: 'item-tools' },
+    ...quick.map((a) => {
+      const b = iconButton(a.icon, a.label, a.onClick);
+      if (a.on) b.classList.add('on');
+      if (a.on !== undefined) b.setAttribute('aria-pressed', String(!!a.on));
+      return b;
+    }),
+    more,
+    ...primary.map((a) => h('button', { type: 'button', class: 'btn primary', onclick: a.onClick }, icon(a.icon), a.label)));
 }
 
 /** "Gültig bis" with a warning when the date is near or past. */

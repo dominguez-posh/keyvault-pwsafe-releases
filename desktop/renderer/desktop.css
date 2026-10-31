@@ -446,3 +446,14 @@ body { overflow: hidden; }
 .frameless .splitter { top: 52px; }
 .frameless .sidebar { padding-top: 8px; }
 .frameless .brand { height: 36px; margin-bottom: 14px; }
+dialog .member .row-sub { white-space: normal; }
+
+/* Entry head toolbar: star and link as icons, "⋯" with the rest, "Edit" as the main button – no button wall below. */
+.item-head { align-items: flex-start; }
+.item-head-text { flex: 1; }
+.item-tools { display: flex; align-items: center; gap: 4px; flex: none; margin-top: 8px; }
+.item-tools .icon-btn { width: 36px; height: 36px; border-radius: 10px; }
+.item-tools .icon-btn:hover { background: var(--surface-2); }
+.item-tools .icon-btn.on { color: #e3a400; }
+.item-tools .icon-btn.on svg { fill: currentColor; }
+.item-tools .btn.primary { margin-left: 6px; height: 36px; border-radius: 10px; padding: 0 16px; }

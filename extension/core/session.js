@@ -723,6 +723,14 @@ export class VaultSession {
   async refreshIndexFast(containerIds) {
     const containers = await this.kvContainers();
     const targets = containerIds ? containers.filter((c) => containerIds.includes(c.id)) : containers;
+    // Own changes not yet written to the vault's index: write them first – otherwise the older index from the vault
+    // would bring back a just deleted entry (or hide a new one) until the full listing reconciles.
+    for (const c of targets) {
+      if (!this.fastIndexTimers?.has(c.id)) continue;
+      clearTimeout(this.fastIndexTimers.get(c.id));
+      this.fastIndexTimers.delete(c.id);
+      await this.writeFastIndex(c.id).catch(() => {});
+    }
     const fresh = {};
     const slow = [];
     await mapLimit(targets, 4, async (c) => {
@@ -769,15 +777,16 @@ export class VaultSession {
   }
 
   /** Writes the index secrets from the local index (debounced; skipped without write access or when locked). */
-  scheduleFastIndex(containerId) {
+  scheduleFastIndex(containerId, { own = false } = {}) {
     this.fastIndexTimers ||= new Map();
     clearTimeout(this.fastIndexTimers.get(containerId));
     // Jitter: with many users every app notices a change at its next reconcile – spread out, the first one writes
-    // and the others find the vault's index already current (writeFastIndex compares before writing).
+    // and the others find the vault's index already current (writeFastIndex compares before writing). An own change
+    // (save, delete, move) is known only to this app: written after the short debounce, without jitter.
     const timer = setTimeout(() => {
       this.fastIndexTimers.delete(containerId);
       this.writeFastIndex(containerId).catch(() => {});
-    }, FAST_INDEX_DELAY + Math.floor(Math.random() * FAST_INDEX_JITTER));
+    }, FAST_INDEX_DELAY + (own ? 0 : Math.floor(Math.random() * FAST_INDEX_JITTER)));
     timer.unref?.();
     this.fastIndexTimers.set(containerId, timer);
   }
@@ -833,7 +842,7 @@ export class VaultSession {
       index[containerId] = { ...entry, items: change(entry.items) };
       await this.store.set('index', index);
     });
-    this.scheduleFastIndex(containerId);
+    this.scheduleFastIndex(containerId, { own: true });
   }
 
   /** All item summaries; Key Vault indexes older than maxAgeMs are reloaded, adapters are asked live. */
