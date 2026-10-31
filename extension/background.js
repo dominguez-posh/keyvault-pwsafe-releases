@@ -207,6 +207,8 @@ function contentStrings() {
     otherOptions: t('Andere Optionen'),
     choosePasskey: t('Passkey wählen'),
     savePasskey: t('In Keevault speichern'),
+    otherDevice: t('Anderes Gerät'),
+    cancel: t('Abbrechen'),
     lockedTitle: t('Keevault ist gesperrt'),
     pinPrompt: t('PIN eingeben, um fortzufahren'),
     unlockButton: t('Entsperren'),

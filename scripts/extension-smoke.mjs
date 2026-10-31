@@ -250,7 +250,7 @@ try {
   const r0 = await evaluate(tab.sessionId, 'results');
   check(r0.patched, 'WebAuthn-Shim nicht aktiv');
   await evaluate(tab.sessionId, 'startCreate(), true');
-  const save = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .use'));
+  const save = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .primary'));
   check(save, 'Passkey-Leiste (create) erschien nicht in der Seite');
   if (!save && process.env.KV_SMOKE_DEBUG) {
     console.log(`[debug] create: window=${!!(await findTarget(`${ext}/prompt/prompt.html#create:`))} results=${JSON.stringify(await evaluate(tab.sessionId, 'results'))}`);
@@ -259,7 +259,7 @@ try {
   if (save) {
     await sleep(500);
     await shot(tab.sessionId, 'ext-inline-create');
-    await clickNode(tab.sessionId, '.pill .use');
+    await clickNode(tab.sessionId, '.kvtag .primary');
     const r = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).create && evaluate(tab.sessionId, 'results'));
     check(r?.create === 'resolved' && r.isPkc, `create(): ${r?.create}`);
     // The new entry waits for the popup in edit mode (headless has no toolbar popup: open the page directly).
@@ -286,17 +286,17 @@ try {
       check(reg.verified, 'Registrierung nicht verifiziert');
       // Sign-in 1: the in-page chooser bar (closed shadow root, reached through the DOM domain), "Use passkey".
       await evaluate(tab.sessionId, 'startGet(), true');
-      const use = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .use'));
+      const use = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .primary'));
       check(use, 'Passkey-Leiste (get) erschien nicht in der Seite');
       if (use) {
         await sleep(500); // the bar slides in – click only once it has settled
         await shot(tab.sessionId, 'ext-inline-get');
-        await clickNode(tab.sessionId, '.pill .use');
+        await clickNode(tab.sessionId, '.kvtag .primary');
         const r2 = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).get && evaluate(tab.sessionId, 'results'));
         check(r2?.get === 'resolved', `get() über die Leiste: ${r2?.get}`);
         if (process.env.KV_SMOKE_DEBUG && r2?.get !== 'resolved') {
           const res = await evaluate(tab.sessionId, 'results');
-          console.log(`[debug] get: ${res.get} – ${res.getMessage}; bar still there: ${!!(await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill'))}; UI hosts: ${await evaluate(tab.sessionId, 'document.querySelectorAll("kvpwsafe-ui").length')}`);
+          console.log(`[debug] get: ${res.get} – ${res.getMessage}; bar still there: ${!!(await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag'))}; UI hosts: ${await evaluate(tab.sessionId, 'document.querySelectorAll("kvpwsafe-ui").length')}`);
           console.log(`[debug] page messages: ${JSON.stringify(res.msgs)}`);
           await shot(tab.sessionId, 'ext-inline-after-click');
         }
@@ -310,28 +310,28 @@ try {
       // Sign-in 2: "Other options" in the bar opens the prompt window, which signs in through its list.
       await sleep(1500); // the first sign-in still stores the passkey's new counter (index update)
       await evaluate(tab.sessionId, 'delete results.get; delete results.getJson; startGet(), true');
-      const more = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .more'));
+      const more = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .switch'));
       check(more, 'Passkey-Leiste (2. get) erschien nicht');
       if (more) {
         await sleep(500);
         if (process.env.KV_SMOKE_DEBUG) {
           const box = await send('DOM.getBoxModel', { nodeId: more }, tab.sessionId).catch((e) => ({ error: e.message }));
-          const xbox = await send('DOM.getBoxModel', { nodeId: await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill .x') }, tab.sessionId).catch((e) => ({ error: e.message }));
+          const xbox = await send('DOM.getBoxModel', { nodeId: await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .link-other') }, tab.sessionId).catch((e) => ({ error: e.message }));
           console.log(`[debug] before click: more=${JSON.stringify(box.model?.content || box.error)} x=${JSON.stringify(xbox.model?.content || xbox.error)}`);
         }
-        await clickNode(tab.sessionId, '.pill .more');
-        const other = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill-list .other'));
+        await clickNode(tab.sessionId, '.kvtag .switch');
+        const other = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .opt-window'));
         check(other, 'Liste der Leiste erschien nicht');
         if (process.env.KV_SMOKE_DEBUG && !other) {
           const res = await evaluate(tab.sessionId, 'results');
           const box = await send('DOM.getBoxModel', { nodeId: more }, tab.sessionId).catch((e) => ({ error: e.message }));
-          console.log(`[debug] list: get=${res.get}; bar: ${!!(await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.pill'))}; more box: ${JSON.stringify(box.model?.content || box.error)}; messages: ${JSON.stringify(res.msgs.slice(-4))}; cs: ${await evaluate(tab.sessionId, 'JSON.stringify(document.documentElement.dataset)')}`);
+          console.log(`[debug] list: get=${res.get}; bar: ${!!(await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag'))}; more box: ${JSON.stringify(box.model?.content || box.error)}; messages: ${JSON.stringify(res.msgs.slice(-4))}; cs: ${await evaluate(tab.sessionId, 'JSON.stringify(document.documentElement.dataset)')}`);
           await shot(tab.sessionId, 'ext-inline-list-missing');
         }
         if (other) {
           await sleep(300);
           await shot(tab.sessionId, 'ext-inline-list');
-          await clickNode(tab.sessionId, '.pill-list .other');
+          await clickNode(tab.sessionId, '.kvtag .opt-window');
         }
         prompt = await waitFor(() => findTarget(`${ext}/prompt/prompt.html#get:`));
         check(prompt, 'Passkey-Dialog (get) wurde nicht geöffnet');

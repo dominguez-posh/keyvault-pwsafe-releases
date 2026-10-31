@@ -270,6 +270,14 @@ async function renderDetail(s, fresh = false) {
   const detail = itemDetail(item, {
     copy,
     openUrl: (url) => chrome.tabs.create({ url }),
+    // Attachments and certificates: saved through the browser's download (base64 → file).
+    saveFile: (name, data) => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([Uint8Array.from(atob(data), (c) => c.charCodeAt(0))]));
+      a.download = name;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    },
     containerName,
     actions: [
       canFill ? { icon: 'fill', label: t('Ausfüllen'), primary: true, onClick: () => fillItem(s) } : null,

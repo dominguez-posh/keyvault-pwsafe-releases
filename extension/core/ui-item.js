@@ -3,7 +3,7 @@
 import { h, icon, iconButton, formatDateTime, avatar, toast } from './dom.js';
 import { totpCode, parseTotp } from './totp.js';
 import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator.js';
-import { ITEM_TYPES, CERT_MAX_BYTES, normalizeItem, formatCardNumber } from './model.js';
+import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber } from './model.js';
 import { t } from './i18n.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 import { expiryState } from './health.js';
@@ -35,7 +35,7 @@ export function itemDetail(item, ctx) {
         iconButton('copy', t('Kopieren'), () => ctx.copy(u, t('Adresse')))))));
   }
   if (item.passkeys.length) rows.push(passkeyList(item.passkeys, ctx));
-  for (const f of item.fields) rows.push(f.hidden ? secretField(f.name, f.value, ctx) : textField(f.name, f.value, ctx));
+  for (const f of item.fields) rows.push(customField(f, ctx));
   if (item.notes) rows.push(h('div', { class: 'field' }, h('label', {}, t('Notizen')), h('div', { class: 'notes' }, item.notes)));
 
   return h('div', { class: 'item-detail' },
@@ -91,6 +91,46 @@ function certificateField(cert, ctx) {
       ctx.saveFile ? h('button', { type: 'button', class: 'btn small', onclick: () => ctx.saveFile(cert.fileName || 'zertifikat.pfx', cert.data) }, icon('download', 14), t('Speichern unter …')) : null));
 }
 
+const FIELD_ICONS = { text: 'note', hidden: 'lock', multiline: 'note', url: 'link', email: 'mail', phone: 'phone', number: 'key', date: 'clock', totp: 'clock', file: 'download' };
+
+/** File for a field (small text files, notes, keys): base64 within FIELD_FILE_MAX_BYTES. */
+async function readFieldFile(file) {
+  if (file.size > FIELD_FILE_MAX_BYTES) throw new Error(t('Die Datei ist zu groß ({size} KB, maximal {max} KB).', { size: Math.ceil(file.size / 1024), max: FIELD_FILE_MAX_BYTES / 1024 }));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return { value: btoa(bin), fileName: file.name, mime: file.type || 'application/octet-stream', size: bytes.length, hidden: false };
+}
+
+/** Field in the detail view by type: link, e-mail, date, live one-time code, file with preview/save. */
+function customField(f, ctx) {
+  if (f.type === 'file') {
+    const isText = /^text\/|json|xml|csv/.test(f.mime) || /\.(txt|md|csv|json|xml|log|ini|conf|cfg|yaml|yml)$/i.test(f.fileName);
+    const text = () => new TextDecoder().decode(Uint8Array.from(atob(f.value), (c) => c.charCodeAt(0)));
+    const preview = h('pre', { class: 'file-preview', hidden: true });
+    return h('div', { class: 'field' }, h('label', {}, f.name || t('Datei')),
+      h('div', { class: 'field-row' },
+        h('span', { class: 'value' }, icon('download', 14), ` ${f.fileName} · ${fileSize(f.size)}`),
+        isText ? iconButton('eye', t('Anzeigen'), () => { preview.textContent = text(); preview.hidden = !preview.hidden; }) : null,
+        isText ? iconButton('copy', t('Inhalt kopieren'), () => ctx.copy(text(), f.name || f.fileName)) : null,
+        ctx.saveFile ? h('button', { type: 'button', class: 'btn small', onclick: () => ctx.saveFile(f.fileName, f.value) }, icon('download', 14), t('Speichern unter …')) : null),
+      preview);
+  }
+  if (f.type === 'totp' && f.value) return totpField(f.value, ctx, f.name);
+  if (f.hidden || f.type === 'hidden') return secretField(f.name, f.value, ctx);
+  if (f.type === 'multiline') {
+    return h('div', { class: 'field' }, h('label', {}, f.name),
+      h('div', { class: 'field-row' }, h('span', { class: 'value notes' }, f.value), iconButton('copy', t('Kopieren'), () => ctx.copy(f.value, f.name))));
+  }
+  if (f.type === 'url' && f.value) {
+    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(f.value) ? f.value : `https://${f.value}`;
+    return h('div', { class: 'field' }, h('label', {}, f.name),
+      h('div', { class: 'field-row' }, h('a', { href: '#', class: 'url', title: url, onclick: (e) => { e.preventDefault(); ctx.openUrl(url); } }, f.value), iconButton('copy', t('Kopieren'), () => ctx.copy(f.value, f.name))));
+  }
+  if (f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(f.value)) return textField(f.name, new Date(`${f.value}T12:00:00`).toLocaleDateString(), ctx);
+  return textField(f.name, f.value, ctx);
+}
+
 /** File → base64 (for certificates, within CERT_MAX_BYTES). */
 async function readCertificate(file) {
   if (file.size > CERT_MAX_BYTES) throw new Error(t('Die Datei ist zu groß ({size} KB, maximal {max} KB).', { size: Math.ceil(file.size / 1024), max: CERT_MAX_BYTES / 1024 }));
@@ -100,10 +140,10 @@ async function readCertificate(file) {
   return { fileName: file.name, data: btoa(bin), size: bytes.length };
 }
 
-function totpField(secret, ctx) {
+function totpField(secret, ctx, label = t('Einmalcode (TOTP)')) {
   const code = h('span', { class: 'value totp' }, '––– –––');
   const ring = h('span', { class: 'totp-timer' });
-  const el = h('div', { class: 'field' }, h('label', {}, t('Einmalcode (TOTP)')),
+  const el = h('div', { class: 'field' }, h('label', {}, label),
     h('div', { class: 'field-row' }, code, ring, iconButton('copy', t('Kopieren'), async () => {
       const c = await totpCode(secret).catch(() => null);
       if (c) ctx.copy(c.code, t('Einmalcode'));
@@ -240,14 +280,59 @@ export function itemForm(item, ctx) {
 
   const fields = it.fields.map((f) => ({ ...f }));
   const fieldsBox = h('div', { class: 'custom-fields' });
+  // Input per field type; a file row shows name and size with "choose" and a size check (FIELD_FILE_MAX_BYTES).
+  const valueInput = (f, i) => {
+    const set = (e) => { fields[i].value = e.target.value; };
+    if (f.type === 'multiline') return h('textarea', { rows: 3, value: f.value, placeholder: t('Wert'), oninput: set, spellcheck: 'false' });
+    if (f.type === 'file') {
+      const picker = h('input', { type: 'file', hidden: true, onchange: async () => {
+        const file = picker.files?.[0];
+        picker.value = '';
+        if (!file) return;
+        try {
+          Object.assign(fields[i], await readFieldFile(file));
+          if (!fields[i].name) fields[i].name = file.name;
+          renderFields();
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      } });
+      return h('div', { class: 'field-row' },
+        h('span', { class: 'muted small file-info' }, f.value ? `${f.fileName} · ${fileSize(f.size)}` : t('Keine Datei (bis {max} KB)', { max: FIELD_FILE_MAX_BYTES / 1024 })),
+        h('button', { type: 'button', class: 'btn small', onclick: () => picker.click() }, icon('upload', 14), f.value ? t('Ersetzen …') : t('Datei wählen …')), picker);
+    }
+    const types = { hidden: 'password', url: 'url', email: 'email', phone: 'tel', number: 'text', date: 'date', totp: 'password' };
+    const placeholder = { url: 'https://…', email: 'name@firma.de', phone: '+49 …', totp: t('otpauth://… oder Base32-Geheimnis') }[f.type] || t('Wert');
+    return h('input', { value: f.value, placeholder, type: types[f.type] || 'text', inputmode: f.type === 'number' ? 'numeric' : undefined, oninput: set, autocomplete: 'off', spellcheck: 'false' });
+  };
   const renderFields = () => {
-    fieldsBox.replaceChildren(...fields.map((f, i) => h('div', { class: 'custom-field' },
-      h('input', { value: f.name, placeholder: t('Name'), oninput: (e) => { fields[i].name = e.target.value; } }),
-      h('input', { value: f.value, placeholder: t('Wert'), type: f.hidden ? 'password' : 'text', oninput: (e) => { fields[i].value = e.target.value; } }),
-      h('label', { class: 'inline', title: t('Verborgen') }, h('input', { type: 'checkbox', checked: f.hidden, onchange: (e) => { fields[i].hidden = e.target.checked; renderFields(); } }), icon('eyeOff', 14)),
-      iconButton('x', t('Feld entfernen'), () => { fields.splice(i, 1); renderFields(); }))));
+    fieldsBox.replaceChildren(...fields.map((f, i) => h('div', { class: `custom-field type-${f.type || 'text'}` },
+      h('div', { class: 'field-row' },
+        h('span', { class: 'field-type', title: t(FIELD_TYPES[f.type] || 'Text') }, icon(FIELD_ICONS[f.type] || 'note', 14)),
+        h('input', { value: f.name, placeholder: t('Name'), oninput: (e) => { fields[i].name = e.target.value; } }),
+        iconButton('x', t('Feld entfernen'), () => { fields.splice(i, 1); renderFields(); })),
+      valueInput(f, i))));
   };
   renderFields();
+  // "Add field": types and ready-made fields with a sensible name and type.
+  const addMenu = h('div', { class: 'field-menu', hidden: true });
+  const addField = (field) => {
+    fields.push({ name: '', value: '', hidden: false, type: 'text', ...field });
+    addMenu.hidden = true;
+    renderFields();
+    fieldsBox.lastElementChild?.querySelector(field.name ? 'textarea, input:not([type=file]):not(:first-of-type)' : 'input')?.focus();
+  };
+  const presets = [
+    [t('Benutzername 2'), 'text'], [t('Lizenzschlüssel'), 'hidden'], [t('API-Schlüssel'), 'hidden'], [t('Wiederherstellungscodes'), 'multiline'],
+    [t('PIN'), 'number'], [t('Sicherheitsfrage'), 'text'], [t('Antwort'), 'hidden'], [t('IP-Adresse / Hostname'), 'text'],
+    [t('Kundennummer'), 'text'], [t('Ansprechpartner'), 'text'], [t('Support-Telefon'), 'phone'], [t('Support-E-Mail'), 'email'],
+    [t('Admin-Portal'), 'url'], [t('Vertragsende'), 'date'], [t('SSH-Schlüssel'), 'multiline'], [t('Anhang (Datei)'), 'file'],
+  ];
+  addMenu.append(
+    h('div', { class: 'field-menu-group' }, t('Feldtyp')),
+    h('div', { class: 'field-menu-grid' }, ...Object.entries(FIELD_TYPES).map(([type, label]) => h('button', { type: 'button', onclick: () => addField({ type, hidden: type === 'hidden' }) }, icon(FIELD_ICONS[type], 14), t(label)))),
+    h('div', { class: 'field-menu-group' }, t('Vorlagen')),
+    h('div', { class: 'field-menu-grid' }, ...presets.map(([name, type]) => h('button', { type: 'button', onclick: () => addField({ name, type, hidden: type === 'hidden' }) }, icon(FIELD_ICONS[type], 14), name))));
 
   let passkeys = it.passkeys;
   const passkeyBox = h('div');
@@ -333,7 +418,7 @@ export function itemForm(item, ctx) {
     h('div', { class: 'grid2' }, row(t('Ordner'), h('div', {}, folder, folderOptions)), h('div', { class: 'field' }, h('label', {}, ' '), h('label', { class: 'inline' }, favorite, t('Favorit')))),
     row(t('Gültig bis (optional)'), h('div', { class: 'field-row' }, expires, h('span', { class: 'muted small' }, t('Erinnerung 30 Tage vorher, z. B. für Zertifikate, Service-Konten, Kundenzugänge')))),
     h('div', { class: 'field' }, h('label', {}, t('Zusätzliche Felder')), fieldsBox,
-      h('button', { type: 'button', class: 'btn small', onclick: () => { fields.push({ name: '', value: '', hidden: false }); renderFields(); } }, icon('plus', 14), t('Feld hinzufügen'))),
+      h('button', { type: 'button', class: 'btn small', onclick: () => { addMenu.hidden = !addMenu.hidden; } }, icon('plus', 14), t('Feld hinzufügen')), addMenu),
     row(t('Notizen'), notes),
     h('div', { class: 'actions' }, save, h('button', { type: 'button', class: 'btn', onclick: () => ctx.onCancel() }, t('Abbrechen'))));
 

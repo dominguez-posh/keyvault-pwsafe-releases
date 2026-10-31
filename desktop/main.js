@@ -2587,6 +2587,14 @@ function runSmokeTest() {
         await sleep(400);
         await js('(() => { const d = document.querySelector(".editor input[name=expires]"); if (d) { d.value = "2026-11-10"; d.dispatchEvent(new Event("input", { bubbles: true })); } })()');
       }
+      if (view === 'fields') {
+        // New login with the additional-field menu open and two typed fields (screenshot only).
+        await js('document.querySelector(".list-head .btn.primary")?.click()');
+        await sleep(300);
+        await js('document.querySelector(".context-menu [data-action=new-login]")?.click()');
+        await sleep(400);
+        await js('(() => { const b = [...document.querySelectorAll(".editor button")].find((x) => /Feld hinzufügen|Add field/.test(x.textContent)); b?.click(); [...document.querySelectorAll(".field-menu button")].find((x) => /Wiederherstellungscodes|Recovery codes/.test(x.textContent))?.click(); b?.click(); [...document.querySelectorAll(".field-menu button")].find((x) => /Anhang|Attachment/.test(x.textContent))?.click(); b?.click(); document.querySelector(".custom-field")?.scrollIntoView(); })()');
+      }
       if (view === 'add') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');
         await sleep(300);

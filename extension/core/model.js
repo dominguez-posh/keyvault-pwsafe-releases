@@ -24,6 +24,30 @@ export class ItemTooLargeError extends Error {
 
 export const newItemId = () => ITEM_PREFIX + crypto.randomUUID().replace(/-/g, '');
 
+/**
+ * Additional fields: { name, value, hidden, type }. type decides input and display; a file keeps its content as
+ * base64 in value plus fileName/mime/size. Files are small on purpose: the whole entry has to fit into one Key Vault
+ * secret (protected vaults encrypt it, which adds about a third) – FIELD_FILE_MAX_BYTES per file.
+ */
+export const FIELD_TYPES = {
+  text: 'Text', hidden: 'Verborgen', multiline: 'Mehrzeilig', url: 'Adresse (URL)', email: 'E-Mail', phone: 'Telefon',
+  number: 'Zahl / PIN', date: 'Datum', totp: 'Einmalcode (TOTP)', file: 'Datei',
+};
+export const FIELD_FILE_MAX_BYTES = 8 * 1024;
+export function normalizeField(f) {
+  const type = Object.hasOwn(FIELD_TYPES, f.type) ? f.type : f.hidden ? 'hidden' : 'text';
+  const out = { name: str(f.name), value: str(f.value), hidden: type === 'hidden' || (!!f.hidden && type !== 'file'), type };
+  if (type === 'file') {
+    // Valid base64 within the size limit, otherwise the attachment is dropped (never a broken entry).
+    const size = Math.floor((out.value.length * 3) / 4);
+    if (!/^[A-Za-z0-9+/]*=*$/.test(out.value) || size > FIELD_FILE_MAX_BYTES + 3) return null;
+    out.fileName = str(f.fileName).slice(0, 120) || 'datei.txt';
+    out.mime = /^[\w.+-]+\/[\w.+-]+$/.test(str(f.mime)) ? str(f.mime) : 'application/octet-stream';
+    out.size = Number(f.size) || size;
+  }
+  return out;
+}
+
 export function isItemSecret(secret) {
   return secret?.tags?.[ITEM_TAG] === 'item' || String(secret?.contentType || '').startsWith('application/vnd.kvpwsafe.item+json');
 }
@@ -85,7 +109,8 @@ export function normalizeItem(input = {}) {
     notes: str(input.notes),
     fields: (input.fields || [])
       .filter((f) => f && (f.name || f.value))
-      .map((f) => ({ name: str(f.name), value: str(f.value), hidden: !!f.hidden })),
+      .map(normalizeField)
+      .filter(Boolean),
     passkeys: (input.passkeys || []).map(normalizePasskey),
     folder: normalizeFolder(input.folder),
     favorite: !!input.favorite,

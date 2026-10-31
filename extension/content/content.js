@@ -81,47 +81,60 @@
   }
 
   // ------------------------------------------------------------ in-page passkey chooser (bar at the top)
-  // A sign-in request with passkeys in the vault: a bar slides in at the top of the page – account, "Use passkey",
-  // a list for several passkeys and "Other options" (the full window). × hands the request to the browser.
+  // A passkey request with passkeys in the vault (or the app locked with a PIN): the Keevault tag hangs below the
+  // toolbar icon with a small notch pointing at it – shield, the chosen account (click switches), "Use passkey",
+  // and two quiet links: "Other device" hands over to the browser, "Cancel" ends the request.
 
-  let inline = null; // { requestId, pageId, candidates, site }
-  let pill = null;
-  let pillList = null;
-  const PASSKEY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="4"/><path d="M2 21v-2a5 5 0 0 1 5-5h4"/><circle cx="17.5" cy="14.5" r="2.5"/><path d="M19.3 16.3 22 19l-1.5 1.5L19 19l-1.2 1.2"/></svg>';
-  const initials = (s) => String(s || 'K').replace(/^www\./, '').slice(0, 2).toUpperCase();
-  const textCol = (main, sub) => {
-    const col = el('div', 'col');
-    col.append(el('div', 't', main), el('div', 's', sub));
-    return col;
+  let inline = null; // { pageId, kind, requestId, candidates, site, containers, containerId, choice }
+  let pill = null; // the tag element (name kept from the earlier bar)
+  const SHIELD_PATH = 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z';
+  const shieldBadge = (locked = false) => {
+    const b = el('div', 'badge');
+    b.innerHTML = `<svg class="shield" viewBox="0 0 24 24"><path class="fill" d="${SHIELD_PATH}"/><path class="outline" d="${SHIELD_PATH}"/>${locked ? '<rect class="lockbody" x="9" y="11" width="6" height="5" rx="1"/><path class="lockarc" d="M10 11V9.5a2 2 0 0 1 4 0V11"/>' : ''}</svg>`;
+    b.append(el('span', 'stamp', '✓'));
+    return b;
+  };
+  const linkButton = (text, cls, fn) => {
+    const b = el('button', `link ${cls}`, text);
+    b.type = 'button';
+    b.addEventListener('click', (e) => { if (e.isTrusted) fn(); });
+    return b;
   };
 
   function hidePill() {
-    pillList?.remove();
-    pillList = null;
     if (!pill) return;
     const gone = pill;
     pill = null;
     gone.classList.add('hide');
-    setTimeout(() => gone.remove(), 230);
+    setTimeout(() => gone.remove(), 320);
   }
 
-  /** App locked with a PIN: PIN field in the bar; after unlocking the bar continues with the passkeys (or saving). */
+  function newTag(label) {
+    clearTimeout(pkTimer); // a success animation still fading out must not take the new tag with it
+    hidePill();
+    pill = el('div', 'kvtag');
+    pill.setAttribute('role', 'dialog');
+    pill.setAttribute('aria-label', label);
+    return pill;
+  }
+
+  function links() {
+    const row = el('div', 'links');
+    row.append(linkButton(texts.otherDevice || 'Other device', 'link-other', dismissPill), linkButton(texts.cancel || 'Cancel', 'link-cancel', cancelPill));
+    return row;
+  }
+
+  /** App locked with a PIN: PIN field in the tag; after unlocking the tag continues with the passkeys (or saving). */
   function showPinPill(pageId, info) {
     if (info.ui) texts = info.ui;
-    hidePill();
     inline = { pageId, kind: 'unlock', requestId: info.requestId, candidates: [], site: info.site, containers: [] };
-    pill = el('div', 'pill');
-    pill.setAttribute('role', 'dialog');
-    pill.setAttribute('aria-label', texts.lockedTitle || 'Keevault');
-    const sub = el('div', 's', texts.pinPrompt || 'PIN');
-    const col = el('div', 'col');
-    col.append(el('div', 't', texts.lockedTitle || 'Keevault'), sub);
+    const tag = newTag(texts.lockedTitle || 'Keevault');
+    const sub = el('div', 'sub', texts.pinPrompt || 'PIN');
     const pin = el('input', 'pin');
     Object.assign(pin, { type: 'password', inputMode: 'numeric', autocomplete: 'off', placeholder: texts.pin || 'PIN' });
     pin.setAttribute('aria-label', texts.pin || 'PIN');
-    const go = el('button', 'use');
-    go.innerHTML = PASSKEY_SVG;
-    go.append(document.createTextNode(texts.unlockButton || 'OK'));
+    const go = el('button', 'primary', texts.unlockButton || 'OK');
+    go.type = 'button';
     const submit = async () => {
       const cur = inline;
       if (!cur || !pin.value) return;
@@ -138,9 +151,9 @@
         }
       } catch (err) {
         sub.textContent = err.message;
-        pill?.classList.remove('shake');
-        void pill?.offsetWidth; // restart the animation
-        pill?.classList.add('shake');
+        tag.classList.remove('shake');
+        void tag.offsetWidth; // restart the animation
+        tag.classList.add('shake');
         go.disabled = false;
         pin.disabled = false;
         pin.value = '';
@@ -149,81 +162,88 @@
     };
     go.addEventListener('click', (e) => { if (e.isTrusted) submit(); });
     pin.addEventListener('keydown', (e) => { if (e.isTrusted && e.key === 'Enter') submit(); });
-    const more = el('button', 'more', '▾');
-    more.title = texts.otherOptions || '';
-    more.addEventListener('click', (e) => { if (e.isTrusted) openPromptWindow(); });
-    const x = el('button', 'x', '×');
-    x.title = texts.close || '';
-    x.addEventListener('click', (e) => { if (e.isTrusted) dismissPill(); });
-    const lock = el('span', 'ava lock');
-    lock.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
-    pill.append(lock, col, pin, go, more, x);
-    ui().append(pill);
+    const head = el('div', 'head');
+    head.append(el('div', 'title', texts.lockedTitle || 'Keevault'), sub);
+    tag.append(shieldBadge(true), head, pin, go, links());
+    ui().append(tag);
     pin.focus({ preventScroll: true });
   }
 
   function showPasskeyPill(pageId, info) {
     if (info.ui) texts = info.ui;
     if (info.kind === 'unlock') return showPinPill(pageId, info);
-    hidePill();
     inline = { pageId, kind: info.kind || 'get', requestId: info.requestId, candidates: info.candidates || [], site: info.site, containers: info.containers || [], containerId: info.defaultContainer };
     const create = inline.kind === 'create';
-    const first = inline.candidates[0];
-    pill = el('div', 'pill');
-    pill.setAttribute('role', 'dialog');
-    pill.setAttribute('aria-label', texts.choosePasskey || 'Passkey');
-    const use = el('button', 'use');
-    use.innerHTML = PASSKEY_SVG;
-    use.append(document.createTextNode(create ? (texts.savePasskey || 'Save') : (texts.usePasskey || 'Passkey')));
-    use.addEventListener('click', (e) => { if (e.isTrusted) (create ? savePasskey(inline.containerId) : choosePasskey(first)); });
-    const more = el('button', 'more', '▾');
-    more.title = texts.otherOptions || '';
-    more.addEventListener('click', (e) => { if (e.isTrusted) togglePillList(); });
-    const x = el('button', 'x', '×');
-    x.title = texts.close || '';
-    x.addEventListener('click', (e) => { if (e.isTrusted) dismissPill(); });
-    const vaultName = () => inline?.containers.find((c) => c.id === inline.containerId)?.name || '';
-    const col = create
-      ? textCol(texts.saveQuestion || 'Passkey?', info.alreadyRegistered ? (texts.alreadySaved || '') : `${info.user || info.rpName} · ${vaultName()}`)
-      : textCol(first?.title || 'Keevault', first?.userName || texts.noUser || '');
-    pill.append(el('span', 'ava', initials(info.site)), col, use, more, x);
-    ui().append(pill);
+    inline.choice = inline.candidates[0];
+    const tag = newTag(create ? (texts.saveQuestion || 'Passkey') : (texts.choosePasskey || 'Passkey'));
+
+    // The switcher: the current account (sign-in) or vault (saving); a click opens the choices inside the tag.
+    const sw = el('button', 'switch');
+    sw.type = 'button';
+    const who = el('span', 'who');
+    const main = el('span', 'main');
+    const sub = el('span', 'sub');
+    who.append(main, sub);
+    sw.append(who, el('span', 'chev', '⌄'));
+    const list = el('div', 'list');
+    list.hidden = true;
+    const draw = () => {
+      if (create) {
+        const vault = inline.containers.find((c) => c.id === inline.containerId);
+        main.textContent = vault?.name || '';
+        sub.textContent = info.alreadyRegistered ? (texts.alreadySaved || '') : (info.user || info.rpName || '');
+      } else {
+        main.textContent = inline.choice?.userName || texts.noUser || '';
+        sub.textContent = [inline.choice?.title, inline.choice?.container].filter(Boolean).join(' · ');
+      }
+    };
+    const fill = () => {
+      list.replaceChildren();
+      const options = create
+        ? inline.containers.map((c) => ({ main: c.name, sub: (texts.saveIn || '{vault}').replace('{vault}', c.name), on: c.id === inline.containerId, pick: () => { inline.containerId = c.id; } }))
+        : inline.candidates.map((c) => ({ main: c.userName || texts.noUser || '', sub: [c.title, c.container].filter(Boolean).join(' · '), on: c === inline.choice, pick: () => { inline.choice = c; } }));
+      for (const o of options) {
+        const b = el('button', `opt${o.on ? ' on' : ''}`);
+        b.type = 'button';
+        b.append(el('span', 'main', o.main), el('span', 'sub', o.sub));
+        b.addEventListener('click', (e) => { if (!e.isTrusted) return; o.pick(); draw(); toggle(false); });
+        list.append(b);
+      }
+      // The full window: protected vaults to unlock, more details.
+      const win = el('button', 'opt opt-window');
+      win.type = 'button';
+      win.append(el('span', 'main', texts.otherOptions || '…'));
+      win.addEventListener('click', (e) => { if (e.isTrusted) openPromptWindow(); });
+      list.append(win);
+    };
+    const toggle = (open = list.hidden) => {
+      if (open) fill();
+      list.hidden = !open;
+      sw.classList.toggle('open', open);
+      sw.querySelector('.chev').textContent = open ? '⌃' : '⌄';
+    };
+    sw.addEventListener('click', (e) => { if (e.isTrusted) toggle(); });
+    draw();
+
+    const use = el('button', 'primary', create ? (texts.savePasskey || 'Save') : (texts.usePasskey || 'Passkey'));
+    use.type = 'button';
+    use.addEventListener('click', (e) => { if (e.isTrusted) (create ? savePasskey(inline.containerId) : choosePasskey(inline.choice)); });
+    const head = create ? el('div', 'title', texts.saveQuestion || 'Passkey') : null;
+    tag.append(shieldBadge(), ...(head ? [head] : []), sw, list, use, links());
+    ui().append(tag);
     use.focus({ preventScroll: true });
+    return undefined;
   }
 
+  // Kept for the earlier entry point (smoke tests and older callers): opens the switcher list.
   function togglePillList() {
-    if (pillList) {
-      pillList.remove();
-      pillList = null;
-      return;
-    }
-    if (!inline) return;
-    pillList = el('div', 'pill-list');
-    if (inline.kind === 'create') {
-      for (const c of inline.containers) {
-        const b = el('button', 'entry');
-        b.append(avatarFor(c.name, c.id === inline.containerId ? 'pk' : ''), textCol(c.name, (texts.saveIn || '{vault}').replace('{vault}', c.name)));
-        b.addEventListener('click', (e) => { if (e.isTrusted) savePasskey(c.id); });
-        pillList.append(b);
-      }
-    }
-    for (const c of inline.candidates) {
-      const b = el('button', 'entry');
-      b.append(avatarFor(c.userName || c.title, 'pk'), textCol(c.userName || texts.noUser || '', `${c.title} · ${c.container}`));
-      b.addEventListener('click', (e) => { if (e.isTrusted) choosePasskey(c); });
-      pillList.append(b);
-    }
-    const other = el('button', 'other', texts.otherOptions || '…');
-    other.addEventListener('click', (e) => { if (e.isTrusted) openPromptWindow(); });
-    pillList.append(other);
-    ui().append(pillList);
+    pill?.querySelector('.switch')?.click();
   }
 
   async function choosePasskey(c) {
     const cur = inline;
     if (!cur || !c) return;
     inline = null;
-    hidePill();
     passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
     try {
       const res = await call('cs:webauthnSelect', { requestId: cur.requestId, containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId });
@@ -240,7 +260,6 @@
     const cur = inline;
     if (!cur || !containerId) return;
     inline = null;
-    hidePill();
     modalRequests.set(cur.requestId, cur.pageId);
     pendingKinds.set(cur.requestId, 'create');
     passkeyAnim('wait', texts.passkeyWait || 'Keevault …');
@@ -254,7 +273,7 @@
     }
   }
 
-  /** × : the browser's own passkey dialog takes over. */
+  /** "Other device": the browser's own passkey dialog takes over (phone, security key, Windows Hello). */
   function dismissPill() {
     const cur = inline;
     inline = null;
@@ -262,6 +281,16 @@
     if (!cur) return;
     call('cs:webauthnAbort', { requestId: cur.requestId }).catch(() => {});
     toPage({ id: cur.pageId, fallback: true });
+  }
+
+  /** "Cancel": the website gets the usual "not allowed" answer. */
+  function cancelPill() {
+    const cur = inline;
+    inline = null;
+    hidePill();
+    if (!cur) return;
+    call('cs:webauthnAbort', { requestId: cur.requestId }).catch(() => {});
+    toPage({ id: cur.pageId, error: { name: 'NotAllowedError', message: texts.cancel || 'Cancelled' } });
   }
 
   /** "Other options": the prompt window (unlock protected vaults, use another device). */
@@ -423,69 +452,62 @@
     button.b.primary { background: #0f6cbd; border-color: #0f6cbd; color: #fff; }
     button.x { position: absolute; top: 8px; right: 8px; border: 0; background: none; font-size: 18px; cursor: pointer; color: #5b6170; }
     .logo { width: 18px; height: 18px; border-radius: 5px; background: #0f6cbd; display: inline-grid; place-items: center; color: #fff; font-size: 11px; }
-    .pk { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 2147483647; display: flex; align-items: center; gap: 12px; padding: 12px 16px 12px 12px;
-      background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.2); font-size: 13px;
-      animation: pkc-in .3s cubic-bezier(.2,.9,.3,1.2); }
-    .pk.hide { animation: pkc-out .25s ease forwards; }
-    .pk .disc { position: relative; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; flex: none; }
-    .pk .ring { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(#0f6cbd 0 25%, #dfe6f3 25% 100%); animation: pk-spin .9s linear infinite;
-      -webkit-mask: radial-gradient(circle, transparent 60%, #000 62%); mask: radial-gradient(circle, transparent 60%, #000 62%); }
-    .pk .glyph { position: relative; width: 22px; height: 22px; color: #0f6cbd; animation: pk-key 1.2s ease-in-out infinite; }
-    .pk .glyph svg { width: 22px; height: 22px; display: block; }
-    .pk .check { display: none; position: relative; width: 22px; height: 22px; }
-    .pk .check svg { width: 22px; height: 22px; display: block; }
-    .pk.ok .ring { animation: none; background: #1f9d55; -webkit-mask: radial-gradient(circle, transparent 60%, #000 62%); mask: radial-gradient(circle, transparent 60%, #000 62%); }
-    .pk.ok .glyph { display: none; }
-    .pk.ok .check { display: block; color: #1f9d55; animation: pk-pop .35s cubic-bezier(.2,.9,.3,1.4); }
-    .pk .pktxt { font-weight: 600; max-width: 260px; }
-    .pk .pksub { color: #5b6170; font-size: 11px; margin-top: 2px; }
-    .pill { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 2147483647; display: flex; align-items: center; gap: 10px;
-      padding: 7px 8px 7px 8px; max-width: min(600px, calc(100vw - 32px)); background: #fff; color: #1b1b1f; border: 2px solid #8b7cf0; border-radius: 999px;
-      box-shadow: 0 0 0 4px rgba(139,124,240,.22), 0 12px 32px rgba(0,0,0,.22); font-size: 14px;
-      animation: pill-in .34s cubic-bezier(.2,.9,.3,1.25), pill-glow 2.4s ease-in-out .4s infinite; }
-    .pill.hide { animation: pill-out .22s ease forwards; }
-    .pill .ava { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; color: #fff; background: #c46bd1; }
-    .pill .col { min-width: 0; display: grid; line-height: 1.25; padding-right: 6px; }
-    .pill .t { font-weight: 600; }
-    .pill .s { font-size: 12px; }
-    .pill .use { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; color: #0f6cbd; font: inherit; font-weight: 600; font-size: 14px;
-      cursor: pointer; padding: 7px 10px; border-radius: 999px; white-space: nowrap; }
-    .pill .use:hover, .pill .use:focus { background: #eef3fb; outline: none; }
-    .pill .use svg { width: 20px; height: 20px; }
-    /* position: static – the generic button.x rule (banner) would pin × to the corner, on top of the list button. */
-    .pill .more, .pill .x { position: static; flex: none; border: 0; background: none; cursor: pointer; color: #5b6170; font-size: 18px; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; }
-    .pill .x:hover, .pill .more:hover { background: #eef3fb; color: #1b1b1f; }
-    .pill-list { position: fixed; top: 74px; left: 50%; transform: translateX(-50%); z-index: 2147483647; min-width: 320px; max-width: min(600px, calc(100vw - 32px));
-      background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); padding: 4px; font-size: 13px; animation: pkc-in .2s ease; }
-    .pill-list .other { width: 100%; border: 0; border-top: 1px solid #e3e6ec; background: none; color: #5b6170; padding: 9px; margin-top: 2px; cursor: pointer; font-size: 12px; text-align: center; }
-    .pill-list .other:hover { color: #0f6cbd; }
-    .pill .ava.lock { background: #5b6170; }
-    .pill input.pin { width: 110px; border: 1px solid #c4c9d4; border-radius: 999px; padding: 7px 12px; font: inherit; font-size: 14px; letter-spacing: .2em; background: #fff; color: #1b1b1f; }
-    .pill input.pin:focus { outline: none; border-color: #8b7cf0; box-shadow: 0 0 0 3px rgba(139,124,240,.25); }
-    .pill.shake { animation: pill-shake .35s ease; }
-    @keyframes pill-shake { 0%, 100% { transform: translateX(-50%); } 25% { transform: translateX(calc(-50% - 6px)); } 75% { transform: translateX(calc(-50% + 6px)); } }
-    @keyframes pill-in { from { transform: translate(-50%, -28px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
-    @keyframes pill-out { to { transform: translate(-50%, -12px); opacity: 0; } }
-    @keyframes pill-glow { 0%, 100% { box-shadow: 0 0 0 4px rgba(139,124,240,.22), 0 12px 32px rgba(0,0,0,.22); } 50% { box-shadow: 0 0 0 8px rgba(139,124,240,.10), 0 12px 32px rgba(0,0,0,.22); } }
-    @media (prefers-reduced-motion: reduce) { .pill, .pill-list, .pk { animation: none; } }
-    @keyframes pk-spin { to { transform: rotate(360deg); } }
-    @keyframes pk-key { 0%, 100% { transform: translateY(0) rotate(-8deg); } 50% { transform: translateY(-2px) rotate(8deg); } }
-    @keyframes pk-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-    @keyframes pk-in { from { transform: translateY(-10px); opacity: 0; } to { transform: none; opacity: 1; } }
-    @keyframes pk-out { to { transform: translateY(-8px); opacity: 0; } }
-    @keyframes pkc-in { from { transform: translate(-50%, -16px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
-    @keyframes pkc-out { to { transform: translate(-50%, -10px); opacity: 0; } }
+    /* Keevault key tag (passkeys): hangs below the toolbar icon, notch pointing at it, drops in and swings out. */
+    .kvtag { --kv: #0f6cbd; --kv-soft: #e3effa; --ok: #1f9d55; --line: #dde2ec; --muted: #5d6779; --surface: #fff; --ink: #141a26;
+      position: fixed; top: 10px; right: 18px; z-index: 2147483647; width: 268px; box-sizing: border-box;
+      display: grid; gap: 10px; justify-items: center; text-align: center; padding: 18px 16px 12px;
+      background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 18px; font-size: 13px;
+      box-shadow: 0 18px 40px rgba(15,108,189,.18), 0 2px 8px rgba(20,26,38,.10);
+      transform-origin: calc(100% - 30px) -10px; animation: kvt-drop .6s cubic-bezier(.3,1.4,.5,1) both, kvt-swing 1.5s ease-in-out .6s; }
+    .kvtag::before { content: ""; position: absolute; top: -9px; right: 24px; width: 16px; height: 16px; background: var(--surface);
+      border-left: 1px solid var(--line); border-top: 1px solid var(--line); transform: rotate(45deg); border-radius: 3px 0 0 0; }
+    .kvtag.hide { animation: kvt-away .35s ease-in forwards; }
+    .kvtag.shake { animation: kvt-shake .35s ease; }
+    .kvtag .badge { position: relative; width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; background: var(--kv-soft); }
+    .kvtag .shield { width: 30px; height: 30px; display: block; }
+    .kvtag .shield .fill { fill: var(--kv); opacity: .14; }
+    .kvtag .shield .outline { fill: none; stroke: var(--kv); stroke-width: 2; stroke-linejoin: round; }
+    .kvtag .shield .lockbody { fill: var(--kv); }
+    .kvtag .shield .lockarc { fill: none; stroke: var(--kv); stroke-width: 1.6; }
+    .kvtag .stamp { position: absolute; right: -6px; bottom: -6px; width: 22px; height: 22px; border-radius: 50%; background: var(--ok); color: #fff;
+      display: grid; place-items: center; font-size: 12px; font-weight: 800; border: 2px solid var(--surface); opacity: 0; }
+    .kvtag .title { font-weight: 700; font-size: 14px; }
+    .kvtag .head { display: grid; gap: 2px; }
+    .kvtag .sub { color: var(--muted); font-size: 12px; }
+    .kvtag .switch { width: 100%; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: var(--surface); color: var(--ink); cursor: pointer; text-align: left; font: inherit; }
+    .kvtag .switch:hover, .kvtag .switch.open { border-color: var(--kv); }
+    .kvtag .who { flex: 1; min-width: 0; display: grid; }
+    .kvtag .who .main, .kvtag .opt .main { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kvtag .who .sub, .kvtag .opt .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kvtag .chev { color: var(--muted); font-size: 12px; }
+    .kvtag [hidden] { display: none !important; }
+    .kvtag .list { width: 100%; display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 12px; padding: 4px; max-height: 220px; overflow: auto; }
+    .kvtag .opt { display: grid; text-align: left; border: 0; border-radius: 8px; background: none; color: var(--ink); padding: 7px 9px; cursor: pointer; font: inherit; }
+    .kvtag .opt:hover, .kvtag .opt.on { background: var(--kv-soft); }
+    .kvtag .opt-window .main { font-weight: 600; color: var(--muted); }
+    .kvtag .primary { width: 100%; border: 0; border-radius: 12px; background: var(--kv); color: #fff; font: inherit; font-weight: 700; font-size: 14px; padding: 10px; cursor: pointer; }
+    .kvtag .primary:hover { filter: brightness(1.08); }
+    .kvtag .primary:disabled { opacity: .6; cursor: default; }
+    .kvtag input.pin { width: 140px; text-align: center; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 15px; letter-spacing: .3em; background: var(--surface); color: var(--ink); }
+    .kvtag input.pin:focus, .kvtag button:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15,108,189,.28); }
+    .kvtag .links { display: flex; gap: 16px; justify-content: center; }
+    .kvtag .link { border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; padding: 2px 4px; cursor: pointer; }
+    .kvtag .link:hover { color: var(--kv); }
+    .kvtag .note { font-weight: 700; font-size: 13px; }
+    .kvtag.anim { width: 220px; padding-bottom: 16px; }
+    .kvtag.wait .shield .outline { stroke-dasharray: 80; animation: kvt-draw 1.1s ease-in-out infinite; }
+    .kvtag.ok .shield .fill { opacity: 1; transition: opacity .3s; }
+    .kvtag.ok .stamp { animation: kvt-stamp .4s cubic-bezier(.3,1.6,.5,1) forwards; }
+    @keyframes kvt-drop { from { transform: translateY(-120%) rotate(-5deg); opacity: 0; } to { transform: none; opacity: 1; } }
+    @keyframes kvt-swing { 0% { transform: rotate(0); } 25% { transform: rotate(2.5deg); } 55% { transform: rotate(-1.6deg); } 80% { transform: rotate(.8deg); } 100% { transform: rotate(0); } }
+    @keyframes kvt-away { to { transform: translateY(-110%) rotate(4deg); opacity: 0; } }
+    @keyframes kvt-shake { 0%, 100% { transform: none; } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+    @keyframes kvt-draw { 0% { stroke-dashoffset: 80; } 60% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -80; } }
+    @keyframes kvt-stamp { from { transform: scale(2.2) rotate(-20deg); opacity: 0; } to { transform: none; opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .kvtag, .kvtag * { animation-duration: .01s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; } }
     @media (prefers-color-scheme: dark) {
-      .menu, .banner, .pk { background: #23252b; color: #eceef2; border-color: #3a3d46; }
-      .pill, .pill-list { background: #23252b; color: #eceef2; }
-      .pill-list { border-color: #3a3d46; }
-      .pill .use { color: #5aa0ff; }
-      .pill .use:hover, .pill .use:focus, .pill .x:hover, .pill .more:hover { background: #2f3440; }
-      .pill .s, .pill .more, .pill .x, .pill-list .other { color: #a6abb8; }
-      .pill input.pin { background: #2b2e36; color: #eceef2; border-color: #464a55; }
-      .pill-list .other { border-top-color: #3a3d46; }
-      .pk .ring { background: conic-gradient(#5aa0ff 0 25%, #3a3d46 25% 100%); }
-      .pk .pksub { color: #a6abb8; }
+      .menu, .banner { background: #23252b; color: #eceef2; border-color: #3a3d46; }
+      .kvtag { --kv: #5aa6ff; --kv-soft: #17304d; --ok: #4cc38a; --line: #2a3344; --muted: #9aa6ba; --surface: #171d28; --ink: #e8edf5; }
       .entry:hover, .entry:focus { background: #2f3440; }
       .head, .s, .banner .user, button.x { color: #a6abb8; }
       button.b { background: #2b2e36; color: #eceef2; border-color: #464a55; }
@@ -494,40 +516,35 @@
 
   let host = null;
   let root = null;
-  let pk = null; // passkey animation card
   let pkTimer = null;
   const pendingKinds = new Map(); // extension request id → 'get' | 'create'
-  const KEY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3M18.5 4.5l3 3"/></svg>';
-  const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
-  /** 'wait' (spinning ring around a key) | 'ok' (green check, fades out) | 'hide' */
+  /**
+   * The key tag's moments: 'wait' (the shield outline draws itself), 'ok' (the shield fills, a check is stamped,
+   * then the tag swings up and away), 'hide'. Continues in the open tag when there is one, otherwise a small tag
+   * appears (e.g. after the prompt window or the field menu).
+   */
   function passkeyAnim(state, text) {
     clearTimeout(pkTimer);
     if (state === 'hide') {
-      if (pk) {
-        const gone = pk;
-        gone.classList.add('hide');
-        pkTimer = setTimeout(() => gone.remove(), 260);
-        pk = null;
-      }
+      if (pill?.classList.contains('anim')) hidePill(); // only the animation, never a tag waiting for a choice
       return;
     }
-    if (!pk || !pk.isConnected) {
-      pk = el('div', 'pk');
-      const disc = el('div', 'disc');
-      const glyph = el('div', 'glyph');
-      glyph.innerHTML = KEY_SVG;
-      const check = el('div', 'check');
-      check.innerHTML = CHECK_SVG;
-      disc.append(el('div', 'ring'), glyph, check);
-      const txt = el('div', 'txt');
-      txt.append(el('div', 'pktxt'), el('div', 'pksub', 'Keevault'));
-      pk.append(disc, txt);
-      ui().append(pk);
+    if (!pill || !pill.isConnected) {
+      pill = el('div', 'kvtag');
+      pill.setAttribute('role', 'status');
+      ui().append(pill);
     }
-    pk.className = `pk ${state}`;
-    pk.querySelector('.pktxt').textContent = text || '';
-    if (state === 'ok') pkTimer = setTimeout(() => passkeyAnim('hide'), 1500);
+    let note = pill.querySelector('.note');
+    if (!pill.classList.contains('anim')) {
+      // Swap the controls for badge + one line of text, the tag itself stays where it hangs.
+      pill.classList.add('anim');
+      pill.replaceChildren(shieldBadge(), note = el('div', 'note'));
+    }
+    pill.classList.toggle('wait', state === 'wait');
+    pill.classList.toggle('ok', state === 'ok');
+    note.textContent = text || '';
+    if (state === 'ok') pkTimer = setTimeout(() => passkeyAnim('hide'), 1600);
   }
   function ui() {
     if (!host || !host.isConnected) {

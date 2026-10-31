@@ -19,7 +19,7 @@ test('sample CSV in the repository equals the one offered in the app and imports
   assert.equal(github.favorite, true);
   assert.match(github.notes, /mehrere Zeilen/);
   assert.deepEqual(m365.urls, ['https://login.microsoftonline.com', 'https://www.office.com']);
-  assert.deepEqual(bank.fields, [{ name: 'PIN', value: '4711', hidden: true }]);
+  assert.deepEqual(bank.fields, [{ name: 'PIN', value: '4711', hidden: true, type: 'hidden' }]);
   assert.equal(wlan.type, 'note');
 });
 
@@ -53,7 +53,7 @@ test('CSV flavors are recognized and mapped', async () => {
 
   const semi = await csv('Titel;Benutzername;Passwort;Website;Kundennummer\nA;u;p;a.example.com;42\n');
   assert.equal(semi.items[0].username, 'u');
-  assert.deepEqual(semi.items[0].fields, [{ name: 'Kundennummer', value: '42', hidden: false }]);
+  assert.deepEqual(semi.items[0].fields, [{ name: 'Kundennummer', value: '42', hidden: false, type: 'text' }]);
   assert.equal(parseCsv('a;b\n1;2\n')[1][1], '2');
 });
 
@@ -89,7 +89,7 @@ ${btoa('pkcs8-bytes')}
   assert.deepEqual(r.items.map((i) => i.title), ['Mail & Kalender', 'Router', 'Passkey-Site']);
   const [mail, router, pk] = r.items;
   assert.equal(mail.password, ' pw with spaces ');
-  assert.deepEqual(mail.fields, [{ name: 'PIN', value: '0815', hidden: true }]);
+  assert.deepEqual(mail.fields, [{ name: 'PIN', value: '0815', hidden: true, type: 'hidden' }]);
   assert.equal(mail.totp, 'otpauth://totp/x?secret=JBSWY3DP');
   assert.equal(router.folder, 'Server');
   assert.match(router.totp, /^otpauth:\/\/totp\/Router\?secret=JBSWY3DP/);
@@ -115,7 +115,7 @@ test('1Password 1PUX (ZIP) with login fields, TOTP, sections and archived items'
   const [dropbox, note] = r.items;
   assert.equal(dropbox.username, 'me');
   assert.equal(dropbox.totp, 'otpauth://totp/d?secret=JBSWY3DP');
-  assert.deepEqual(dropbox.fields, [{ name: 'PIN', value: '1234', hidden: true }, { name: 'Mail', value: 'me@example.com', hidden: false }]);
+  assert.deepEqual(dropbox.fields, [{ name: 'PIN', value: '1234', hidden: true, type: 'hidden' }, { name: 'Mail', value: 'me@example.com', hidden: false, type: 'text' }]);
   assert.equal(dropbox.favorite, true);
   assert.equal(dropbox.folder, 'Privat');
   assert.equal(note.type, 'note');
@@ -136,7 +136,7 @@ test('Bitwarden JSON with passkeys, card and collections', async () => {
   assert.deepEqual(r.items.map((i) => i.title), ['Example', 'Visa']);
   assert.equal(r.items[0].folder, 'Team');
   assert.equal(b64uDecode(r.items[0].passkeys[0].credentialId).length, 16);
-  assert.deepEqual(r.items[0].fields, [{ name: 'Hidden', value: 'x', hidden: true }]);
+  assert.deepEqual(r.items[0].fields, [{ name: 'Hidden', value: 'x', hidden: true, type: 'hidden' }]);
   assert.equal(r.items[1].type, 'note');
   assert.equal(r.items[1].fields.find((f) => f.name === 'Kartennummer').hidden, true);
   await assert.rejects(parseImport({ name: 'bw.json', text: JSON.stringify({ encrypted: true, items: [] }) }), /Verschlüsselte/);

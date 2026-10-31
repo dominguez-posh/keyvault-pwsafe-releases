@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.17 – 2026-10-31
+- Zusätzliche Felder mit Feldtyp: Text, Verborgen, Mehrzeilig, Adresse (URL), E-Mail, Telefon, Zahl / PIN, Datum, Einmalcode (TOTP) und Datei. Dazu Vorlagen wie Lizenzschlüssel, API-Schlüssel, Wiederherstellungscodes, Sicherheitsfrage, Support-Telefon oder Vertragsende. Adressen sind anklickbar, Einmalcodes laufen live mit.
+- Kleine Dateien als Anhang (bis 8 KB, z. B. eine TXT mit weiteren Infos): Textdateien werden direkt angezeigt, jede Datei lässt sich speichern. Die Grenze ergibt sich aus der Größe eines Key-Vault-Secrets.
+- Browser-Erweiterung: Neuer Passkey-Dialog im Keevault-Stil – ein Anhänger hängt unter dem Keevault-Symbol, fällt herein und pendelt aus. Konto (bzw. Tresor beim Speichern) per Klick wechselbar, darunter „Anderes Gerät“ und „Abbrechen“. Beim Bestätigen zeichnet sich der Schild nach, bei Erfolg füllt er sich und bekommt einen Haken.
+
+### English
+- Additional fields with a field type: text, hidden, multi-line, address (URL), email, phone, number / PIN, date, one-time code (TOTP) and file. Plus templates such as license key, API key, recovery codes, security question, support phone or contract end. Addresses are clickable, one-time codes run live.
+- Small files as attachments (up to 8 KB, e.g. a TXT with further information): text files are shown directly, every file can be saved. The limit comes from the size of one Key Vault secret.
+- Browser extension: new passkey dialog in Keevault style – a tag hangs below the Keevault icon, drops in and swings out. Account (or vault when saving) switchable with a click, below “Other device” and “Cancel”. While confirming the shield draws itself, on success it fills and gets a check mark.
+
 ## 0.7.16 – 2026-10-31
 - Zwischenablage: Kopieren funktioniert wieder überall (auch Einladungslink und Codes), wenn der Windows-Hilfsprozess blockiert ist (z. B. durch Sophos); jede Kopie bestätigt „… in die Zwischenablage kopiert“ oder meldet den Fehler.
 - Viele Benutzer an einem Tresor: Der gemeinsame Schnell-Index wird nur noch geschrieben, wenn er im Tresor wirklich abweicht, und zeitlich gestreut – bei 50 gleichzeitigen Apps schreiben statt aller nur noch wenige (Lasttest: npm run loadtest).
