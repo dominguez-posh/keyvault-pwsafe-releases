@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Keevault setup and update window in the app's design. It runs the electron-builder NSIS setup silently and
+       shows its own progress instead: as Keevault-Setup.exe with the NSIS setup embedded (first installation, website
+       download) and without it as Keevault-Update.exe inside the app (updates: bridges the time the app is closed).
+       .NET Framework 4.8 is part of every Windows 10/11, so the window starts without any runtime download. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Keevault-Setup</AssemblyName>
+    <RootNamespace>Keevault.Setup</RootNamespace>
+    <ApplicationIcon>..\..\desktop\assets\icon.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.0</Version>
+    <Product>Keevault</Product>
+    <Company>Keevault</Company>
+    <AssemblyTitle>Keevault Setup</AssemblyTitle>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <!-- dotnet build -p:Payload=<NSIS setup>: embeds the installer (Keevault-Setup.exe); without it Keevault-Update.exe. -->
+  <ItemGroup Condition="'$(Payload)' != ''">
+    <EmbeddedResource Include="$(Payload)" LogicalName="payload.exe" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="..\..\desktop\assets\icon.png" Link="icon.png" />
+  </ItemGroup>
+
+</Project>

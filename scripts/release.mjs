@@ -78,6 +78,25 @@ const publisher = pkg.build.appx.publisher; // "CN=KeyVault PwSafe Test" – sam
 const thumbprint = certThumbprint(publisher);
 const sign = (file) => run(signtool, ['sign', '/fd', 'SHA256', '/sha1', thumbprint, '/s', 'My', file]);
 
+/** First dotnet with an SDK 10 or newer (the provider targets net10.0; SDK 8 may come first on PATH). */
+function findDotnet() {
+  const candidates = ['dotnet', join(process.env.ProgramFiles || '', 'dotnet/dotnet.exe'), join(process.env.LOCALAPPDATA || '', 'Microsoft/dotnet/dotnet.exe')];
+  const found = candidates.find((d) => {
+    try { return out(d, ['--list-sdks']).split('\n').some((l) => Number.parseInt(l, 10) >= 10); } catch { return false; }
+  });
+  if (!found) throw new Error('.NET SDK 10 nicht gefunden (https://dot.net).');
+  return found;
+}
+
+/** Setup/update window (windows/Setup, .NET Framework 4.8 WPF); payload = NSIS setup to embed, or none. */
+function buildSetupWindow(outDir, payload) {
+  rmSync(outDir, { recursive: true, force: true });
+  const args = ['build', R('windows/Setup'), '-c', 'Release', '-o', outDir, '--nologo', '--no-incremental'];
+  if (payload) args.push(`-p:Payload=${payload}`);
+  run(findDotnet(), args);
+  return join(outDir, 'Keevault-Setup.exe');
+}
+
 // --- 1. Passkey provider (MSIX) --------------------------------------------------------------------------------------
 step('Passkey-Anbieter (MSIX)', () => {
   const project = R('windows/PasskeyProvider');
@@ -106,6 +125,11 @@ step('Passkey-Anbieter (MSIX)', () => {
   run('certutil', ['-user', '-store', 'My', thumbprint, cer]);
   if (!existsSync(cer)) throw new Error('Zertifikat konnte nicht exportiert werden.');
   sign(msix);
+});
+
+// The app ships the update window without payload: it hands updates over to it (desktop/updater.js).
+step('Update-Fenster (Keevault-Update.exe)', () => {
+  copyFresh(buildSetupWindow(R('windows/out/setup-update'), null), R('windows/out/Keevault-Update.exe'));
 });
 
 // --- 2. Browser extension ---------------------------------------------------------------------------------------------
@@ -162,9 +186,10 @@ step('Richtlinien-Vorlagen (ADMX für GPO/Intune + Intune-Skript)', () => {
 
 // --- 5. Assets ------------------------------------------------------------------------------------------------------
 const setup = R(`release/Keevault-Setup-${version}.exe`);
-// Same installer under a fixed name: the website links to releases/latest/download/Keevault-Setup.exe.
-// latest.yml (+ blockmap) is what the app's update check reads via https://keevault.de/update/ (website/php/api/dl.php).
-copyFresh(setup, R('release/Keevault-Setup.exe'));
+// The website links to releases/latest/download/Keevault-Setup.exe: the setup window in Keevault's design with the
+// NSIS setup embedded (windows/Setup). The versioned NSIS setup stays the update package: latest.yml (+ blockmap) is
+// what the app's update check reads via https://keevault.de/update/ (website/php/api/dl.php).
+step('Setup im Keevault-Design (Keevault-Setup.exe)', () => copyFresh(buildSetupWindow(R('windows/out/setup-full'), setup), R('release/Keevault-Setup.exe')));
 const msi = R(`release/Keevault-${version}.msi`);
 const msix = R(`release/Keevault-${version}.msix`);
 copyFresh(msi, R('release/Keevault.msi'));

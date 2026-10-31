@@ -10,6 +10,7 @@
 import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import updaterPkg from 'electron-updater';
 import { verifyManifest, parseManifest } from './update-verify.js';
 import { detectInstallKind } from './install-kind.js';
@@ -41,8 +42,8 @@ export class Updater {
    * away in mode "auto"; beforeInstall(): called right before the app quits for the installation;
    * fetch: secureFetch (in memory).
    */
-  constructor({ mode, onState, offer, isIdle, beforeInstall, fetch, selfUpdate }) {
-    Object.assign(this, { mode, onState, offer, isIdle, beforeInstall, fetch });
+  constructor({ mode, onState, offer, isIdle, beforeInstall, fetch, selfUpdate, windowCenter }) {
+    Object.assign(this, { mode, onState, offer, isIdle, beforeInstall, fetch, windowCenter });
     // Policy SelfUpdate=0 ('managed'): IT distributes updates – the app only reports a newer version.
     this.kind = selfUpdate?.() === false ? 'managed' : installKind();
     this.state = { kind: this.kind, status: 'idle', current: app.getVersion(), version: null, notes: '', progress: 0, error: null, checked: null };
@@ -152,16 +153,47 @@ export class Updater {
   }
 
   async downloaded(info) {
+    this.downloadedFile = info?.downloadedFile || null;
     this.set({ status: 'ready', version: info?.version || this.state.version, progress: 100 });
     if (this.manualInstall) return this.install();
     // Fully automatic: install once nobody is working in the app (locked or only in the tray), else on quit.
-    if (this.mode() === 'auto' && this.isIdle()) return this.install();
+    if (this.mode() === 'auto' && this.isIdle()) return this.install({ silent: true });
     return undefined;
   }
 
-  install() {
+  /**
+   * Installs the downloaded update. With Keevault-Update.exe (resources, windows/Setup) the app hands over to a
+   * window in its own design that appears where the app window was, waits for the app to quit, runs the setup
+   * silently and starts the new version (--updated-from shows "Updated to …"). An idle install (auto mode, app
+   * locked or in the tray) stays invisible and the new version starts in the tray again. Without the helper:
+   * electron-updater's silent installation, then start.
+   */
+  install({ silent = false } = {}) {
     this.beforeInstall?.();
-    // Silent installation of the per-user setup, then start the new version.
+    if (this.launchHelper(silent)) {
+      autoUpdater.autoInstallOnAppQuit = false;
+      setTimeout(() => app.quit(), 250);
+      return;
+    }
     setImmediate(() => autoUpdater.quitAndInstall(true, true));
+  }
+
+  launchHelper(silent) {
+    try {
+      const helper = path.join(process.resourcesPath || '', 'Keevault-Update.exe');
+      const setup = this.downloadedFile;
+      if (!setup || !fs.existsSync(helper) || !fs.existsSync(setup)) return false;
+      // Outside the installation folder: the setup replaces everything in it.
+      const copy = path.join(path.dirname(setup), 'Keevault-Update.exe');
+      fs.copyFileSync(helper, copy);
+      const args = ['--update', setup, '--from', app.getVersion(), '--to', this.state.version || '', '--pid', String(process.pid)];
+      const center = this.windowCenter?.();
+      if (center) args.push('--x', String(Math.round(center.x)), '--y', String(Math.round(center.y)));
+      if (silent) args.push('--silent');
+      spawn(copy, args, { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+      return true;
+    } catch {
+      return false;
+    }
   }
 }

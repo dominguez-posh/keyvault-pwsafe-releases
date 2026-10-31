@@ -1,6 +1,6 @@
 {
   "name": "keyvault-pwsafe",
-  "version": "0.7.17",
+  "version": "0.7.18",
   "description": "Passwort- und Passkey-Tresor auf Azure Key Vault mit Entra-ID-Anmeldung: Desktop-App und Browser-Erweiterung",
   "type": "module",
   "main": "desktop/main.js",
@@ -105,6 +105,10 @@
       {
         "from": "installer/setup.ps1",
         "to": "setup.ps1"
+      },
+      {
+        "from": "windows/out/Keevault-Update.exe",
+        "to": "Keevault-Update.exe"
       }
     ],
     "appx": {

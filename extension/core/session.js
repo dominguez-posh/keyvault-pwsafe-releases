@@ -681,7 +681,7 @@ export class VaultSession {
       try {
         // Progress against the previous size of the vault (the listing itself does not know its total).
         const expected = sizes[c.id]?.items?.length || 0;
-        const secrets = await this.kv(c).listSecrets(this.onProgress ? (n) => this.onProgress(c.id, n, Math.max(expected, n)) : null);
+        const secrets = await this.kv(c).listSecrets(this.onProgress ? (n, pages) => this.onProgress(c.id, n, Math.max(expected, n), pages) : null);
         if (!secrets.some((s) => s.name === CONTAINER_SECRET)) this.writeContainerMeta(this.kv(c), { name: c.name }).catch(() => {});
         const isProtected = secrets.some((s) => s.name === KEYRING_SECRET);
         const key = isProtected ? await this.containerKey(c.id) : null;

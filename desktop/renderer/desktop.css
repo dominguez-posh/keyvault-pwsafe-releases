@@ -195,10 +195,24 @@ body { overflow: hidden; }
 .info-table { border-collapse: collapse; width: 100%; font-size: 13px; margin-bottom: 12px; }
 .info-table th { text-align: left; font-weight: 600; color: var(--muted); padding: 5px 12px 5px 0; white-space: nowrap; vertical-align: top; width: 1%; }
 /* Progress card bottom right (progress.js), above the version label */
-.progress-toast { position: fixed; right: 18px; bottom: 28px; z-index: 900; width: 260px; padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 12px; opacity: 0; transform: translateY(8px); transition: opacity .18s ease, transform .18s ease; pointer-events: none; }
-.progress-toast.show { opacity: 1; transform: none; }
+.progress-toast { position: fixed; right: 18px; bottom: 28px; z-index: 900; width: 300px; padding: 10px 12px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow); font-size: 12px; opacity: 0; transform: translateY(8px); transition: opacity .18s ease, transform .18s ease, width .2s ease; pointer-events: none; }
+.progress-toast.show { opacity: 1; transform: none; pointer-events: auto; }
+.progress-toast:hover, .progress-toast.expanded { width: 380px; }
+.progress-steps, .progress-hint { display: none; }
+.progress-toast:is(:hover, .expanded) .progress-steps:not([hidden]) { display: grid; gap: 5px; list-style: none; margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--border); }
+.progress-toast:is(:hover, .expanded) .progress-hint:not([hidden]) { display: block; margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); line-height: 1.4; }
+.progress-steps li { display: grid; grid-template-columns: 16px 1fr auto; gap: 6px; align-items: baseline; }
+.progress-steps .step-mark { color: var(--success); font-weight: 700; }
+.progress-steps .step-running .step-mark::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: step-pulse 1s ease-in-out infinite; }
+.progress-steps .step-running .step-text { font-weight: 600; }
+.progress-steps .step-time { color: var(--muted); font-variant-numeric: tabular-nums; }
+@keyframes step-pulse { 50% { opacity: .3; } }
+.progress-detail { display: flex; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 11.5px; }
+.progress-detail[hidden] { display: none; }
+.progress-step { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.progress-time { flex: none; font-variant-numeric: tabular-nums; }
 .progress-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
-.progress-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progress-text { font-weight: 600; overflow-wrap: anywhere; }
 .progress-count { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 .progress-track { position: relative; height: 4px; border-radius: 2px; background: var(--accent-soft); overflow: hidden; }
 .progress-fill { height: 100%; width: 0; border-radius: 2px; background: var(--accent); transition: width .25s ease; }
@@ -215,3 +229,68 @@ body { overflow: hidden; }
 .context-group.open > .context-sub { display: block; }
 .context-sub.left { left: auto; right: 100%; }
 .row-more { display: flex; justify-content: center; padding: 10px; list-style: none; }
+
+/* ------------------------------------------------------------------------------------------------------------------
+   Modern design (2026-10, from the passkey tag): sidebar on the ground colour, list and detail as one white card with
+   large radii, uppercase section labels, rounded rows, type pills, scrolling vault list with its own search. */
+.shell { background: var(--bg); }
+.sidebar { background: transparent; border-right: 0; padding: 16px 12px 12px; gap: 2px; }
+.brand { gap: 10px; font-size: 17px; font-weight: 700; padding: 2px 8px 16px; }
+.brand img { width: 30px; height: 30px; border-radius: 8px; }
+.nav { min-height: 36px; padding: 6px 12px; border-radius: 10px; }
+.nav-section { gap: 6px; margin: 16px 0 6px; padding: 0 2px 0 12px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.nav-section .spacer { flex: 1; }
+.nav-section .count { letter-spacing: 0; font-weight: 600; }
+.vault-list { display: flex; flex-direction: column; gap: 2px; }
+.vault-list .nav.active { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(20, 26, 38, .10); }
+.vault-list.many { max-height: 212px; overflow-y: auto; padding-right: 2px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }
+.vault-list.many::-webkit-scrollbar { width: 6px; }
+.vault-list.many::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 45%, transparent); border-radius: 3px; }
+.vault-search { margin: 0 2px 6px; }
+.vault-search input { min-height: 32px; padding-top: 4px; padding-bottom: 4px; border-radius: 10px; font-size: 13px; background: var(--surface); }
+.account { gap: 2px; margin-top: 10px; padding: 8px 6px 8px 8px; border: 0; border-radius: 14px; background: var(--surface); box-shadow: 0 1px 3px rgba(20, 26, 38, .08); }
+
+.list-pane { margin: 10px 0; padding: 16px 12px; border: 1px solid var(--border); border-radius: 18px 0 0 18px; background: var(--surface); gap: 12px; }
+.detail-pane { margin: 10px 10px 10px 0; border: 1px solid var(--border); border-left: 0; border-radius: 0 18px 18px 0; background: var(--surface); padding: 26px 30px 40px; }
+.list-head h2 { font-size: 20px; }
+.search input { border-radius: 10px; }
+.row-item { gap: 12px; padding: 7px 8px; border-radius: 12px; }
+.row-item.active { background: var(--accent-soft); box-shadow: none; }
+.row-item.multi.active { box-shadow: inset 0 0 0 2px var(--accent); }
+.list .avatar, .list .folder-row .folder-icon { width: 38px; height: 38px; border-radius: 11px; }
+.folder-title { font-weight: 700; letter-spacing: .06em; padding: 12px 8px 4px; }
+
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { height: 28px; padding: 0 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.pill:hover { border-color: var(--accent); }
+.pill.on { background: var(--text); border-color: var(--text); color: var(--surface); font-weight: 600; }
+
+.item-head { gap: 16px; margin-bottom: 20px; }
+.item-head h2 { font-size: 24px; }
+.avatar.large { width: 60px; height: 60px; border-radius: 17px; font-size: 26px; box-shadow: 0 10px 24px rgba(20, 26, 38, .16); }
+.field-card { border: 1px solid var(--border); border-radius: 16px; overflow: hidden; margin-bottom: 14px; }
+.field-card > * { margin: 0; padding: 12px 16px; }
+.field-card > * + * { border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.passkey-row { border-radius: 12px; background: color-mix(in srgb, var(--passkey) 7%, var(--surface)); border-color: color-mix(in srgb, var(--passkey) 22%, var(--border)); }
+.detail-pane .actions { gap: 8px; }
+
+#app-version { right: 30px; bottom: 18px; }
+.splitter { top: 10px; bottom: 10px; }
+
+/* Modern design: lock screen and dialogs centred like the passkey tag (logo, title, one main action, quiet links). */
+.splash { background: var(--bg); }
+.splash .card { border-radius: 20px; padding: 32px 30px 24px; gap: 14px; border-color: transparent;
+  box-shadow: 0 18px 40px color-mix(in srgb, var(--accent) 16%, transparent), 0 2px 8px rgba(20, 26, 38, .08); }
+.splash .card > h1 { font-size: 22px; font-weight: 700; text-align: center; }
+.splash .card > h1 + .muted { text-align: center; }
+.splash-logo { width: 68px; height: 68px; align-self: center; border-radius: 17px; filter: drop-shadow(0 8px 18px color-mix(in srgb, var(--accent) 30%, transparent)); }
+.splash .card .btn.primary.block, .splash .card > .btn { min-height: 38px; border-radius: 10px; }
+.card-links { justify-content: center; gap: 22px; }
+.question-modal { border-radius: 20px; }
+.q-hero { flex-direction: column; text-align: center; gap: 12px; padding: 28px 24px 18px; }
+.q-badge { width: 56px; height: 56px; border-radius: 16px; }
+.q-actions { margin-top: 20px; }
+.q-actions .btn { flex: 1; min-height: 38px; border-radius: 10px; }
+.splash .card-top { justify-content: center; position: relative; }
+.splash .card-top > :not(.splash-logo) { position: absolute; top: 0; right: 0; }
+.splash .card > p { text-align: center; }

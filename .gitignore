@@ -32,3 +32,5 @@ mobile/android/build/
 mobile/android/app/build/
 mobile/android/local.properties
 mobile/android/.idea/
+windows/Setup/obj/
+windows/Setup/bin/

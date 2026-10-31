@@ -45,7 +45,8 @@ export function itemDetail(item, ctx) {
         h('h2', {}, item.favorite ? icon('star', 14) : null, item.title),
         h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type])].filter(Boolean).join(' · ')),
         expiryBadge(item.expires))),
-    rows.length ? rows : h('p', { class: 'muted' }, t('Keine Felder')),
+    // Fields as one card with dividers (modern design); the action bar and meta line stay outside.
+    rows.length ? h('div', { class: 'field-card' }, ...rows) : h('p', { class: 'muted' }, t('Keine Felder')),
     h('div', { class: 'meta muted' }, item.updatedBy
       ? t('Geändert {date} von {user}', { date: formatDateTime(item.updated), user: item.updatedBy })
       : t('Geändert {date}', { date: formatDateTime(item.updated) })),

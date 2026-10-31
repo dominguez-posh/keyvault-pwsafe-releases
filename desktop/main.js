@@ -43,6 +43,9 @@ const smokeTest = process.argv.includes('--smoke-test');
 // (Electron only shows it when nobody else listens).
 if (smokeTest) process.on('uncaughtException', (e) => { console.error(`SMOKE FAIL (main process): ${e?.stack || e}`); process.exit(1); });
 const screenshot = process.argv.find((a) => a.startsWith('--screenshot='))?.slice('--screenshot='.length);
+// --theme=dark|light: screenshots in a fixed colour scheme (otherwise Windows' app mode decides).
+const forcedTheme = process.argv.find((a) => a.startsWith('--theme='))?.slice('--theme='.length);
+if (forcedTheme === 'dark' || forcedTheme === 'light') nativeTheme.themeSource = forcedTheme;
 const demo = process.argv.includes('--demo') ? createDemoBackend() : null;
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
@@ -213,15 +216,25 @@ function newSession() {
 const refreshing = new Map();
 const listing = new Map();
 let reconcileShown = false;
-function reportListing(containerId, done, total) {
+/** Many nearly empty pages: Key Vault walks over deleted (not yet purged) secrets – the listing gets slow. */
+const emptyPagesHint = (pages, secrets) => (pages > Math.ceil(secrets / 25) + 5
+  ? t('Viele leere Seiten: Im Tresor liegen gelöschte Secrets, die noch nicht endgültig entfernt sind. Endgültig löschen macht den Abgleich schneller.')
+  : '');
+
+/** Step line of the progress card while a vault is listed: page and secrets so far. */
+const listingDetail = (pages, secrets) => t('Secrets werden aufgelistet – Seite {page}, {n} gefunden', { page: pages, n: secrets });
+
+function reportListing(containerId, done, total, pages = 0) {
   if (refreshing.has(containerId)) {
     // The listing also returns secrets that are no entries (index, settings, disabled ones): when it outgrows the
-    // known size, show the running count instead of a bar stuck at 100 %.
-    const label = t('„{name}“ wird abgeglichen …', { name: refreshing.get(containerId) });
-    send(done >= total ? { type: 'progress', id: `refresh:${containerId}`, label: `${label} ${t('{n} gelesen', { n: done })}`, total: 0 } : { type: 'progress', id: `refresh:${containerId}`, label, done, total });
+    // known size, a running bar instead of one stuck at 100 %.
+    const r = refreshing.get(containerId);
+    r.pages = pages;
+    r.secrets = done;
+    send({ type: 'progress', id: `refresh:${containerId}`, step: 'list', detail: listingDetail(pages, done), hint: emptyPagesHint(pages, done), ...(done >= total ? { total: 0 } : { done, total }) });
     return;
   }
-  listing.set(containerId, { done, total });
+  listing.set(containerId, { done, total, pages });
   if (!reconcileShown) return;
   let d = 0;
   let n = 0;
@@ -231,9 +244,11 @@ function reportListing(containerId, done, total) {
   }
   // The listing also returns secrets that are no entries, so it can outgrow the known size: then a running count
   // ("… 1250 gelesen") instead of a full bar that looks finished while the reconcile still runs.
-  const label = t('Tresore werden abgeglichen …');
-  if (d >= n) send({ type: 'progress', id: 'reconcile', label: `${label} ${t('{n} gelesen', { n: d })}`, total: 0 });
-  else if (n > 0) send({ type: 'progress', id: 'reconcile', label, done: d, total: n });
+  const allPages = [...listing.values()].reduce((sum, x) => sum + (x.pages || 0), 0);
+  const detail = t('{vaults} Tresore · Seite {page}, {n} Secrets gefunden', { vaults: listing.size, page: allPages, n: d });
+  const hint = [...listing.values()].some((x) => emptyPagesHint(x.pages || 0, x.done)) ? emptyPagesHint(allPages, 0) : '';
+  if (d >= n) send({ type: 'progress', id: 'reconcile', step: 'list', detail, hint, total: 0 });
+  else if (n > 0) send({ type: 'progress', id: 'reconcile', step: 'list', detail, hint, done: d, total: n });
 }
 
 function changed() {
@@ -387,11 +402,14 @@ function completeInBackground(session, options) {
     // it as a small progress card, nothing is blocked meanwhile.
     if (offlineMode) return;
     const shown = session === vault && opened;
-    if (shown) send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …') });
+    if (shown) send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …'), step: 'list', detail: t('Secrets werden aufgelistet …') });
     listing.clear();
     reconcileShown = shown;
+    const started = Date.now();
     try {
       await session.refreshIndex();
+      for (const [id, x] of listing) if (Date.now() - started > 3000) diag(`LIST ${id} pages=${x.pages} secrets=${x.done} (reconcile, all vaults ${Date.now() - started}ms)`);
+      if (shown) send({ type: 'progress', id: 'reconcile', step: 'done', detail: t('Fertig – {n} Einträge', { n: Object.values(await session.index()).reduce((sum, e) => sum + (e?.items?.length || 0), 0) }) });
     } finally {
       reconcileShown = false;
       if (shown) send({ type: 'progress', id: 'reconcile', end: true });
@@ -1157,18 +1175,27 @@ const api = {
       // Fast first: the index secrets (a few GETs, however many secrets the vault holds) – the list is current
       // right away. The full listing (pages of 25, slow with thousands of secrets) and the permissions follow in
       // the background, with a progress card; nothing waits for them.
+      const id = `refresh:${containerId}`;
+      const run = { name: c.name, started: Date.now(), pages: 0, secrets: 0 };
+      send({ type: 'progress', id, label: t('„{name}“ wird abgeglichen …', { name: c.name }), step: 'fast', detail: t('Schnell-Index wird geladen …') });
       await vault.refreshIndexFast([containerId]);
       changed();
-      refreshing.set(containerId, c.name);
-      send({ type: 'progress', id: `refresh:${containerId}`, label: t('„{name}“ wird abgeglichen …', { name: c.name }) });
+      refreshing.set(containerId, run);
+      send({ type: 'progress', id, step: 'list', detail: t('Secrets werden aufgelistet …') });
       const session = vault;
       (async () => {
         try {
           await session.refreshIndex([containerId]);
+          const listed = Date.now();
+          // Diagnostics: many pages with few secrets point to a vault full of deleted or disabled secrets.
+          if (listed - run.started > 3000) diag(`LIST ${containerId} pages=${run.pages} secrets=${run.secrets} ${listed - run.started}ms`);
+          send({ type: 'progress', id, step: 'access', detail: t('Zugriffsrechte werden geprüft …'), total: 0 });
           await session.refreshAccess().catch(() => {});
+          const entries = (await session.index())[containerId]?.items?.length ?? 0;
+          send({ type: 'progress', id, step: 'done', detail: t('Fertig – {n} Einträge', { n: entries }) });
         } finally {
           refreshing.delete(containerId);
-          send({ type: 'progress', id: `refresh:${containerId}`, end: true });
+          send({ type: 'progress', id, end: true });
         }
         if (session === vault && opened) changed();
       })().catch(() => {});
@@ -2068,6 +2095,12 @@ function createWindow() {
     // Started with Windows (setting "Start with Windows"): only in the tray, the window opens on demand.
     if (!smokeTest && !process.argv.includes('--background')) win.show();
   });
+  // First start after an update from the update window (windows/Setup): the success animation with the new version.
+  if (process.argv.some((x) => x.startsWith('--updated-from='))) {
+    win.webContents.once('did-finish-load', () => setTimeout(() => {
+      if (win?.isVisible()) send({ type: 'passkeyFlash', text: t('Aktualisiert auf {version}', { version: app.getVersion() }) });
+    }, 900));
+  }
   // Closing hides the window; the app stays in the notification area until "Beenden".
   win.on('close', (e) => {
     if (quitting || smokeTest || !tray) return;
@@ -2199,6 +2232,12 @@ app.whenReady().then(async () => {
     // Nobody working in the app: locked, or only in the tray.
     isIdle: () => !opened || !win?.isVisible(),
     beforeInstall: () => { quitting = true; },
+    // The update window appears centered on the app window (DIP, like WPF).
+    windowCenter: () => {
+      if (!win || win.isDestroyed() || !win.isVisible()) return null;
+      const b = win.getBounds();
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    },
     fetch: secureFetch,
   });
   updater.start();
@@ -2563,7 +2602,11 @@ function runSmokeTest() {
         note: t('Löschen ist nie möglich. Rechte und Gültigkeit änderst du jederzeit in den Einstellungen.'), allow: t('Verbinden'), cancel: 'deny' }).catch(() => {});
       if (view === 'progress') {
         // Progress card bottom right as during a background reconcile (screenshot only).
-        send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …'), done: 1234, total: 2000 });
+        send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …'), step: 'fast', detail: t('Schnell-Index wird geladen …') });
+        await sleep(300);
+        send({ type: 'progress', id: 'reconcile', step: 'list', detail: t('{vaults} Tresore · Seite {page}, {n} Secrets gefunden', { vaults: 3, page: 82, n: 1234 }),
+          hint: emptyPagesHint(82, 28), done: 1234, total: 2000 });
+        await js('document.querySelector(".progress-toast")?.classList.add("expanded")');
         // … and the spinning refresh icon of the vault being reconciled.
         send({ type: 'busy', containerId: (await vault.containers())[0]?.id, busy: true });
         await sleep(600);
@@ -2594,6 +2637,11 @@ function runSmokeTest() {
         await js('document.querySelector(".context-menu [data-action=new-login]")?.click()');
         await sleep(400);
         await js('(() => { const b = [...document.querySelectorAll(".editor button")].find((x) => /Feld hinzufügen|Add field/.test(x.textContent)); b?.click(); [...document.querySelectorAll(".field-menu button")].find((x) => /Wiederherstellungscodes|Recovery codes/.test(x.textContent))?.click(); b?.click(); [...document.querySelectorAll(".field-menu button")].find((x) => /Anhang|Attachment/.test(x.textContent))?.click(); b?.click(); document.querySelector(".custom-field")?.scrollIntoView(); })()');
+      }
+      if (view === 'detail') {
+        // First entry opened in the detail pane (screenshot only).
+        await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
+        await sleep(500);
       }
       if (view === 'add') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');

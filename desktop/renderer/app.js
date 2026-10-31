@@ -37,7 +37,9 @@ async function call(method, ...args) {
 
 const root = document.getElementById('app');
 const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { class: 'list-pane' }), detail: h('section', { class: 'detail-pane' }) };
-const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set() };
+const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '' };
+// Vaults that fit in the sidebar without scrolling; with more, the list scrolls and a search appears above it.
+const VAULTS_FIT = 5;
 const explicitFolders = new Map(); // containerId → created folders (also empty ones)
 const logos = new Map(); // containerId → data URL | null (loaded once per session, refreshed on change)
 const busyContainers = new Set(); // containerIds being loaded or reconciled right now (sidebar spinner)
@@ -571,6 +573,8 @@ function pinDialog({ forced = false } = {}) {
 // ---------------------------------------------------------------- sidebar
 
 function select(next) {
+  // A new view starts without a type filter (the pills belong to the list they were chosen in).
+  if (next.view !== undefined && (next.view !== ui.view || next.containerId !== ui.containerId)) ui.type = '';
   Object.assign(ui, next, { editing: null });
   if (ui.selected && !visibleItems().some((i) => i.key === ui.selected)) ui.selected = null;
   for (const k of ui.multi) if (!items.some((i) => i.key === k)) ui.multi.delete(k);
@@ -613,8 +617,9 @@ function renderSidebar() {
     nav('all', t('Alle Einträge'), 'shield', items.length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite).length),
     nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
-    h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
-    containers.length ? containers : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
+    h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length ? h('span', { class: 'count' }, containers.length) : null,
+      iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
+    containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
     h('div', { class: 'nav-section' }, h('span', {}, t('Werkzeuge'))),
     h('button', { class: 'nav', onclick: generatorDialog }, icon('key'), h('span', { class: 'nav-label' }, t('Passwort-Generator'))),
     h('button', { class: 'nav', onclick: () => healthDialog(reportCtx()) }, icon('shield'), h('span', { class: 'nav-label' }, t('Passwort-Check')),
@@ -639,6 +644,50 @@ function renderSidebar() {
   );
 }
 
+/**
+ * The vaults in the sidebar: with more than VAULTS_FIT a search field appears above them and the list scrolls in
+ * its own area (thin scrollbar). The search filters the rows in place, so the field keeps its focus while typing.
+ */
+function vaultList(rows) {
+  const many = rows.length > VAULTS_FIT;
+  const list = h('div', { class: `vault-list ${many ? 'many' : ''}` }, ...rows);
+  const empty = h('p', { class: 'muted small pad', hidden: true }, t('Kein Tresor gefunden'));
+  const apply = () => {
+    const q = many ? ui.vaultQuery.trim().toLowerCase() : '';
+    let shown = 0;
+    for (const row of rows) {
+      const name = row.querySelector('.nav-label')?.textContent.toLowerCase() || '';
+      row.hidden = !!q && !name.includes(q);
+      if (!row.hidden) shown++;
+    }
+    empty.hidden = shown > 0;
+  };
+  apply();
+  if (!many) return list;
+  const input = h('input', { type: 'search', placeholder: t('Tresore suchen'), 'aria-label': t('Tresore suchen'), value: ui.vaultQuery, oninput: (e) => {
+    ui.vaultQuery = e.target.value;
+    apply();
+  } });
+  return h('div', { class: 'vault-block' }, h('div', { class: 'search vault-search' }, icon('search', 14), input), list, empty);
+}
+
+/** Type pills above the list (only the kinds that occur, and only when there is more than one). */
+function typePills(base) {
+  const kinds = [
+    ['login', t('Logins'), (i) => i.type === 'login'],
+    ['passkey', t('Passkeys'), (i) => i.rpIds.length > 0],
+    ['note', t('Notizen'), (i) => i.type === 'note'],
+    ['card', t('Karten'), (i) => i.type === 'card'],
+    ['certificate', t('Zertifikate'), (i) => i.type === 'certificate'],
+  ].filter(([key, , test]) => !(key === 'passkey' && ui.view === 'passkeys' && !ui.containerId) && base.some(test));
+  if (kinds.length < 2) return null;
+  const pill = (key, label) => h('button', { type: 'button', role: 'tab', class: `pill ${ui.type === key ? 'on' : ''}`, 'aria-selected': String(ui.type === key),
+    onclick: () => { ui.type = key; renderList(); } }, label);
+  return h('div', { class: 'pills', role: 'tablist', 'aria-label': t('Filter') }, pill('', t('Alle')), ...kinds.map(([key, label]) => pill(key, label)));
+}
+
+const TYPE_TESTS = { login: (i) => i.type === 'login', passkey: (i) => i.rpIds.length > 0, note: (i) => i.type === 'note', card: (i) => i.type === 'card', certificate: (i) => i.type === 'certificate' };
+
 async function refresh() {
   try {
     const r = await call('refresh');
@@ -652,8 +701,9 @@ async function refresh() {
 
 // ---------------------------------------------------------------- list
 
-function visibleItems() {
+function visibleItems({ ignoreType = false } = {}) {
   let list = items;
+  if (!ignoreType && ui.type && TYPE_TESTS[ui.type]) list = list.filter(TYPE_TESTS[ui.type]);
   if (ui.containerId) list = list.filter((i) => i.containerId === ui.containerId);
   else if (ui.view === 'favorites') list = list.filter((i) => i.favorite);
   else if (ui.view === 'passkeys') list = list.filter((i) => i.rpIds.length);
@@ -848,6 +898,7 @@ function renderList() {
       }
     } }, icon('unlock'), t('Im Tenant des Key Vaults anmelden')) : null,
     h('div', { class: 'search' }, icon('search'), search),
+    typePills(visibleItems({ ignoreType: true })),
     h('div', { class: 'list-scroll' }, rowsEl),
   );
   renderRows();

@@ -4,6 +4,22 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.18 – 2026-10-31
+- Neues, modernes Design (hell und dunkel): Liste und Details als helle Karte mit großen Radien, Felder eines Eintrags als Karte mit Trennlinien, Filter-Pillen (Alle, Logins, Passkeys, Notizen …), zentrierter Sperrbildschirm und KI-Agent-Dialog, aufgeräumtes Popup der Erweiterung.
+- Tresore in der Seitenleiste: Anzahl neben der Überschrift; bei mehr als fünf Tresoren erscheinen „Tresore suchen“ und eine eigene Scrollleiste.
+- Neues Setup im Keevault-Design: Begrüßung, Installation mit sich füllendem Schild und „Keevault ist bereit“ – ohne klassischen Installations-Assistenten, ohne Administratorrechte.
+- Updates ohne Fensterwechsel: Statt dass die App verschwindet und wieder auftaucht, erscheint an derselben Stelle „Keevault wird aktualisiert“ mit Fortschritt, danach startet Keevault mit „Aktualisiert auf …“. Im Hintergrund (gesperrt oder im Infobereich) bleibt das Update unsichtbar.
+- Browser-Erweiterung: Der Passkey-Anhänger hängt jetzt oben in der Mitte, ist symmetrisch aufgebaut und zeigt das Keevault-Logo.
+- Fortschrittskarte beim Abgleich: zeigt den laufenden Schritt (Schnell-Index, Secrets auflisten mit Seite und Anzahl, Zugriffsrechte, Ergebnis) und die Laufzeit. Mit der Maus darüber klappt sie auf: alle Schritte mit Dauer und ein Hinweis, wenn gelöschte Secrets die Auflistung bremsen. Das Diagnoseprotokoll vermerkt lange Auflistungen mit ihrer Seitenzahl.
+
+### English
+- New, modern design (light and dark): list and details as one card with large radii, an entry's fields as a card with dividers, filter pills (all, logins, passkeys, notes …), centred lock screen and AI agent dialog, tidier extension popup.
+- Vaults in the sidebar: count next to the heading; with more than five vaults “Search vaults” and a scroll area of their own appear.
+- New setup in Keevault's design: welcome, installation with a filling shield and “Keevault is ready” – no classic setup wizard, no administrator rights.
+- Updates without a window jump: instead of the app disappearing and reappearing, “Updating Keevault” with progress appears in the same place, then Keevault starts with “Updated to …”. In the background (locked or in the notification area) the update stays invisible.
+- Browser extension: the passkey tag now hangs top center with a symmetric layout and shows the Keevault logo.
+- Progress card while reconciling: shows the running step (fast index, listing secrets with page and count, permissions, result) and the elapsed time. Hovering expands it: every step with its duration and a hint when deleted secrets slow the listing down. The diagnostics log notes long listings with their page count.
+
 ## 0.7.17 – 2026-10-31
 - Zusätzliche Felder mit Feldtyp: Text, Verborgen, Mehrzeilig, Adresse (URL), E-Mail, Telefon, Zahl / PIN, Datum, Einmalcode (TOTP) und Datei. Dazu Vorlagen wie Lizenzschlüssel, API-Schlüssel, Wiederherstellungscodes, Sicherheitsfrage, Support-Telefon oder Vertragsende. Adressen sind anklickbar, Einmalcodes laufen live mit.
 - Kleine Dateien als Anhang (bis 8 KB, z. B. eine TXT mit weiteren Infos): Textdateien werden direkt angezeigt, jede Datei lässt sich speichern. Die Grenze ergibt sich aus der Größe eines Key-Vault-Secrets.

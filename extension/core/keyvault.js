@@ -134,14 +134,15 @@ export class KeyVaultClient {
     }
   }
 
-  /** onPage(count): called after every page with the number of items listed so far (progress for big vaults). */
+  /** onPage(count, pages): called after every page with the items listed so far and the pages read (progress for big vaults). */
   async listPaged(path, params, onPage = null) {
     let url = this.url(path, params);
     const all = [];
+    let pages = 0;
     while (url) {
       const data = await this.send('GET', url);
       all.push(...(data?.value || []));
-      onPage?.(all.length);
+      onPage?.(all.length, ++pages);
       url = data?.nextLink || null;
       if (url && new URL(url).hostname.toLowerCase() !== this.host) {
         throw new KeyVaultError(0, 'InvalidNextLink', t('Ungültiger Folgelink vom Key Vault'));
