@@ -27,6 +27,8 @@ const DEFAULTS = {
   requirePin: false,
   trayHintShown: false,
   autoTypeKeys: 'CommandOrControl+Shift',
+  // Start with Windows (tray only): the browser extension and AI agents find the app without starting it.
+  startWithWindows: false,
   signInWindows: true,
   machineSetupHint: '',
   entraUsed: false,

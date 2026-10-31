@@ -105,8 +105,66 @@
     setTimeout(() => gone.remove(), 230);
   }
 
+  /** App locked with a PIN: PIN field in the bar; after unlocking the bar continues with the passkeys (or saving). */
+  function showPinPill(pageId, info) {
+    if (info.ui) texts = info.ui;
+    hidePill();
+    inline = { pageId, kind: 'unlock', requestId: info.requestId, candidates: [], site: info.site, containers: [] };
+    pill = el('div', 'pill');
+    pill.setAttribute('role', 'dialog');
+    pill.setAttribute('aria-label', texts.lockedTitle || 'Keevault');
+    const sub = el('div', 's', texts.pinPrompt || 'PIN');
+    const col = el('div', 'col');
+    col.append(el('div', 't', texts.lockedTitle || 'Keevault'), sub);
+    const pin = el('input', 'pin');
+    Object.assign(pin, { type: 'password', inputMode: 'numeric', autocomplete: 'off', placeholder: texts.pin || 'PIN' });
+    pin.setAttribute('aria-label', texts.pin || 'PIN');
+    const go = el('button', 'use');
+    go.innerHTML = PASSKEY_SVG;
+    go.append(document.createTextNode(texts.unlockButton || 'OK'));
+    const submit = async () => {
+      const cur = inline;
+      if (!cur || !pin.value) return;
+      go.disabled = true;
+      pin.disabled = true;
+      sub.textContent = texts.passkeyWait || '…';
+      try {
+        const r = await call('cs:webauthnUnlock', { requestId: cur.requestId, pin: pin.value });
+        if (r.inline) showPasskeyPill(cur.pageId, r.inline);
+        else {
+          inline = null;
+          hidePill();
+          toPage({ id: cur.pageId, fallback: true });
+        }
+      } catch (err) {
+        sub.textContent = err.message;
+        pill?.classList.remove('shake');
+        void pill?.offsetWidth; // restart the animation
+        pill?.classList.add('shake');
+        go.disabled = false;
+        pin.disabled = false;
+        pin.value = '';
+        pin.focus();
+      }
+    };
+    go.addEventListener('click', (e) => { if (e.isTrusted) submit(); });
+    pin.addEventListener('keydown', (e) => { if (e.isTrusted && e.key === 'Enter') submit(); });
+    const more = el('button', 'more', '▾');
+    more.title = texts.otherOptions || '';
+    more.addEventListener('click', (e) => { if (e.isTrusted) openPromptWindow(); });
+    const x = el('button', 'x', '×');
+    x.title = texts.close || '';
+    x.addEventListener('click', (e) => { if (e.isTrusted) dismissPill(); });
+    const lock = el('span', 'ava lock');
+    lock.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+    pill.append(lock, col, pin, go, more, x);
+    ui().append(pill);
+    pin.focus({ preventScroll: true });
+  }
+
   function showPasskeyPill(pageId, info) {
     if (info.ui) texts = info.ui;
+    if (info.kind === 'unlock') return showPinPill(pageId, info);
     hidePill();
     inline = { pageId, kind: info.kind || 'get', requestId: info.requestId, candidates: info.candidates || [], site: info.site, containers: info.containers || [], containerId: info.defaultContainer };
     const create = inline.kind === 'create';
@@ -215,7 +273,7 @@
     try {
       const r = await call('cs:webauthnWindow', { requestId: cur.requestId });
       modalRequests.set(r.pending, cur.pageId);
-      pendingKinds.set(r.pending, cur.kind);
+      pendingKinds.set(r.pending, cur.kind === 'unlock' ? 'get' : cur.kind);
     } catch {
       toPage({ id: cur.pageId, fallback: true });
     }
@@ -401,6 +459,11 @@
       background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.2); padding: 4px; font-size: 13px; animation: pkc-in .2s ease; }
     .pill-list .other { width: 100%; border: 0; border-top: 1px solid #e3e6ec; background: none; color: #5b6170; padding: 9px; margin-top: 2px; cursor: pointer; font-size: 12px; text-align: center; }
     .pill-list .other:hover { color: #0f6cbd; }
+    .pill .ava.lock { background: #5b6170; }
+    .pill input.pin { width: 110px; border: 1px solid #c4c9d4; border-radius: 999px; padding: 7px 12px; font: inherit; font-size: 14px; letter-spacing: .2em; background: #fff; color: #1b1b1f; }
+    .pill input.pin:focus { outline: none; border-color: #8b7cf0; box-shadow: 0 0 0 3px rgba(139,124,240,.25); }
+    .pill.shake { animation: pill-shake .35s ease; }
+    @keyframes pill-shake { 0%, 100% { transform: translateX(-50%); } 25% { transform: translateX(calc(-50% - 6px)); } 75% { transform: translateX(calc(-50% + 6px)); } }
     @keyframes pill-in { from { transform: translate(-50%, -28px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
     @keyframes pill-out { to { transform: translate(-50%, -12px); opacity: 0; } }
     @keyframes pill-glow { 0%, 100% { box-shadow: 0 0 0 4px rgba(139,124,240,.22), 0 12px 32px rgba(0,0,0,.22); } 50% { box-shadow: 0 0 0 8px rgba(139,124,240,.10), 0 12px 32px rgba(0,0,0,.22); } }
@@ -419,6 +482,7 @@
       .pill .use { color: #5aa0ff; }
       .pill .use:hover, .pill .use:focus, .pill .x:hover, .pill .more:hover { background: #2f3440; }
       .pill .s, .pill .more, .pill .x, .pill-list .other { color: #a6abb8; }
+      .pill input.pin { background: #2b2e36; color: #eceef2; border-color: #464a55; }
       .pill-list .other { border-top-color: #3a3d46; }
       .pk .ring { background: conic-gradient(#5aa0ff 0 25%, #3a3d46 25% 100%); }
       .pk .pksub { color: #a6abb8; }

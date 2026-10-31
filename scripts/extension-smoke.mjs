@@ -197,6 +197,17 @@ try {
   const popup = await open(`${ext}/popup/popup.html`);
   check(await waitFor(() => evaluate(popup.sessionId, 'document.querySelectorAll(".row-item").length > 0')), 'Popup zeigt keine Einträge');
   await shot(popup.sessionId, 'ext-popup');
+  // Entry icon from a website's favicon: a 32×32 PNG becomes a small data URL; SVG and non-images give ''.
+  const favicon = await evaluate(popup.sessionId, `(async () => {
+    const c = new OffscreenCanvas(32, 32); const g = c.getContext('2d'); g.fillStyle = '#0f6cbd'; g.fillRect(0, 0, 32, 32);
+    const b = new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    const png = 'data:image/png;base64,' + btoa(String.fromCharCode(...b));
+    const m = await import('../core/image.js');
+    return JSON.stringify({ png: (await m.faviconToDataUrl(png)).slice(0, 15), svg: await m.faviconToDataUrl('data:image/svg+xml;base64,PHN2Zy8+'), none: await m.faviconToDataUrl('') });
+  })()`);
+  const fav = JSON.parse(favicon || '{}');
+  check(/^data:image\/(webp|png)/.test(fav.png || ''), `Favicon als Symbol: ${favicon}`);
+  check(fav.svg === '' && fav.none === '', `Favicon: SVG/leer sollte '' ergeben (${favicon})`);
   pageErrors(popup.sessionId, 'popup');
 
   // Passkey registration through the bar at the top of the page ("Save in Keevault"), verified by an independent

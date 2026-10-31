@@ -4,6 +4,18 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.13 – 2026-10-31
+- Passkey-Anmeldung bei gesperrter App: Mit gesetzter PIN entsperrst du direkt in der Leiste oben in der Seite und meldest dich gleich dort an – ohne Fenster.
+- Start aus der Browser-Erweiterung über die Windows-Shell statt als Unterprozess des Browsers (Sophos „Lockdown“ blockierte das).
+- Logos automatisch: Legst du einen Eintrag über die Browser-Erweiterung an (Neu, Login speichern, Passkey speichern), wird das Favicon der Website zum Symbol – direkt von der Website, ohne fremden Logo-Dienst.
+- Neue Einstellung „Mit Windows starten (im Infobereich)“: Die App ist für Erweiterung und KI-Agenten sofort da.
+
+### English
+- Passkey sign-in while the app is locked: with a PIN set you unlock right in the bar at the top of the page and sign in there – no window.
+- Starting the app from the browser extension goes through the Windows shell instead of as a child of the browser (Sophos “Lockdown” blocked that).
+- Logos automatically: entries created through the browser extension (New, save login, save passkey) get the website's favicon as icon – straight from the website, no third-party logo service.
+- New setting “Start with Windows (in the notification area)”: the app is ready for the extension and AI agents right away.
+
 ## 0.7.12 – 2026-10-31
 - Browser-Erweiterung: Passt die gespeicherte URL genauer zur Seite (z. B. keevault.de/admin), steht der Eintrag in „Diese Website“ und in der Passkey-Leiste ganz oben; alle anderen Einträge der Website bleiben sichtbar.
 - Diagnose: Langsame oder fehlgeschlagene Anfragen an Key Vault und langsame Anmeldungen landen ohne Inhalte in `%APPDATA%\KeyVault PwSafe\diagnostics.log`.

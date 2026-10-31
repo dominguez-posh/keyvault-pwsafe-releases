@@ -8,6 +8,7 @@ import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
 import { hostFromUrl, itemMatchesHost, urlScore } from './core/match.js';
 import { itemHosts } from './core/model.js';
+import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
 import { setLanguage, t } from './core/i18n.js';
@@ -206,6 +207,10 @@ function contentStrings() {
     otherOptions: t('Andere Optionen'),
     choosePasskey: t('Passkey wählen'),
     savePasskey: t('In Keevault speichern'),
+    lockedTitle: t('Keevault ist gesperrt'),
+    pinPrompt: t('PIN eingeben, um fortzufahren'),
+    unlockButton: t('Entsperren'),
+    pin: t('PIN'),
     saveQuestion: t('Passkey in Keevault speichern?'),
     saveIn: t('Speichern in „{vault}“'),
     alreadySaved: t('Für dieses Konto ist bereits ein Passkey im Tresor gespeichert.'),
@@ -318,15 +323,21 @@ async function pendingCapture(sender) {
   return p;
 }
 
+/** Icon for a new entry: the favicon of the tab the entry comes from ('' if none). */
+async function tabIcon(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  return faviconToDataUrl(tab?.favIconUrl);
+}
+
 async function saveCaptured({ containerId }, sender) {
   const p = await pendingCapture(sender);
   if (!p) throw new Error(t('Nichts zu speichern'));
   let saved;
   if (p.action === 'update') {
     const item = await vault.getItem(p.target.containerId, p.target.id, { fresh: true });
-    saved = await vault.saveItem(p.target.containerId, { ...item, password: p.password }, { expectedVersion: item.version });
+    saved = await vault.saveItem(p.target.containerId, { ...item, password: p.password, icon: item.icon || await tabIcon(sender.tab.id) }, { expectedVersion: item.version });
   } else {
-    saved = await vault.saveItem(containerId, { type: 'login', title: p.host, username: p.username, password: p.password, urls: [p.origin] });
+    saved = await vault.saveItem(containerId, { type: 'login', title: p.host, username: p.username, password: p.password, urls: [p.origin], icon: await tabIcon(sender.tab.id) });
     await updateSettings({ defaultContainer: containerId });
   }
   await chrome.storage.session.remove(captureKey(sender.tab.id));
@@ -454,23 +465,52 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
     }
   }
   if (kind === 'create' && open) {
-    // Saving a new passkey also happens in the bar at the top of the page; the window only on "Other options".
-    const containers = await writableContainers();
-    if (containers.length) {
-      const s = await getSettings();
-      const existing = options.excludeCredentials?.length ? await vault.passkeyCandidates(rpId, options.excludeCredentials) : [];
+    const inline = await inlineFor(request);
+    if (inline) {
       await saveRequest(request);
-      return { inline: {
-        kind: 'create', requestId: request.id, site: rpId, rpName: options.rp?.name || rpId,
-        user: options.user?.name || options.user?.displayName || '', containers,
-        defaultContainer: containers.some((c) => c.id === s.defaultContainer) ? s.defaultContainer : containers[0].id,
-        alreadyRegistered: existing.length > 0, ui: contentStrings(),
-      } };
+      return { inline };
     }
+  }
+  if (!open && !request.conditional && !demo && (await snapshot().catch(() => null))?.pinSet) {
+    // App locked, PIN set: the bar asks for the PIN right in the page and then continues there.
+    await saveRequest(request);
+    return { inline: { kind: 'unlock', requestId: request.id, site: rpId, ui: contentStrings() } };
   }
   await saveRequest(request);
   await openPrompt(`${kind}:${request.id}`, sender.tab, request);
   return { pending: request.id };
+}
+
+/** What the in-page bar shows for a request while the app is open: passkeys to choose, or where to save; null = window. */
+async function inlineFor(req) {
+  const { rpId, options } = req;
+  if (req.kind === 'get') {
+    const found = await vault.passkeyCandidates(rpId, options.allowCredentials);
+    if (!found.length) return null;
+    return { requestId: req.id, site: rpId, lockedContainers: await lockedProtected(), candidates: await publicCandidates(found, req.pageUrl), ui: contentStrings() };
+  }
+  // Saving a new passkey also happens in the bar at the top of the page; the window only on "Other options".
+  const containers = await writableContainers();
+  if (!containers.length) return null;
+  const s = await getSettings();
+  const existing = options.excludeCredentials?.length ? await vault.passkeyCandidates(rpId, options.excludeCredentials) : [];
+  return {
+    kind: 'create', requestId: req.id, site: rpId, rpName: options.rp?.name || rpId,
+    user: options.user?.name || options.user?.displayName || '', containers,
+    defaultContainer: containers.some((c) => c.id === s.defaultContainer) ? s.defaultContainer : containers[0].id,
+    alreadyRegistered: existing.length > 0, ui: contentStrings(),
+  };
+}
+
+/** PIN entered in the bar: unlock the app, then continue in the bar ({ inline }) or hand over ({ fallback }). */
+async function inlineUnlock({ requestId, pin }, sender) {
+  const req = await loadRequest(requestId);
+  if (!req || req.tabId !== sender.tab?.id || req.frameId !== sender.frameId) throw new Error(t('Die Anfrage ist abgelaufen'));
+  await unlockPin(pin); // wrong PIN: throws with the app's message (attempts are counted there)
+  const inline = await inlineFor(req);
+  if (inline) return { inline };
+  await deleteRequest(requestId);
+  return { fallback: true };
 }
 
 async function finishRequest(requestId, payload, { closeWindow = true } = {}) {
@@ -579,7 +619,7 @@ async function webauthnApprove({ requestId, containerId, itemId, credentialId, t
     }, { expectedVersion: item.version });
   } else {
     await vault.saveItem(containerId, {
-      type: 'login', title: title || req.options.rp?.name || req.rpId, username: req.options.user?.name || '', urls: [req.origin], passkeys: [passkey],
+      type: 'login', title: title || req.options.rp?.name || req.rpId, username: req.options.user?.name || '', urls: [req.origin], passkeys: [passkey], icon: await tabIcon(req.tabId),
     });
   }
   await updateSettings({ defaultContainer: containerId });
@@ -745,6 +785,7 @@ const contentCommands = {
   'cs:webauthnAbort': (msg, sender) => abortRequest(msg, sender),
   'cs:webauthnWindow': (msg, sender) => inlineWindow(msg, sender),
   'cs:webauthnCreate': (msg, sender) => inlineCreate(msg, sender),
+  'cs:webauthnUnlock': (msg, sender) => inlineUnlock(msg, sender),
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

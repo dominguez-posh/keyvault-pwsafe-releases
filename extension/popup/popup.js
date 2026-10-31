@@ -2,6 +2,7 @@ import { h, icon, iconButton, setChildren, toast, avatar, confirmDialog } from '
 import { itemDetail, itemForm, generatorPanel } from '../core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../core/generator.js';
 import { itemMatchesHost, urlScore } from '../core/match.js';
+import { faviconToDataUrl } from '../core/image.js';
 import { itemHosts } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call, copy } from '../lib/api.js';
@@ -271,10 +272,12 @@ async function scanVisibleTab() {
   return '';
 }
 
-function renderEdit(item) {
+async function renderEdit(item) {
   const isNew = !item;
   const writable = writableContainers();
-  const start = item || { type: 'login', urls: tab?.url && /^https?:/.test(tab.url) ? [new URL(tab.url).origin] : [], title: host || '' };
+  // New entry from a website: its favicon becomes the icon (from the site itself, no icon service).
+  const start = item || { type: 'login', urls: tab?.url && /^https?:/.test(tab.url) ? [new URL(tab.url).origin] : [], title: host || '',
+    icon: /^https?:/.test(tab?.url || '') ? await faviconToDataUrl(tab.favIconUrl) : '' };
   const form = itemForm(start, {
     isNew,
     scanQr: scanVisibleTab,

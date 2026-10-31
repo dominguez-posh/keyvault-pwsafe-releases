@@ -49,6 +49,37 @@ export async function imageToDataUrl(file, { size = 64, maxChars = ICON_MAX_CHAR
   throw new Error(t('Das Bild ist zu groß'));
 }
 
+/**
+ * The website's own icon (the tab's favicon, as the browser reports it) as entry icon: fetched from the site itself
+ * or taken from the browser's data URL – no third-party icon service, so no other party learns the vault's hosts.
+ * Works in pages and in the service worker (OffscreenCanvas). → data URL or '' (no icon, SVG, too big, error).
+ */
+export async function faviconToDataUrl(url, { size = 64, maxChars = ICON_MAX_CHARS } = {}) {
+  try {
+    if (!url || !/^(https:|data:image\/(png|x-icon|vnd\.microsoft\.icon|webp|jpeg|gif))/i.test(url)) return '';
+    const res = await fetch(url, { credentials: 'omit', cache: 'force-cache' });
+    if (!res.ok) return '';
+    const blob = await res.blob();
+    if (blob.size > 512_000 || /svg/i.test(blob.type)) return '';
+    const bitmap = await createImageBitmap(blob);
+    const scale = Math.min(size / bitmap.width, size / bitmap.height, 1);
+    const canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    for (const [type, quality] of [['image/webp', 0.9], ['image/png', undefined]]) {
+      const out = await canvas.convertToBlob({ type, quality });
+      const bytes = new Uint8Array(await out.arrayBuffer());
+      let bin = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      const dataUrl = `data:${out.type};base64,${btoa(bin)}`;
+      if (isImageDataUrl(dataUrl, maxChars)) return dataUrl;
+    }
+  } catch {
+    // No icon is fine.
+  }
+  return '';
+}
+
 /** File picker → data URL (null if cancelled). */
 export function pickImage(options) {
   return new Promise((resolve, reject) => {

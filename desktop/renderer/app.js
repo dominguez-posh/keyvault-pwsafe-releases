@@ -2897,6 +2897,7 @@ function settingsDialog() {
           : t('Installiert, aber noch nicht bei Windows registriert.')), () => windowsStatus.replaceChildren());
   const extensionIds = h('input', { value: s.extensionIds.join(', '), disabled: enforced('extensionIds') });
   const signInWindows = h('input', { type: 'checkbox', checked: s.signInWindows !== false, disabled: enforced('signInWindows') });
+  const startWithWindows = h('input', { type: 'checkbox', checked: !!s.startWithWindows });
   const autoTypeKeys = h('select', {},
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
@@ -2993,6 +2994,8 @@ function settingsDialog() {
   modal(t('Einstellungen'), tabbed('settings', [
     { label: t('Allgemein'), content: [
       field(t('Sprache'), language),
+      st.platform === 'win32' ? h('label', { class: 'inline' }, startWithWindows, t('Mit Windows starten (im Infobereich)')) : null,
+      st.platform === 'win32' ? h('p', { class: 'muted small' }, t('Dann ist Keevault für Browser-Erweiterung und KI-Agenten sofort da, ohne dass sie die App erst starten müssen.')) : null,
       section(t('Updates'),
         managed
           ? h('p', { class: 'muted small' }, managedUpdateHint(st.updateKind))
@@ -3080,6 +3083,7 @@ function settingsDialog() {
         windowsProvider: windowsProvider.checked,
         autoTypeKeys: autoTypeKeys.value,
         signInWindows: signInWindows.checked,
+        startWithWindows: startWithWindows.checked,
         updateMode: updateMode.value,
         mcpEnabled: mcpEnabled.checked,
         offlineMirror: offlineMirror.checked && st.pinSet,

@@ -913,11 +913,23 @@ async function setupWindowsProvider() {
   if (r.response === 0) shell.openExternal('ms-settings:savedpasskeys');
 }
 
+/** Windows login item of the installed app (tray only, --background); development and MSIX stay untouched. */
+function applyStartWithWindows() {
+  if (!app.isPackaged || process.platform !== 'win32' || process.windowsStore || demo) return;
+  app.setLoginItemSettings({ openAtLogin: !!config.get().startWithWindows, args: ['--background'] });
+}
+
 async function applyBrowserIntegration() {
   const s = config.get();
   if (!demo && !devIsolated) {
     if (s.browserIntegration) {
-      const launch = { cmd: launchPath(), args: app.isPackaged ? [] : [appRoot] };
+      // Installed app on Windows: started through the shell (kvpwsafe:// link) instead of as a child of the
+      // browser's native-messaging host – endpoint protection (e.g. Sophos "Lockdown") blocks programs started
+      // from the browser's process chain. MSIX and development keep the direct start.
+      const viaShell = app.isPackaged && process.platform === 'win32' && !process.windowsStore;
+      const launch = viaShell
+        ? { cmd: path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe'), args: ['kvpwsafe://open'] }
+        : { cmd: launchPath(), args: app.isPackaged ? [] : [appRoot] };
       await registerNativeHost({ userData: app.getPath('userData'), extensionIds: s.extensionIds, launch });
     } else await unregisterNativeHost();
     if (s.windowsProvider) await rememberDesktopCommand(launchPath(), app.isPackaged ? '' : `"${appRoot}"`).catch(() => {});
@@ -985,6 +997,7 @@ const api = {
     const s = config.update(patch);
     applyLanguage();
     if (before.autoTypeKeys !== s.autoTypeKeys) applyShortcuts();
+    if (before.startWithWindows !== s.startWithWindows) applyStartWithWindows();
     if (before.updateMode !== s.updateMode) {
       if (!UPDATE_MODES.includes(s.updateMode)) config.update({ updateMode: 'off' });
       updater?.applyMode();
@@ -1951,6 +1964,8 @@ ipcMain.handle('api', async (event, method, args) => {
 
 function handleLink(url) {
   if (!/^kvpwsafe:\/\//i.test(url || '')) return;
+  // kvpwsafe://open: started by the browser extension through the Windows shell – just be there, no dialog.
+  if (/^kvpwsafe:\/\/open\/?$/i.test(url)) return;
   win?.show();
   win?.focus();
   send({ type: 'link', url });
@@ -2017,7 +2032,8 @@ function createWindow() {
   win.removeMenu();
   win.loadURL('app://pwsafe/desktop/renderer/index.html');
   win.once('ready-to-show', () => {
-    if (!smokeTest) win.show();
+    // Started with Windows (setting "Start with Windows"): only in the tray, the window opens on demand.
+    if (!smokeTest && !process.argv.includes('--background')) win.show();
   });
   // Closing hides the window; the app stays in the notification area until "Beenden".
   win.on('close', (e) => {
@@ -2153,6 +2169,7 @@ app.whenReady().then(async () => {
     fetch: secureFetch,
   });
   updater.start();
+  applyStartWithWindows();
   if (smokeTest) runSmokeTest();
 });
 
