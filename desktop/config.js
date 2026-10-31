@@ -50,6 +50,9 @@ const DEFAULTS = {
   agentRules: {}, // { [agent]: { write: boolean, until: ISO string | null } }
   // Offline read mode: encrypted mirror of the vault answers (needs the app PIN); off by default, policy can forbid it.
   offlineMirror: false,
+  // View (main menu): zoom factor of the window and see-through ground (off | light | strong, Windows 11 acrylic).
+  zoom: 1,
+  transparency: 'off',
 };
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled', 'offlineMirror',
   'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];

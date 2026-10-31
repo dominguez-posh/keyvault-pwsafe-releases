@@ -349,6 +349,7 @@ async function render() {
   // Installed version, always visible at the bottom right.
   let versionTag = document.getElementById('app-version');
   if (!versionTag) document.body.append(versionTag = h('button', { id: 'app-version', type: 'button', onclick: () => updateDialog() }));
+  applyViewClass();
   versionTag.textContent = `Keevault ${st.version}`;
   versionTag.title = t('Nach Updates suchen …');
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
@@ -679,6 +680,58 @@ function helpDialog() {
       h('span', { class: 'muted' }, `Keevault ${st.version}`))), [{ label: t('Schließen'), primary: true }]);
 }
 
+/** See-through ground (light/strong) as classes on <html>; the main process switches the window material. */
+function applyViewClass() {
+  const mode = st?.settings?.transparency || 'off';
+  document.documentElement.classList.toggle('see-through', mode === 'light' || mode === 'strong');
+  document.documentElement.classList.toggle('see-through-strong', mode === 'strong');
+}
+
+const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
+const zoomNow = () => Number(st?.settings?.zoom) || 1;
+
+/** Zoom one step in (+1), out (-1) or back to 100 % (0); remembered in the settings. */
+async function stepZoom(dir) {
+  const now = zoomNow();
+  let next = 1;
+  if (dir > 0) next = ZOOM_STEPS.find((z) => z > now + 0.001) ?? ZOOM_STEPS[ZOOM_STEPS.length - 1];
+  if (dir < 0) next = [...ZOOM_STEPS].reverse().find((z) => z < now - 0.001) ?? ZOOM_STEPS[0];
+  await setView({ zoom: next });
+  toast(t('Zoom {n} %', { n: Math.round(next * 100) }));
+}
+
+async function setView(patch) {
+  st.settings = await call('updateSettings', patch);
+  applyViewClass();
+  document.querySelectorAll('[data-view-value]').forEach((el) => el.dispatchEvent(new Event('view-changed')));
+}
+
+function viewRow(label, control) {
+  return h('div', { class: 'view-row' }, h('span', { class: 'grow' }, label), control);
+}
+
+function zoomControl() {
+  const value = h('span', { class: 'zoom-value', 'data-view-value': '' });
+  const show = () => { value.textContent = `${Math.round(zoomNow() * 100)} %`; };
+  value.addEventListener('view-changed', show);
+  show();
+  const step = (dir, label, text) => h('button', { type: 'button', class: 'view-step', 'aria-label': label, title: label, onclick: () => stepZoom(dir) }, text);
+  return h('span', { class: 'zoom-control' }, step(-1, t('Verkleinern (Strg −)'), '−'),
+    h('button', { type: 'button', class: 'view-reset', title: t('Auf 100 % (Strg 0)'), onclick: () => stepZoom(0) }, value),
+    step(1, t('Vergrößern (Strg +)'), '+'));
+}
+
+function transparencyControl() {
+  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': t('Transparenz'), 'data-view-value': '' });
+  const draw = () => box.replaceChildren(...[['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]].map(([value, label]) => h('button', {
+    type: 'button', role: 'radio', 'aria-checked': String((st.settings.transparency || 'off') === value), class: (st.settings.transparency || 'off') === value ? 'on' : '',
+    onclick: () => setView({ transparency: value }),
+  }, label)));
+  box.addEventListener('view-changed', draw);
+  draw();
+  return box;
+}
+
 /** Burger next to the logo: opens the main menu; a dot when the password check reports expiring entries. */
 function mainMenuButton() {
   const b = iconButton('menu', t('Menü'), (e) => mainMenu(e.currentTarget));
@@ -712,6 +765,9 @@ function mainMenu(anchor) {
     entry('generator', 'key', t('Passwort-Generator'), generatorDialog),
     entry('health', 'shield', t('Passwort-Check'), () => healthDialog(reportCtx()), expiring ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiring) : null),
     st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
+    h('div', { class: 'main-menu-label' }, t('Ansicht')),
+    viewRow(t('Zoom'), zoomControl()),
+    viewRow(t('Transparenz'), transparencyControl()),
     h('div', { class: 'context-sep' }),
     entry('lock', 'lock', t('Sperren'), () => call('lock')));
   const close = () => {
@@ -1267,7 +1323,7 @@ function folderActions(c, folder, count, open) {
           const choice = await new Promise((resolve) => {
             modal(t('Ordner löschen'), h('div', {},
               h('p', {}, t('„{folder}“ enthält {count} Einträge (inklusive Unterordner). Was soll mit ihnen passieren?', { folder, count: inside.length })),
-              h('p', { class: 'muted small' }, t('„Nur Ordner“ verschiebt die Einträge eine Ebene nach oben ({parent}). „Mit Inhalt“ verschiebt sie in den Papierkorb.', { parent: parent || t('Ohne Ordner') }))), [
+              h('p', { class: 'muted small' }, t('„Nur Ordner“ verschiebt die Einträge eine Ebene nach oben ({parent}). „Mit Inhalt“ löscht sie.', { parent: parent || t('Ohne Ordner') }))), [
               { label: t('Abbrechen'), onClick: () => resolve(null) },
               { label: t('Nur Ordner löschen'), onClick: () => resolve('keep') },
               { label: t('Mit Inhalt löschen'), danger: true, onClick: () => resolve('delete') },
@@ -1275,7 +1331,7 @@ function folderActions(c, folder, count, open) {
           });
           if (!choice) return;
           if (choice === 'delete') {
-            if (!(await confirmDialog(t('Wirklich alle Einträge löschen?'), t('Achtung: {count} Einträge aus „{folder}“ und allen Unterordnern werden in den Papierkorb verschoben. Wiederherstellen ist nur bis zum Ablauf der Aufbewahrungsfrist des Key Vaults möglich – danach sind sie endgültig weg.', { folder, count: inside.length }), { confirmLabel: t('Ja, {count} Einträge löschen', { count: inside.length }), danger: true }))) return;
+            if (!(await confirmDialog(t('Wirklich alle Einträge löschen?'), `${t('Achtung: {count} Einträge aus „{folder}“ und allen Unterordnern werden gelöscht.', { folder, count: inside.length })} ${await deleteNotice(c)}`, { confirmLabel: t('Ja, {count} Einträge löschen', { count: inside.length }), danger: true }))) return;
             const failed = await deleteMany(inside.map((i) => i.key));
             if (failed) toast(t('{n} Einträge konnten nicht gelöscht werden', { n: failed }), 'error');
           } else {
@@ -1554,7 +1610,6 @@ function containerActionsFlat(c) {
     may('rename') ? { action: 'rename', icon: 'edit', label: t('Umbenennen'), disabled: !!c.error || (isFile && !ready), onClick: () => renameContainerDialog(c) } : null,
     may('import') ? { action: 'import', icon: 'upload', label: t('Importieren'), disabled: !canWrite, onClick: () => openImport(c) } : null,
     !isFile && may('export') ? { action: 'export', icon: 'download', label: t('Einträge exportieren (CSV)'), disabled: !ready, onClick: () => exportDialog(c) } : null,
-    { action: 'trash', icon: 'trash', label: t('Papierkorb'), disabled: !ready, onClick: () => trashDialog(c) },
     { action: 'license', icon: 'key', label: t('Lizenz'), disabled: !ready, onClick: () => licenseDialog(c) },
     isFile ? null : { action: 'backup', icon: 'download', label: t('Backup erstellen (Owner)'), disabled: !!c.error, onClick: () => backupDialog(c) },
     isFile ? null : { action: 'restore', icon: 'history', label: t('Backup wiederherstellen (Owner)'), disabled: !!c.error, onClick: () => restoreDialog(c) },
@@ -1579,7 +1634,8 @@ function containerActionsFlat(c) {
 
 // ---------------------------------------------------------------- vault settings (Key Vault administrators)
 
-const POLICY_ORDER = ['folders', 'rename', 'logo', 'import', 'export', 'protection', 'purge'];
+// "purge" (final deletion from the trash) stays a known policy key but has no switch: the app has no trash any more.
+const POLICY_ORDER = ['folders', 'rename', 'logo', 'import', 'export', 'protection'];
 const POLICY_TEXT = {
   folders: 'Ordner anlegen, umbenennen und löschen',
   rename: 'Tresor umbenennen',
@@ -1857,6 +1913,29 @@ async function openItemLink(link) {
   select({ view: 'container', containerId: container.id, selected: key });
 }
 
+// Retention per vault (days, from the vault's Azure properties); null when it cannot be read (no ARM access).
+const retentionCache = new Map();
+
+/**
+ * Text for delete confirmations. Key Vault keeps deleted secrets for its retention period (soft delete, always on):
+ * recovery happens in the Azure portal, Keevault has no trash of its own. File vaults have no retention at all.
+ */
+async function deleteNotice(container) {
+  if (!container) return '';
+  if (container.kind === 'file') return t('Achtung: keine Aufbewahrungsfrist – gelöschte Einträge lassen sich nicht wiederherstellen.');
+  if (!retentionCache.has(container.id)) {
+    const days = await Promise.race([
+      call('vaultInfo', container.id).then((x) => x?.retentionDays || null, () => null),
+      new Promise((r) => { setTimeout(() => r(undefined), 2500); }),
+    ]);
+    if (days !== undefined) retentionCache.set(container.id, days);
+  }
+  const days = retentionCache.get(container.id);
+  return days
+    ? t('Wiederherstellbar nur {days} Tage lang im Azure-Portal (Key Vault → Secrets → Verwaltete gelöschte Secrets), danach endgültig gelöscht.', { days })
+    : t('Wiederherstellbar nur während der Aufbewahrungsfrist des Key Vaults (7–90 Tage) im Azure-Portal, danach endgültig gelöscht.');
+}
+
 function itemActions(i) {
   if (ui.multi.size > 1 && ui.multi.has(i.key)) return multiActions();
   const [containerId, id] = splitKey(i.key);
@@ -1882,10 +1961,10 @@ function itemActions(i) {
     { action: 'history', icon: 'history', label: t('Verlauf'), onClick: async () => historyDialog(await open()) },
     { action: 'copy-link', icon: 'link', label: t('Link kopieren'), disabled: !buildItemLink(c, id), onClick: () => copyItemLink(c, id) },
     { action: 'delete', icon: 'trash', label: t('Löschen'), danger: true, disabled: !canWrite, onClick: async () => {
-      if (!(await confirmDialog(t('Eintrag löschen'), t('„{title}“ in den Papierkorb verschieben? Wiederherstellen ist bis zum Ablauf der Aufbewahrungsfrist möglich.', { title: i.title }), { confirmLabel: t('Löschen'), danger: true }))) return;
+      if (!(await confirmDialog(t('Eintrag löschen'), `${t('„{title}“ löschen?', { title: i.title })} ${await deleteNotice(c)}`, { confirmLabel: t('Löschen'), danger: true }))) return;
       await call('delete', containerId, id);
       if (ui.selected === i.key) ui.selected = null;
-      toast(t('In den Papierkorb verschoben'));
+      toast(t('Gelöscht'));
       await reloadAll();
     } },
   ];
@@ -1948,9 +2027,10 @@ async function deleteMany(keys) {
 }
 
 async function deleteManyDialog(list) {
-  if (!(await confirmDialog(t('Einträge löschen'), t('{n} Einträge in den Papierkorb verschieben? Wiederherstellen ist bis zum Ablauf der Aufbewahrungsfrist möglich.', { n: list.length }), { confirmLabel: t('Löschen'), danger: true }))) return;
+  const notices = [...new Set(await Promise.all([...new Set(list.map((i) => i.containerId))].map((id) => deleteNotice(st.containers.find((x) => x.id === id)))))];
+  if (!(await confirmDialog(t('Einträge löschen'), `${t('{n} Einträge löschen?', { n: list.length })} ${notices.join(' ')}`, { confirmLabel: t('Löschen'), danger: true }))) return;
   const failed = await deleteMany(list.map((i) => i.key));
-  toast(failed ? t('{n} Einträge konnten nicht gelöscht werden', { n: failed }) : t('{n} Einträge in den Papierkorb verschoben', { n: list.length }), failed ? 'error' : undefined);
+  toast(failed ? t('{n} Einträge konnten nicht gelöscht werden', { n: failed }) : t('{n} Einträge gelöscht', { n: list.length }), failed ? 'error' : undefined);
   await reloadAll();
 }
 
@@ -2001,7 +2081,7 @@ function moveManyDialog(list) {
   const target = h('select', {}, ...targets.map((c) => h('option', { value: c.id }, c.name)));
   modal(t('Einträge verschieben'), h('div', {},
     field(t('{n} Einträge verschieben nach', { n: list.length }), target),
-    h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle in den Papierkorb verschoben. Der bisherige Verlauf bleibt in der Quelle.'))), [
+    h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle gelöscht. Der bisherige Verlauf bleibt bis zum Ende der Aufbewahrungsfrist in der Quelle.'))), [
     { label: t('Abbrechen') },
     { label: t('Verschieben'), primary: true, onClick: async () => {
       let moved = 0;
@@ -2129,11 +2209,11 @@ async function renderDetail() {
       st.containers.find((c) => c.id === containerId)?.secure
         ? { icon: 'clock', label: t('Änderungsprotokoll'), onClick: () => changelogDialog(st.containers.find((c) => c.id === containerId), id) } : null,
       canWrite ? { icon: 'trash', label: t('Löschen'), danger: true, onClick: async () => {
-        if (!(await confirmDialog(t('Eintrag löschen'), t('„{title}“ in den Papierkorb verschieben? Wiederherstellen ist bis zum Ablauf der Aufbewahrungsfrist möglich.', { title: item.title }), { confirmLabel: t('Löschen'), danger: true }))) return;
+        if (!(await confirmDialog(t('Eintrag löschen'), `${t('„{title}“ löschen?', { title: item.title })} ${await deleteNotice(st.containers.find((x) => x.id === containerId))}`, { confirmLabel: t('Löschen'), danger: true }))) return;
         try {
           await call('delete', containerId, id);
           ui.selected = null;
-          toast(t('In den Papierkorb verschoben'));
+          toast(t('Gelöscht'));
           await reloadAll();
         } catch (e) {
           toast(e.message, 'error');
@@ -2854,43 +2934,6 @@ async function shareDialog(container) {
   load();
 }
 
-function trashDialog(container) {
-  const listEl = h('div', {}, h('span', { class: 'spinner' }));
-  const load = async () => {
-    const entries = await call('trash', container.id);
-    listEl.replaceChildren(...(entries.length ? entries.map((e) => h('div', { class: 'member' },
-      icon('trash'),
-      h('div', { class: 'row-text' },
-        h('div', { class: 'row-title' }, e.title),
-        h('div', { class: 'row-sub' }, e.scheduledPurgeDate
-          ? t('gelöscht {deleted} · endgültig ab {purge}', { deleted: formatDateTime(e.deletedDate), purge: formatDateTime(e.scheduledPurgeDate) })
-          : t('gelöscht {deleted}', { deleted: formatDateTime(e.deletedDate) }))),
-      h('button', { type: 'button', class: 'btn small', onclick: async (ev) => {
-        ev.currentTarget.disabled = true;
-        try {
-          await call('restore', container.id, e.id);
-          toast(t('Wiederhergestellt'));
-          await reloadAll();
-          await load();
-        } catch (err) {
-          toast(err.message, 'error');
-        }
-      } }, t('Wiederherstellen')),
-      !featureAllowed(container, 'purge') ? null : h('button', { type: 'button', class: 'btn small danger', onclick: async () => {
-        if (!(await confirmDialog(t('Endgültig löschen'), t('„{title}“ endgültig löschen? Das lässt sich nicht rückgängig machen.', { title: e.title }), { confirmLabel: t('Endgültig löschen'), danger: true }))) return;
-        try {
-          await call('purge', container.id, e.id);
-          await load();
-        } catch (err) {
-          toast(err.message, 'error');
-        }
-      } }, t('Endgültig löschen')))) : [h('p', { class: 'muted' }, t('Der Papierkorb ist leer.'))]));
-  };
-  modal(t('Papierkorb – {name}', { name: container.name }), h('div', {},
-    container.kind === 'file' ? null : h('p', { class: 'muted small' }, t('Gelöschte Einträge bleiben im Key Vault (Soft Delete) bis zum Ende der Aufbewahrungsfrist. Mit Löschschutz ist endgültiges Löschen erst danach möglich.')),
-    listEl), [{ label: t('Schließen') }]);
-  load().catch((e) => listEl.replaceChildren(notice(e.message)));
-}
 
 async function historyDialog(item) {
   let versions;
@@ -2936,7 +2979,7 @@ function moveDialog(item) {
   const target = h('select', {}, ...targets.map((c) => h('option', { value: c.id }, c.name)));
   modal(t('Eintrag verschieben'), h('div', {},
     field(t('„{title}“ verschieben nach', { title: item.title }), target),
-    h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle in den Papierkorb verschoben. Der bisherige Verlauf bleibt in der Quelle.'))), [
+    h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle gelöscht. Der bisherige Verlauf bleibt bis zum Ende der Aufbewahrungsfrist in der Quelle.'))), [
     { label: t('Abbrechen') },
     { label: t('Verschieben'), primary: true, onClick: async () => {
       const saved = await call('move', item.containerId, target.value, item.id);
@@ -3361,6 +3404,16 @@ async function typeSelected(what) {
 // Unexpected errors go to the diagnostics log (Einstellungen → Protokoll), without any secret values.
 window.addEventListener('error', (e) => call('log', { level: 'error', message: e.message, detail: `${e.filename}:${e.lineno}` }).catch(() => {}));
 window.addEventListener('unhandledrejection', (e) => call('log', { level: 'error', message: e.reason?.message || String(e.reason), detail: (e.reason?.stack || '').split(/\r?\n/).slice(0, 3).join(' / ') }).catch(() => {}));
+
+// Zoom: Ctrl + / Ctrl − / Ctrl 0 (also Ctrl with the number pad keys), everywhere in the window.
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.altKey || !st) return;
+  const key = e.key;
+  const dir = key === '+' || key === '=' || e.code === 'NumpadAdd' ? 1 : key === '-' || e.code === 'NumpadSubtract' ? -1 : key === '0' || e.code === 'Numpad0' ? 0 : null;
+  if (dir === null) return;
+  e.preventDefault();
+  stepZoom(dir);
+});
 
 document.addEventListener('keydown', (e) => {
   if (!st?.opened || document.querySelector('dialog[open]')) return;

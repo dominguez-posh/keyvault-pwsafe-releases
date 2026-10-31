@@ -961,10 +961,25 @@ async function setupWindowsProvider() {
   if (r.response === 0) shell.openExternal('ms-settings:savedpasskeys');
 }
 
+/**
+ * View settings: zoom of the window content and the see-through ground (Windows 11 acrylic behind the window; the
+ * renderer makes only the ground and the top bar translucent, the cards with data stay opaque).
+ */
+function applyView() {
+  if (!win || win.isDestroyed()) return;
+  const v = config.get();
+  win.webContents.setZoomFactor(Math.min(1.5, Math.max(0.8, Number(v.zoom) || 1)));
+  if (process.platform === 'win32' && typeof win.setBackgroundMaterial === 'function') {
+    const see = v.transparency === 'light' || v.transparency === 'strong';
+    win.setBackgroundMaterial(see ? 'acrylic' : 'none');
+    win.setBackgroundColor(see ? '#00000000' : nativeTheme.shouldUseDarkColors ? '#18191d' : '#f5f6f8');
+  }
+}
+
 /** Window buttons over the hidden title bar: the ground colour of the app (extension/styles/app.css --bg). */
 function titleBarColors() {
   const dark = nativeTheme.shouldUseDarkColors;
-  return { color: dark ? '#18191d' : '#f5f6f8', symbolColor: dark ? '#eceef2' : '#1b1d22', height: 40 };
+  return { color: dark ? '#18191d' : '#f5f6f8', symbolColor: dark ? '#eceef2' : '#1b1d22', height: 52 };
 }
 
 /** Windows login item of the installed app (tray only, --background); development and MSIX stay untouched. */
@@ -1052,6 +1067,7 @@ const api = {
     applyLanguage();
     if (before.autoTypeKeys !== s.autoTypeKeys) applyShortcuts();
     if (before.startWithWindows !== s.startWithWindows) applyStartWithWindows();
+    if (before.zoom !== s.zoom || before.transparency !== s.transparency) applyView();
     if (before.updateMode !== s.updateMode) {
       if (!UPDATE_MODES.includes(s.updateMode)) config.update({ updateMode: 'off' });
       updater?.applyMode();
@@ -2105,6 +2121,7 @@ function createWindow() {
     win.once('closed', () => nativeTheme.off('updated', recolor));
   }
   win.loadURL('app://pwsafe/desktop/renderer/index.html');
+  win.webContents.on('did-finish-load', applyView);
   win.once('ready-to-show', () => {
     // Started with Windows (setting "Start with Windows"): only in the tray, the window opens on demand.
     if (!smokeTest && !process.argv.includes('--background')) win.show();
@@ -2425,6 +2442,8 @@ function runSmokeTest() {
         const kv = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error);
         await api.renameContainer(kv.id, 'Team Umbenannt');
         if ((await vault.container(kv.id)).name !== 'Team Umbenannt') errors.push('rename: key vault name unchanged');
+        // Back to the original name: screenshots and the views after this show the demo as it is.
+        await api.renameContainer(kv.id, kv.name);
       } catch (e) {
         errors.push(`rename flow: ${e.message}`);
       }

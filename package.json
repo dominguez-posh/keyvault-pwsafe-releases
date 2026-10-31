@@ -1,6 +1,6 @@
 {
   "name": "keyvault-pwsafe",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Passwort- und Passkey-Tresor auf Azure Key Vault mit Entra-ID-Anmeldung: Desktop-App und Browser-Erweiterung",
   "type": "module",
   "main": "desktop/main.js",
@@ -18,7 +18,9 @@
     "ext:pack": "node scripts/pack-extension.mjs",
     "dist": "electron-builder --win portable",
     "installer": "node scripts/release.mjs",
-    "loadtest": "node scripts/loadtest.mjs"
+    "loadtest": "node scripts/loadtest.mjs",
+    "demo:check": "node scripts/demo-shots.mjs",
+    "demo:shots": "node scripts/demo-shots.mjs --out=docs/images"
   },
   "dependencies": {
     "@azure/msal-node": "^7.1.1",

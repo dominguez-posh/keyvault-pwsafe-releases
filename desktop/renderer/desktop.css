@@ -406,3 +406,49 @@ body { overflow: hidden; }
 .help-foot { display: flex; align-items: center; gap: 18px; font-size: 13px; }
 .help-foot .muted { margin-left: auto; font-size: 12px; }
 .help-btn { padding-left: 9px; }
+
+/* ------------------------------------------------------------------------------------------------------------------
+   Top bar, second round: 52 px high with air below the search; the search is flush with the middle column's card and
+   reads as a modern command field (soft shadow, focus ring, scope switch inside). */
+.frameless .drag-strip { height: 52px; }
+.sidebar { padding-top: 8px; }
+.brand { height: 36px; margin-bottom: 14px; }
+.list-pane, .detail-pane { margin-top: 52px; }
+.splitter { top: 52px; }
+.top-search { top: 8px; height: 36px; left: var(--sidebar-w, 250px); width: var(--list-w, 380px); }
+.top-search .search { height: 36px; }
+.top-search .search > .icon { left: 12px; color: var(--accent); }
+.top-search input { height: 36px; min-height: 36px; padding-left: 38px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface);
+  box-shadow: 0 1px 2px rgba(20, 26, 38, .06), 0 4px 14px color-mix(in srgb, var(--accent) 6%, transparent); font-size: 13.5px; transition: border-color .15s, box-shadow .15s; }
+.top-search input:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.top-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent), 0 6px 18px color-mix(in srgb, var(--accent) 12%, transparent); }
+.top-search .search.with-scope input { padding-right: 120px; }
+.search-scope { right: 5px; padding: 3px; border-radius: 9px; }
+.search-scope button { height: 24px; padding: 0 10px; border-radius: 7px; }
+.search-scope button.on { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+.top-actions { top: 8px; }
+.top-actions .btn { height: 36px; min-height: 36px; border-radius: 12px; padding: 0 16px; }
+
+/* View section of the main menu: zoom stepper and transparency switch (the menu stays open while adjusting). */
+.view-row { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 0 10px; }
+.view-row .grow { flex: 1; }
+.zoom-control { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-2); }
+.main-menu .zoom-control button, .main-menu .seg button { width: auto; min-height: 26px; height: 26px; padding: 0 8px; border-radius: 7px; font-size: 13px; justify-content: center; }
+.main-menu .view-step { font-size: 16px !important; font-weight: 600; min-width: 26px; }
+.main-menu .view-reset { min-width: 54px; color: var(--text); font-variant-numeric: tabular-nums; }
+.seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--surface-2); }
+.main-menu .seg button { font-size: 12px; color: var(--muted); }
+.main-menu .seg button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 26, 38, .12); }
+.main-menu { width: 300px; }
+
+/* See-through ground (View → Transparency): only the ground and the top bar let the desktop shine through (acrylic);
+   cards with data stay opaque. */
+html.see-through, html.see-through body { background: transparent; }
+html.see-through .shell, html.see-through .splash { background: color-mix(in srgb, var(--bg) 72%, transparent); }
+html.see-through-strong .shell, html.see-through-strong .splash { background: color-mix(in srgb, var(--bg) 42%, transparent); }
+html.see-through .sidebar-foot { background: none; }
+html.see-through .menu-dot { box-shadow: none; }
+.frameless .list-pane, .frameless .detail-pane { margin-top: 52px; }
+.frameless .splitter { top: 52px; }
+.frameless .sidebar { padding-top: 8px; }
+.frameless .brand { height: 36px; margin-bottom: 14px; }
