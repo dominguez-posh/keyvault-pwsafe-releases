@@ -28,9 +28,26 @@ export function withReleaseNotes(manifest, notes) {
   return `${base}releaseNotes: |\n${block}\n`;
 }
 
-const notes = sectionFor(readFileSync(join(root, 'CHANGELOG.md'), 'utf8'), version);
-if (!notes) throw new Error(`CHANGELOG.md hat keinen Abschnitt "## ${version}" – bitte vor dem Release nachtragen.`);
-const file = join(root, 'release', 'latest.yml');
-writeFileSync(file, withReleaseNotes(readFileSync(file, 'utf8'), notes));
-writeFileSync(join(root, 'release', 'release-notes.md'), `${notes.replace(/^## .*\n/, '').trim()}\n`);
-console.log(`Release-Notes ${version} in ${file} und release/release-notes.md eingetragen.`);
+/**
+ * The newest `count` sections up to and including `ver` (newest first): an app that skips versions shows the
+ * changes of every version it missed – it picks the ones newer than itself.
+ */
+export function recentSections(changelog, ver, count = 15) {
+  const text = String(changelog).replace(/\r\n/g, '\n');
+  const heads = [...text.matchAll(/^## (\d+\.\d+\.\d+)\b.*$/gm)];
+  const start = heads.findIndex((m) => m[1] === ver);
+  if (start < 0) return '';
+  return heads.slice(start, start + count).map((m) => sectionFor(text, m[1])).join('\n\n');
+}
+
+// Run as a script (release); imported by the unit tests only for the functions above.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  const changelog = readFileSync(join(root, 'CHANGELOG.md'), 'utf8');
+  const notes = sectionFor(changelog, version);
+  if (!notes) throw new Error(`CHANGELOG.md hat keinen Abschnitt "## ${version}" – bitte vor dem Release nachtragen.`);
+  const file = join(root, 'release', 'latest.yml');
+  // The manifest carries the newest sections (skipped versions too), the GitHub release text only this version.
+  writeFileSync(file, withReleaseNotes(readFileSync(file, 'utf8'), recentSections(changelog, version)));
+  writeFileSync(join(root, 'release', 'release-notes.md'), `${notes.replace(/^## .*\n/, '').trim()}\n`);
+  console.log(`Release-Notes ${version} in ${file} und release/release-notes.md eingetragen.`);
+}

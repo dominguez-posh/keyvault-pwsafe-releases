@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.16 – 2026-10-31
+- Zwischenablage: Kopieren funktioniert wieder überall (auch Einladungslink und Codes), wenn der Windows-Hilfsprozess blockiert ist (z. B. durch Sophos); jede Kopie bestätigt „… in die Zwischenablage kopiert“ oder meldet den Fehler.
+- Viele Benutzer an einem Tresor: Der gemeinsame Schnell-Index wird nur noch geschrieben, wenn er im Tresor wirklich abweicht, und zeitlich gestreut – bei 50 gleichzeitigen Apps schreiben statt aller nur noch wenige (Lasttest: npm run loadtest).
+- Update-Dialog: zeigt die Änderungen aller Versionen seit der installierten (auch übersprungene Updates), je Version mit Datum, als Aufzählung und in einem scrollbaren Bereich.
+
+### English
+- Clipboard: copying works everywhere again (invitation link and codes too) when the Windows helper process is blocked (e.g. by Sophos); every copy confirms “… copied to the clipboard” or reports the error.
+- Many users on one vault: the shared fast index is only written when it really differs in the vault, spread over time – with 50 apps at once only a few write instead of all (load test: npm run loadtest).
+- Update dialog: shows the changes of every version since the installed one (skipped updates too), per version with its date, as a list in a scrollable area.
+
 ## 0.7.15 – 2026-10-31
 - Nach dem Speichern eines Passkeys öffnet sich das Popup der Erweiterung mit dem neuen Eintrag zum Bearbeiten (Titel, Ordner, Logo …). Braucht Edge/Chrome 127 oder neuer, sonst beim nächsten Öffnen des Popups.
 - Browser-Erweiterung: Rechtsklick auf einen Eintrag im Popup öffnet ein eigenes Menü – Öffnen, Bearbeiten, Ausfüllen, Benutzername/Passwort kopieren, Löschen.

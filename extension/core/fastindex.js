@@ -62,7 +62,9 @@ const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0))
  * and carries a hash so a reader notices a half-written index and falls back to the listing.
  */
 export async function encodeIndex(summaries, { gen = Date.now(), by = '', isProtected = false } = {}) {
-  const text = toBase64(await deflate(JSON.stringify(summaries.map(pack))));
+  // Sorted by id: every app produces the same text (and hash) for the same content, whatever its list order.
+  const sorted = [...summaries].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const text = toBase64(await deflate(JSON.stringify(sorted.map(pack))));
   const shards = [];
   for (let i = 0; i < text.length; i += SHARD_CHARS) shards.push(text.slice(i, i + SHARD_CHARS));
   if (!shards.length) shards.push('');

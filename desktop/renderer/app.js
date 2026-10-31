@@ -1,7 +1,9 @@
 import { h, icon, iconButton, setChildren, toast, avatar, modal, confirmDialog, formatDateTime, passkeySuccess } from '../../extension/core/dom.js';
 import { itemDetail, itemForm, generatorPanel } from '../../extension/core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../../extension/core/generator.js';
-import { unlockPanel, manageDialog, enableDialog } from '../../extension/core/ui-protect.js';
+import { unlockPanel, manageDialog, enableDialog, setClipboardWriter } from '../../extension/core/ui-protect.js';
+// Codes in dialogs (recovery key, invitation code) go through the app's clipboard like everything else.
+setClipboardWriter((text) => call('copy', text));
 import { importDialog } from '../../extension/core/ui-import.js';
 import { ACCESS_LEVELS } from '../../extension/core/azure.js';
 import { setLanguage, t, LANGUAGES, getLanguage, locale } from '../../extension/core/i18n.js';
@@ -10,7 +12,7 @@ import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
 import { MAX_FOLDER_DEPTH } from '../../extension/core/model.js';
 import { expiryState, expiringEntries, daysUntil } from '../../extension/core/health.js';
 import { healthDialog, accessReportDialog } from './reports.js';
-import { notesForLanguage } from '../../extension/core/release-notes.js';
+import { releaseNotesSince } from '../../extension/core/release-notes.js';
 import * as progress from './progress.js';
 
 // Calls that can take a moment show the progress card bottom right (progress.js); the main process reports
@@ -95,7 +97,10 @@ let items = [];
 let reloadTimer = null;
 
 const containerName = (id) => st?.containers.find((c) => c.id === id)?.name || '';
-const copy = (text, label = t('Wert')) => call('copy', text).then(() => toast(t('{label} kopiert', { label })));
+/** Every copy confirms itself ("… in die Zwischenablage kopiert") or says that it failed. */
+const copy = (text, label = t('Wert')) => Promise.resolve(text).then((value) => call('copy', value))
+  .then(() => toast(t('{label} in die Zwischenablage kopiert', { label })))
+  .catch((e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error'));
 const openUrl = (url) => call('openExternal', url);
 const formatDate = (iso) => new Date(iso).toLocaleDateString(locale(), { day: '2-digit', month: '2-digit', year: 'numeric' });
 const field = (label, input, hint) => h('div', { class: 'field' }, h('label', {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
@@ -1382,7 +1387,7 @@ function containerActionsFlat(c) {
     '-',
     isFile
       ? { action: 'explorer', icon: 'folder', label: t('Im Explorer zeigen'), onClick: () => call('showFile', c.id) }
-      : { action: 'invite', icon: 'link', label: t('Einladungslink kopieren'), onClick: async () => copy(await call('invite', c.id), t('Einladungslink')) },
+      : { action: 'invite', icon: 'link', label: t('Einladungslink kopieren'), onClick: () => copy(call('invite', c.id), t('Einladungslink')) },
     ready && (c.protected || isFile) ? { action: 'lock', icon: 'lock', label: t('Tresor sperren'), onClick: async () => {
       await call('lockContainer', c.id);
       await reloadAll();
@@ -2605,7 +2610,7 @@ async function shareDialog(container) {
     h('div', { class: 'field-row', style: { marginTop: '8px', gap: '8px' } }, chosenEl, h('div', { style: { width: '150px' } }, level), add),
     h('h3', {}, t('Mitglieder')),
     listEl,
-    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn', onclick: async () => copy(await call('invite', container.id), t('Einladungslink')) }, icon('link'), t('Einladungslink kopieren')))),
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn', onclick: () => copy(call('invite', container.id), t('Einladungslink')) }, icon('link'), t('Einladungslink kopieren')))),
   [{ label: t('Schließen') }]);
   load();
 }
@@ -2790,17 +2795,20 @@ function managedUpdateHint(kind) {
 }
 
 /** Release notes from the signed manifest (CHANGELOG section) as a list; "- " lines are items, others plain text. */
-function releaseNotes(notes) {
-  const text = notesForLanguage(notes, getLanguage());
-  if (!text) return null;
-  const items = [];
-  for (const line of text.split('\n')) {
-    if (/^- /.test(line)) items.push(h('li', {}, line.slice(2)));
-    else if (line.trim() && items.length) items[items.length - 1].append(' ', line.trim());
-    else if (line.trim()) items.push(h('p', {}, line.trim()));
-  }
-  return h('div', { class: 'release-notes' }, h('h4', {}, t('Neu in dieser Version')),
-    h('ul', {}, ...items.filter((x) => x.tagName === 'LI')), ...items.filter((x) => x.tagName !== 'LI'));
+function releaseNotes(notes, installed) {
+  const versions = releaseNotesSince(notes, installed, getLanguage());
+  if (!versions.length) return null;
+  // "Area: text" → the area in bold, as in the changelog ("Browser-Erweiterung: …").
+  const item = (text) => {
+    const m = /^([^:]{2,40}):\s+(.+)$/.exec(text);
+    return h('li', {}, m ? [h('b', {}, `${m[1]}: `), m[2]] : text);
+  };
+  return h('div', { class: 'release-notes' },
+    h('h4', {}, versions.length > 1 ? t('Neu seit deiner Version ({count} Updates)', { count: versions.length }) : t('Neu in dieser Version')),
+    h('div', { class: 'rn-scroll' }, ...versions.map((v) => h('section', { class: 'rn-version' },
+      v.version ? h('div', { class: 'rn-head' }, h('span', { class: 'rn-badge' }, v.version),
+        v.date ? h('span', { class: 'muted small' }, /^\d{4}-\d{2}-\d{2}$/.test(v.date) ? new Date(`${v.date}T12:00:00`).toLocaleDateString(locale()) : v.date) : null) : null,
+      h('ul', {}, ...v.items.map(item))))));
 }
 
 /**
@@ -2821,7 +2829,7 @@ async function updateDialog(offered) {
     }
     if (s.status === 'none') return body.replaceChildren(h('p', {}, t('Keevault {version} ist aktuell.', { version: s.current })));
     if (s.status === 'available' || s.status === 'ready') {
-      const notes = releaseNotes(s.notes);
+      const notes = releaseNotes(s.notes, s.current);
       return body.replaceChildren(
         h('p', {}, t('Version {version} ist verfügbar (installiert: {current}).', { version: s.version, current: s.current })),
         ...(notes ? [notes] : []),
@@ -2937,7 +2945,7 @@ function settingsDialog() {
     call('mcpInfo').then((info) => {
       const snippet = (label, text) => h('div', { class: 'field' }, h('label', {}, label),
         h('pre', { class: 'snippet' }, text),
-        h('button', { type: 'button', class: 'btn small', onclick: () => navigator.clipboard.writeText(text).then(() => toast(t('Kopiert'))) }, icon('copy', 14), t('Kopieren')));
+        h('button', { type: 'button', class: 'btn small', onclick: () => copy(text, t('Konfiguration')) }, icon('copy', 14), t('Kopieren')));
       mcpBox.replaceChildren(
         h('p', { class: 'muted small' }, t('In den KI-Client eintragen – danach den Client neu starten. Beim ersten Zugriff fragt Keevault, ob du den Agenten erlaubst.')),
         snippet(t('Claude Desktop (claude_desktop_config.json)'), info.claudeDesktop),

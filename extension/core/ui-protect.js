@@ -77,6 +77,13 @@ export function methodsForm(ctx, { requirePasskeyHint = false } = {}) {
 }
 
 /** Shows a recovery key or invitation code; the user has to confirm before closing. */
+// How codes reach the clipboard: the browser's by default; the desktop app hands in its own (setClipboardWriter),
+// because the page clipboard API fails silently there without focus or permission.
+let clipboardWrite = (text) => navigator.clipboard.writeText(text);
+export function setClipboardWriter(fn) {
+  clipboardWrite = fn;
+}
+
 export function showCode(title, code, text, confirmText) {
   return new Promise((resolve) => {
     const confirm = h('input', { type: 'checkbox' });
@@ -84,7 +91,8 @@ export function showCode(title, code, text, confirmText) {
     confirm.addEventListener('change', () => { done.disabled = !confirm.checked; });
     const { dialog, close } = modal(title, h('div', {},
       h('p', {}, text),
-      h('div', { class: 'code-box' }, h('code', {}, code), iconButton('copy', t('Kopieren'), () => navigator.clipboard.writeText(code).then(() => toast(t('Kopiert'))))),
+      h('div', { class: 'code-box' }, h('code', {}, code), iconButton('copy', t('Kopieren'), () => Promise.resolve().then(() => clipboardWrite(code))
+        .then(() => toast(t('In die Zwischenablage kopiert')), (e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error')))),
       h('label', { class: 'inline', style: { marginTop: '12px' } }, confirm, confirmText)), []);
     done.addEventListener('click', () => {
       close();

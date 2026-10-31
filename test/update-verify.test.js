@@ -45,3 +45,19 @@ test('embedded update public key is an Ed25519 key', () => {
   const key = crypto.createPublicKey({ key: Buffer.from(UPDATE_PUBLIC_KEY, 'base64'), format: 'der', type: 'spki' });
   assert.equal(key.asymmetricKeyType, 'ed25519');
 });
+
+test('release notes: every version newer than the installed one, per language, area in front', async () => {
+  const { releaseNotesSince } = await import('../extension/core/release-notes.js');
+  const { recentSections } = await import('../scripts/release-notes.mjs');
+  const changelog = '# Changelog\n\nIntro\n\n## 1.3.0 – 2026-11-02\n- Neu: C\n\n### English\n- New: C\n\n## 1.2.10 – 2026-11-01\n- B eins\n  weiter\n- B zwei\n\n### English\n- B one\n\n## 1.2.9 – 2026-10-31\n- A\n';
+  const notes = recentSections(changelog, '1.3.0');
+  assert.match(notes, /^## 1\.3\.0/);
+  assert.match(notes, /## 1\.2\.9/, 'older sections come along');
+  assert.equal(recentSections(changelog, '1.2.10', 1).match(/^## /gm).length, 1, 'count limits the sections');
+  const de = releaseNotesSince(notes, '1.2.9', 'de');
+  assert.deepEqual(de.map((v) => v.version), ['1.3.0', '1.2.10'], 'skipped 1.2.10 included, installed 1.2.9 not');
+  assert.deepEqual(de[1].items, ['B eins weiter', 'B zwei']);
+  assert.equal(de[0].date, '2026-11-02');
+  assert.deepEqual(releaseNotesSince(notes, '1.2.10', 'en')[0].items, ['New: C']);
+  assert.deepEqual(releaseNotesSince('- old style', '1.0.0', 'de'), [{ version: '', date: '', items: ['old style'] }]);
+});

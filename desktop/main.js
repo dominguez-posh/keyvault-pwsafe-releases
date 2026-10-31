@@ -443,10 +443,18 @@ async function containerResource(containerId) {
  */
 async function copyToClipboard(text) {
   if (process.platform === 'win32' && !smokeTest && !demo) {
-    await copySecret(text).catch(() => clipboard.writeText(text));
+    // The helper is a PowerShell process; endpoint protection may block or stall it (Sophos, 2026-10-31) – then
+    // copy plainly after 1.5 s instead of hanging without any feedback.
+    const viaHelper = copySecret(text).then(() => true, () => false);
+    const ok = await Promise.race([viaHelper, new Promise((r) => setTimeout(() => r(false), 1500))]);
+    if (!ok) {
+      diag('COPY helper unavailable – plain clipboard');
+      clipboard.writeText(text);
+    }
   } else {
     clipboard.writeText(text);
   }
+  if (clipboard.readText() !== text) throw new Error(t('Die Zwischenablage ist nicht verfügbar.'));
   clearTimeout(clipboardTimer);
   const seconds = Number(config.get().clipboardSeconds) || 0;
   if (seconds > 0) {
@@ -2539,6 +2547,12 @@ function runSmokeTest() {
       if (view === 'restore') await menuAction('restore');
       // Success animation after a Windows passkey request (screenshot only).
       if (view === 'passkey-success') send({ type: 'passkeyFlash', text: t('Angemeldet') });
+      // Update offer with the real changelog: everything since 0.7.12 (screenshot only).
+      if (view === 'update-offer') {
+        const { recentSections } = await import('../scripts/release-notes.mjs');
+        const notes = recentSections(await fs.readFile(path.join(appRoot, 'CHANGELOG.md'), 'utf8'), app.getVersion());
+        send({ type: 'updateOffer', state: { kind: 'nsis', status: 'available', version: app.getVersion(), current: '0.7.12', notes } });
+      }
       // Agent question in the app's style (screenshot only; answered with the cancel choice when the test ends).
       if (view === 'agent-read') confirmAgentRead({ agent: 'claude-code', title: 'Strato SFTP keevault.de', vault: 'kv-team' }).catch(() => {});
       if (view === 'agent-write') confirmAgentWrite({ agent: 'claude-code', action: 'update', title: 'GitHub', vault: 'kv-team', fields: Object.keys({ password: 1, notes: 1 }) }).catch(() => {});

@@ -25,6 +25,8 @@ import { INDEX_SECRET, INDEX_TYPE, INDEX_TAG, shardName, isIndexSecret, encodeIn
 
 const SEALED = 'kvpwsafe-sealed';
 const FAST_INDEX_DELAY = 1500; // ms: changes in quick succession become one index write
+const FAST_INDEX_JITTER = 20_000; // ms: random extra delay so that many apps do not write the same index at once (the
+// listing stays the truth; the index only speeds up the next start, so a few seconds later do not matter)
 const FOLDERS_SECRET = 'pws-folders';
 const LOGO_SECRET = 'pws-logo'; // up to 0.4: logo only; now part of pws-container
 // Marks a Key Vault as password container (unique ID, name, logo). Readable only with data access, so finding
@@ -770,10 +772,12 @@ export class VaultSession {
   scheduleFastIndex(containerId) {
     this.fastIndexTimers ||= new Map();
     clearTimeout(this.fastIndexTimers.get(containerId));
+    // Jitter: with many users every app notices a change at its next reconcile – spread out, the first one writes
+    // and the others find the vault's index already current (writeFastIndex compares before writing).
     const timer = setTimeout(() => {
       this.fastIndexTimers.delete(containerId);
       this.writeFastIndex(containerId).catch(() => {});
-    }, FAST_INDEX_DELAY);
+    }, FAST_INDEX_DELAY + Math.floor(Math.random() * FAST_INDEX_JITTER));
     timer.unref?.();
     this.fastIndexTimers.set(containerId, timer);
   }
@@ -796,6 +800,19 @@ export class VaultSession {
     if (entry.protected && !key) return false;
     const { header, shards } = await encodeIndex(entry.items, { by: await this.actor(), isProtected: !!entry.protected });
     const kv = this.kv(c);
+    // Already current in the vault (another app wrote the same content): no write – with 50 users otherwise every
+    // app would rewrite the index after each change. The hash covers the content, not who wrote it or when.
+    const remote = await kv.getSecret(INDEX_SECRET).then((s) => JSON.parse(s.value), () => null);
+    if (remote?.v === header.v && remote.hash === header.hash && remote.shards === header.shards && !!remote.protected === !!header.protected) {
+      await this.locked(async () => {
+        const index = await this.index();
+        if (index[containerId]) index[containerId] = { ...index[containerId], indexed: true, gen: remote.gen };
+        await this.store.set('index', index);
+      });
+
+      return false;
+    }
+    this.indexWrites = (this.indexWrites || 0) + 1;
     await mapLimit(shards.map((text, i) => [i, text]), 4, async ([i, text]) => {
       const value = key ? JSON.stringify({ [SEALED]: await key.encrypt(text, `${containerId}/${shardName(i)}`) }) : text;
       await kv.setSecret(shardName(i), value, { contentType: INDEX_TYPE, tags: { kvpwsafe: INDEX_TAG } });

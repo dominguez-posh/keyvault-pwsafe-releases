@@ -147,11 +147,17 @@ body { overflow: hidden; }
 .q-actions .btn.primary { background: var(--q); border-color: var(--q); }
 @keyframes q-in { from { transform: translateY(8px) scale(.98); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .question-modal { animation: none; } }
-.release-notes { margin: 4px 0 12px; }
-.release-notes h4 { margin: 0 0 4px; font-size: 13px; }
-.release-notes ul { margin: 0 0 6px 18px; padding: 0; max-height: 220px; overflow: auto; }
-.release-notes li { margin: 2px 0; font-size: 13px; }
-.release-notes p { margin: 4px 0; font-size: 13px; }
+/* Release notes in the update dialog: one block per version since the installed one, scrolling as a whole. */
+.release-notes { margin: 6px 0 14px; }
+.release-notes h4 { margin: 0 0 8px; font-size: 13px; }
+.rn-scroll { max-height: 300px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 4px 14px; }
+.rn-version { padding: 10px 0; }
+.rn-version + .rn-version { border-top: 1px solid var(--border); }
+.rn-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.rn-badge { font-size: 12px; font-weight: 700; padding: 1px 9px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); }
+.rn-version ul { margin: 0; padding-left: 18px; list-style: disc; }
+.rn-version li { margin: 4px 0; font-size: 13px; line-height: 1.45; }
+.rn-version li::marker { color: var(--accent); }
 
 /* Security notice for local file vaults */
 .danger-box { border: 2px solid var(--danger, #c0262d); border-radius: 10px; padding: 14px 16px; background: color-mix(in srgb, var(--danger, #c0262d) 8%, transparent); }
