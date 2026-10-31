@@ -50,6 +50,11 @@ body { overflow: hidden; }
 .choice:hover { border-color: var(--accent); background: var(--accent-soft); }
 .chosen { flex: 1; min-width: 0; }
 .modal-body h3 { margin: 12px 0 8px; }
+/* Tabbed dialogs (settings): the bar stays visible while a panel scrolls. */
+.tabbed .tabs { position: sticky; top: 0; z-index: 1; margin: 4px 0 10px; }
+.tabbed .tab-panel[hidden] { display: none; }
+.tabbed .tab-panel { min-height: 320px; }
+.settings-section + .settings-section { margin-top: 6px; }
 .folder-crumb { display: flex; align-items: center; gap: 6px; padding: 6px 10px; color: var(--muted); }
 .folder-crumb b { color: var(--text); font-weight: 600; }
 .folder-row .folder-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); flex: none; }

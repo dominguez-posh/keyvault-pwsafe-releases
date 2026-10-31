@@ -233,12 +233,39 @@ function backButton(onClick = () => renderList()) {
   return h('div', { class: 'back' }, iconButton('back', t('Zurück'), onClick), h('span', { class: 'muted' }, t('Zurück')));
 }
 
+/**
+ * Reads a QR code from the visible part of the current tab (e.g. the two-factor setup code of a website):
+ * screenshot of the tab → jsQR, first at full size, then at half size for very large codes. Returns the text or ''.
+ * The image never leaves the popup.
+ */
+async function scanVisibleTab() {
+  const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' });
+  const img = await new Promise((resolve, reject) => {
+    const el = new Image();
+    el.onload = () => resolve(el);
+    el.onerror = () => reject(new Error(t('Bildschirmfoto fehlgeschlagen')));
+    el.src = dataUrl;
+  });
+  const canvas = document.createElement('canvas');
+  const ctx2d = canvas.getContext('2d', { willReadFrequently: true });
+  for (const scale of [1, 0.5]) {
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    ctx2d.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const { data, width, height } = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
+    const found = globalThis.jsQR?.(data, width, height, { inversionAttempts: 'attemptBoth' });
+    if (found?.data) return found.data;
+  }
+  return '';
+}
+
 function renderEdit(item) {
   const isNew = !item;
   const writable = writableContainers();
   const start = item || { type: 'login', urls: tab?.url && /^https?:/.test(tab.url) ? [new URL(tab.url).origin] : [], title: host || '' };
   const form = itemForm(start, {
     isNew,
+    scanQr: scanVisibleTab,
     containers: isNew ? writable : st.containers.map((c) => ({ id: c.id, name: c.name })),
     containerId: item?.containerId || (writable.some((c) => c.id === st.settings.defaultContainer) ? st.settings.defaultContainer : writable[0]?.id),
     onCancel: () => (item ? renderDetail(item) : renderList()),

@@ -2318,11 +2318,13 @@ function runSmokeTest() {
         if (view === 'members') await menuAction('members');
         if (view === 'changelog') await menuAction('changelog');
       }
-      if (view === 'settings' || view === 'settings-mcp') await js('document.querySelector(".sidebar .icon-btn[title=Einstellungen]")?.click()');
-      // AI agent section of the settings (scrolled into view).
-      if (view === 'settings-mcp') {
+      if (view?.startsWith('settings')) await js('document.querySelector(".sidebar .icon-btn[title=Einstellungen]")?.click()');
+      // Settings tab: settings-mcp (AI agents) or settings-<n> (n-th tab, 0-based).
+      if (view === 'settings-mcp' || /^settings-\d$/.test(view || '')) {
         await new Promise((r) => setTimeout(r, 600));
-        await js('[...document.querySelectorAll(".modal h3")].find((x) => x.textContent.includes("MCP"))?.scrollIntoView({ block: "start" })');
+        const pick = view === 'settings-mcp' ? '[...tabs].find((x) => /KI-Agenten|AI agents/.test(x.textContent))' : `tabs[${view.slice(-1)}]`;
+        const tab = await js(`(() => { const tabs = document.querySelectorAll(".modal .tabs button"); const b = ${pick}; if (b) b.click(); return b ? "clicked" : "no tab"; })()`);
+        if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[smoke] ${view} tab: ${tab}`);
       }
       if (view === 'create') {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');
@@ -2337,6 +2339,8 @@ function runSmokeTest() {
       if (view === 'backup') await menuAction('backup');
       if (view === 'vault-settings') await menuAction('vault-settings');
       if (view === 'restore') await menuAction('restore');
+      // Success animation after a Windows passkey request (screenshot only).
+      if (view === 'passkey-success') send({ type: 'passkeyFlash', text: t('Angemeldet') });
       if (view === 'progress') {
         // Progress card bottom right as during a background reconcile (screenshot only).
         send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …'), done: 1234, total: 2000 });

@@ -184,6 +184,29 @@ export function itemForm(item, ctx) {
     totp.type = totp.type === 'password' ? 'text' : 'password';
     revealTotp.replaceChildren(icon(totp.type === 'password' ? 'eye' : 'eyeOff'));
   });
+  // ctx.scanQr() (browser extension): reads the QR code the website shows when setting up two-factor sign-in.
+  const scanTotp = ctx.scanQr ? iconButton('qr', t('QR-Code auf der Seite scannen'), async () => {
+    scanTotp.disabled = true;
+    try {
+      const text = await ctx.scanQr();
+      if (!text) {
+        toast(t('Kein QR-Code auf der sichtbaren Seite gefunden. Bitte den QR-Code ins Bild holen und erneut scannen.'), 'error');
+        return;
+      }
+      try {
+        parseTotp(text); // throws when it is neither an otpauth:// link nor a Base32 secret
+      } catch {
+        toast(t('Der QR-Code auf der Seite enthält keinen Einmalcode (otpauth://).'), 'error');
+        return;
+      }
+      totp.value = text;
+      toast(t('Einmalcode aus QR-Code übernommen'));
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      scanTotp.disabled = false;
+    }
+  }) : null;
   const startFolder = it.folder || (ctx.isNew && ctx.defaultFolder) || '';
   // folderFree false: the vault's admin has not enabled creating folders – choose among existing ones only.
   const folder = ctx.folderFree === false
@@ -240,7 +263,7 @@ export function itemForm(item, ctx) {
     row(t('Benutzername'), username),
     h('div', { class: 'field' }, h('label', {}, t('Passwort')), h('div', { class: 'field-row' }, password, reveal, genButton), meter, generator),
     row(t('Websites'), urls),
-    row(t('Einmalcode (TOTP)'), h('div', { class: 'field-row' }, totp, revealTotp)),
+    row(t('Einmalcode (TOTP)'), h('div', { class: 'field-row' }, totp, revealTotp, scanTotp)),
     passkeyBox);
   // Credit card
   const secretInput = (name, value, extra = {}) => h('input', { name, type: 'password', value, autocomplete: 'off', spellcheck: 'false', ...extra });

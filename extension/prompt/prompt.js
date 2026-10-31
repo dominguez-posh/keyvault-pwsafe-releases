@@ -1,6 +1,6 @@
 // Passkey dialogs (create / sign in). Unlocking happens in the desktop app; the dialog continues once it is open.
 
-import { h, icon, avatar, setChildren, toast } from '../core/dom.js';
+import { h, icon, avatar, setChildren, toast, passkeySuccess } from '../core/dom.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call } from '../lib/api.js';
 
@@ -24,6 +24,13 @@ async function guard(fn, retry) {
   } catch (e) {
     show([error(e.message)], [button(t('Schließen'), () => window.close()), retry ? button(t('Erneut versuchen'), retry, 'btn primary') : null]);
   }
+}
+
+/** The website already has its answer; the window stays a moment for the success animation (reduced motion: shorter). */
+async function celebrate(text) {
+  show([passkeySuccess(text)]);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  await new Promise((r) => setTimeout(r, reduced ? 350 : 1100));
 }
 
 function site(details) {
@@ -130,6 +137,7 @@ async function renderCreate() {
     save.replaceChildren(h('span', { class: 'spinner' }), t('Speichern …'));
     const [cid, itemId] = asExisting.checked ? existing.value.split('|') : [container.value, ''];
     await call('webauthn:approve', { requestId, containerId: cid, itemId, title: title.value });
+    await celebrate(t('Passkey gespeichert'));
     window.close();
   }, renderCreate), 'btn primary');
 
@@ -158,6 +166,7 @@ async function renderGet() {
   const choices = d.candidates.map((c) => h('button', { type: 'button', class: 'choice', onclick: () => guard(async () => {
     show([h('span', { class: 'spinner' }), ` ${t('Anmeldung …')}`]);
     await call('webauthn:approve', { requestId, containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId });
+    await celebrate(t('Angemeldet'));
     window.close();
   }, renderGet) }, avatar(c.userName || c.title), h('div', { class: 'row-text' },
     h('div', { class: 'row-title' }, c.userName || t('(ohne Benutzername)')),

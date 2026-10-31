@@ -1,4 +1,4 @@
-import { h, icon, iconButton, setChildren, toast, avatar, modal, confirmDialog, formatDateTime } from '../../extension/core/dom.js';
+import { h, icon, iconButton, setChildren, toast, avatar, modal, confirmDialog, formatDateTime, passkeySuccess } from '../../extension/core/dom.js';
 import { itemDetail, itemForm, generatorPanel } from '../../extension/core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../../extension/core/generator.js';
 import { unlockPanel, manageDialog, enableDialog } from '../../extension/core/ui-protect.js';
@@ -99,6 +99,21 @@ const copy = (text, label = t('Wert')) => call('copy', text).then(() => toast(t(
 const openUrl = (url) => call('openExternal', url);
 const formatDate = (iso) => new Date(iso).toLocaleDateString(locale(), { day: '2-digit', month: '2-digit', year: 'numeric' });
 const field = (label, input, hint) => h('div', { class: 'field' }, h('label', {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
+
+/** Tab bar + panels for a dialog; the active tab per key survives closing (e.g. reopening the settings after Save). */
+const activeTabs = {};
+function tabbed(key, pages) {
+  const panels = pages.map((p) => h('div', { class: 'tab-panel' }, ...p.content));
+  const bar = h('div', { class: 'tabs', role: 'tablist' });
+  const show = (i) => {
+    activeTabs[key] = i;
+    [...bar.children].forEach((b, n) => b.classList.toggle('active', n === i));
+    panels.forEach((p, n) => { p.hidden = n !== i; });
+  };
+  pages.forEach((p, i) => bar.append(h('button', { type: 'button', role: 'tab', onclick: () => show(i) }, p.label)));
+  show(Math.min(activeTabs[key] || 0, pages.length - 1));
+  return h('div', { class: 'tabbed' }, bar, ...panels);
+}
 const notice = (text, kind = 'error') => h('div', { class: `notice ${kind}` }, text);
 const writable = (c) => c.access?.write !== false && !c.error && !c.locked;
 const writableContainers = () => st.containers.filter(writable).map((c) => ({ id: c.id, name: c.name }));
@@ -154,6 +169,8 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'update') {
     progress.fromUpdate(ev.state);
     for (const fn of updateListeners) fn(ev.state);
+  } else if (ev.type === 'passkeyFlash') {
+    flashPasskey(ev.text);
   } else if (ev.type === 'checkUpdates') {
     updateDialog();
   } else if (ev.type === 'updateOffer') {
@@ -187,11 +204,22 @@ async function checkWindowsRequests() {
   }
 }
 
+/** Success moment after a passkey request from Windows: centred badge animation, gone after about a second. */
+function flashPasskey(text) {
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const el = h('div', { class: 'passkey-flash' }, passkeySuccess(text));
+  document.body.append(el);
+  setTimeout(() => {
+    el.classList.add('leaving');
+    setTimeout(() => el.remove(), 320);
+  }, reduced ? 500 : 1300);
+}
+
 function windowsDialog(r) {
   const decide = async (decision) => {
     windowsDialogs.delete(r.id);
     await call('windowsDecision', r.id, decision);
-    if (!decision.cancel) toast(r.kind === 'create' ? t('Passkey gespeichert') : t('Angemeldet'));
+    if (!decision.cancel) flashPasskey(r.kind === 'create' ? t('Passkey gespeichert') : t('Angemeldet'));
     reloadAll().catch(() => {});
   };
   const head = h('div', { class: 'unlock-head' }, icon('key', 28), h('div', {},
@@ -2894,77 +2922,92 @@ function settingsDialog() {
         button.disabled = false;
       }
     } }, t('Mit Administratorrechten einrichten'));
-    return machine.replaceChildren(
+    // h() skips null children, replaceChildren() would print "null".
+    return machine.replaceChildren(h('div', {},
       h('div', {}, t('Zertifikat des Passkey-Anbieters vertraut: {v}', { v: yes(x.certTrusted) })),
       h('div', {}, t('Erweiterungs-Richtlinie Edge: {edge} · Chrome: {chrome}', { edge: yes(x.edgePolicy), chrome: yes(x.chromePolicy) })),
-      (!x.certTrusted || !x.edgePolicy) && x.canRunSetup ? button : null);
+      (!x.certTrusted || !x.edgePolicy) && x.canRunSetup ? button : null));
   };
   call('machineSetupStatus').then(drawMachine, () => {});
-  modal(t('Einstellungen'), h('div', {},
-    field(t('Sprache'), language),
-    h('div', { class: 'grid2' },
-      field(t('Automatisch sperren nach (Minuten)'), autoLock, t('0 = nur beim Sperren des Computers')),
-      field(t('Zwischenablage leeren nach (Sekunden)'), clip, t('0 = nie'))),
-    h('h3', {}, t('Microsoft Entra ID (Key-Vault-Tresore)')),
-    st.account ? h('p', { class: 'muted small' }, t('Angemeldet als {user}', { user: st.account.username })) : h('p', { class: 'muted small' }, t('Keine IDs nötig: Melde dich einfach an, deine Key Vaults werden automatisch gesucht.')),
-    field(t('Verzeichnis (Tenant)'), directory),
-    h('details', { open: st.ownApp || undefined }, h('summary', {}, t('Eigene App-Registrierung (optional)')),
-      h('p', { class: 'muted small' }, t('Leer lassen für die Standard-Anmeldung. Eigene App-Registrierung: infra/Setup-KvPwSafe.ps1.')),
-      h('div', { class: 'grid2' }, field(t('Tenant-ID'), tenant), field(t('Client-ID'), client))),
-    field(t('Entsperren'), prompt),
-    st.platform === 'win32' ? h('label', { class: 'inline' }, signInWindows, t('Anmeldung im Windows-Dialog (wie PowerShell/Azure CLI) statt im Browser')) : null,
-    h('h3', {}, t('Browser-Erweiterung')),
-    h('label', { class: 'inline' }, browser, t('Datei-Tresore in der Browser-Erweiterung verfügbar machen')),
-    h('p', { class: 'muted small' }, t('Registriert einen Native-Messaging-Host für Edge und Chrome (nur für dein Benutzerkonto). Die Erweiterung fragt beim ersten Zugriff nach deiner Zustimmung in dieser App.')),
-    field(t('Erweiterungs-IDs'), extensionIds),
-    h('h3', {}, t('Windows-Passkey-Anbieter')),
-    h('label', { class: 'inline' }, windowsProvider, t('Keevault als Passkey-Anbieter in Windows verwenden (wie 1Password)')),
-    h('p', { class: 'muted small' }, t('Dann erscheint Keevault im Windows-Passkey-Dialog – auch für andere Browser und Apps. Jede Anmeldung bestätigst du in dieser App.')),
-    windowsStatus,
-    h('h3', {}, t('Abtippen (Auto-Type)')),
-    field(t('Tastenkürzel, überall in Windows'), autoTypeKeys, t('Eintrag in der App auswählen, ins Zielfeld klicken, Kürzel drücken: U = Benutzername, P = Passwort, O = Einmalcode. Gilt nur, solange die App entsperrt ist; Strg+Umschalt überdeckt in Edge Vorlesen/InPrivate/Favoriten.')),
-    h('h3', {}, t('App-PIN')),
-    h('p', { class: 'muted small' }, st.pinSet
-      ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.')
-      : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
-    st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
-      : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
-    h('h3', {}, t('Offline-Lesemodus')),
-    h('label', { class: 'inline' }, offlineMirror, t('Einträge verschlüsselt für unterwegs spiegeln (nur lesen, PIN nötig)')),
-    h('p', { class: 'muted small' }, st.pinSet
-      ? t('Ohne Netzwerk zeigt Keevault den letzten Stand – nur lesen, keine Änderungen. Der Spiegel liegt AES-256-verschlüsselt im Profil; zum Öffnen braucht es dein Windows-Konto und die PIN. Er füllt sich beim nächsten Entsperren mit PIN.')
-      : t('Dafür zuerst eine App-PIN festlegen – sie schützt den Offline-Speicher zusammen mit deinem Windows-Konto.')),
-    h('h3', {}, t('KI-Agenten (MCP)')),
-    h('label', { class: 'inline' }, mcpEnabled, t('KI-Agenten wie Claude oder GitHub Copilot anbinden (Model Context Protocol)')),
-    h('p', { class: 'muted small' }, t('Agenten sehen beim Suchen nur Titel, Benutzer und URL. Passwörter lesen erlaubst du pro Sitzung, Einträge anlegen oder ändern bestätigst du jedes Mal. Löschen ist nicht möglich. Läuft Keevault nicht oder ist gesperrt, bekommt der Agent nichts.')),
-    s.mcpEnabled ? h('div', {},
-      field(t('Zugriff für KI-Agenten'), mcpMode, t('Freigeben geht auch per Rechtsklick auf einen Tresor oder Ordner. Ein freigegebener Ordner schließt seine Unterordner ein.')),
-      h('div', { class: 'field' }, h('label', {}, t('Freigegeben')), scopeList,
-        h('div', { class: 'inline' }, scopeVault, scopeFolder, scopeAdd)),
-      mcpBox) : h('p', { class: 'muted small' }, t('Nach dem Einschalten und Speichern erscheinen hier die Einstellungen für deinen KI-Client.')),
-    h('h3', {}, t('Updates')),
-    st.updateKind === 'msi' || st.updateKind === 'msix'
-      ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
-      : field(t('Automatische Updates'), updateMode, t('„Automatisch“ installiert neue Versionen, sobald die App gesperrt ist oder beendet wird. Die Updates kommen von keevault.de.')),
-    h('button', { type: 'button', class: 'btn small', onclick: () => updateDialog() }, icon('download', 14), t('Jetzt nach Updates suchen')),
-    h('h3', {}, t('Einrichtung dieses Geräts')),
-    machine,
-    h('div', { class: 'actions' },
-      h('button', { type: 'button', class: 'btn small', onclick: async () => {
-        try {
-          const r = await call('windowsProviderRegister');
-          toast(r.registered ? t('Bei Windows registriert') : t('Registrierung fehlgeschlagen ({code})', { code: r.hresult }), r.registered ? 'info' : 'error');
-        } catch (e) {
-          toast(e.message, 'error');
-        }
-      } }, t('Bei Windows registrieren')),
-      h('button', { type: 'button', class: 'btn small', onclick: () => call('openWindowsPasskeySettings') }, t('Windows-Einstellungen öffnen'))),
-    s.enforced.length ? h('p', { class: 'muted small' }, t('Ausgegraute Werte sind über kvpwsafe.config.json vorgegeben.')) : null,
-    h('p', { class: 'muted small' }, t('Version {version}', { version: st.version })),
-    st.signedIn ? h('button', { type: 'button', class: 'btn danger', onclick: async () => {
-      await call('signOut');
-      render();
-    } }, icon('logout'), t('Abmelden und Token-Cache löschen')) : null), [
+  const section = (title, ...children) => h('div', { class: 'settings-section' }, h('h3', {}, title), ...children);
+  const managed = st.updateKind === 'msi' || st.updateKind === 'msix';
+  // Five tabs instead of one long page: everyday settings first, integrations and agents further right.
+  modal(t('Einstellungen'), tabbed('settings', [
+    { label: t('Allgemein'), content: [
+      field(t('Sprache'), language),
+      section(t('Updates'),
+        managed
+          ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
+          : field(t('Automatische Updates'), updateMode, t('„Automatisch“ installiert neue Versionen, sobald die App gesperrt ist oder beendet wird. Die Updates kommen von keevault.de.')),
+        h('button', { type: 'button', class: 'btn small', onclick: () => updateDialog() }, icon('download', 14), t('Jetzt nach Updates suchen'))),
+      s.enforced.length ? h('p', { class: 'muted small' }, t('Ausgegraute Werte sind über kvpwsafe.config.json vorgegeben.')) : null,
+      h('p', { class: 'muted small' }, t('Version {version}', { version: st.version })),
+    ] },
+    { label: t('Sicherheit'), content: [
+      h('div', { class: 'grid2' },
+        field(t('Automatisch sperren nach (Minuten)'), autoLock, t('0 = nur beim Sperren des Computers')),
+        field(t('Zwischenablage leeren nach (Sekunden)'), clip, t('0 = nie'))),
+      section(t('App-PIN'),
+        h('p', { class: 'muted small' }, st.pinSet
+          ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.')
+          : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
+        st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
+          : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.'))),
+      section(t('Offline-Lesemodus'),
+        h('label', { class: 'inline' }, offlineMirror, t('Einträge verschlüsselt für unterwegs spiegeln (nur lesen, PIN nötig)')),
+        h('p', { class: 'muted small' }, st.pinSet
+          ? t('Ohne Netzwerk zeigt Keevault den letzten Stand – nur lesen, keine Änderungen. Der Spiegel liegt AES-256-verschlüsselt im Profil; zum Öffnen braucht es dein Windows-Konto und die PIN. Er füllt sich beim nächsten Entsperren mit PIN.')
+          : t('Dafür zuerst eine App-PIN festlegen – sie schützt den Offline-Speicher zusammen mit deinem Windows-Konto.'))),
+    ] },
+    { label: t('Anmeldung'), content: [
+      section(t('Microsoft Entra ID (Key-Vault-Tresore)'),
+        st.account ? h('p', { class: 'muted small' }, t('Angemeldet als {user}', { user: st.account.username })) : h('p', { class: 'muted small' }, t('Keine IDs nötig: Melde dich einfach an, deine Key Vaults werden automatisch gesucht.')),
+        field(t('Verzeichnis (Tenant)'), directory),
+        field(t('Entsperren'), prompt),
+        st.platform === 'win32' ? h('label', { class: 'inline' }, signInWindows, t('Anmeldung im Windows-Dialog (wie PowerShell/Azure CLI) statt im Browser')) : null,
+        h('details', { open: st.ownApp || undefined }, h('summary', {}, t('Eigene App-Registrierung (optional)')),
+          h('p', { class: 'muted small' }, t('Leer lassen für die Standard-Anmeldung. Eigene App-Registrierung: infra/Setup-KvPwSafe.ps1.')),
+          h('div', { class: 'grid2' }, field(t('Tenant-ID'), tenant), field(t('Client-ID'), client))),
+        st.signedIn ? h('p', { class: 'actions' }, h('button', { type: 'button', class: 'btn danger small', onclick: async () => {
+          await call('signOut');
+          render();
+        } }, icon('logout'), t('Abmelden und Token-Cache löschen'))) : null),
+    ] },
+    { label: t('Integrationen'), content: [
+      section(t('Browser-Erweiterung'),
+        h('label', { class: 'inline' }, browser, t('Datei-Tresore in der Browser-Erweiterung verfügbar machen')),
+        h('p', { class: 'muted small' }, t('Registriert einen Native-Messaging-Host für Edge und Chrome (nur für dein Benutzerkonto). Die Erweiterung fragt beim ersten Zugriff nach deiner Zustimmung in dieser App.')),
+        field(t('Erweiterungs-IDs'), extensionIds)),
+      section(t('Windows-Passkey-Anbieter'),
+        h('label', { class: 'inline' }, windowsProvider, t('Keevault als Passkey-Anbieter in Windows verwenden (wie 1Password)')),
+        h('p', { class: 'muted small' }, t('Dann erscheint Keevault im Windows-Passkey-Dialog – auch für andere Browser und Apps. Jede Anmeldung bestätigst du in dieser App.')),
+        windowsStatus),
+      section(t('Abtippen (Auto-Type)'),
+        field(t('Tastenkürzel, überall in Windows'), autoTypeKeys, t('Eintrag in der App auswählen, ins Zielfeld klicken, Kürzel drücken: U = Benutzername, P = Passwort, O = Einmalcode. Gilt nur, solange die App entsperrt ist; Strg+Umschalt überdeckt in Edge Vorlesen/InPrivate/Favoriten.'))),
+      section(t('Einrichtung dieses Geräts'),
+        machine,
+        h('div', { class: 'actions' },
+          h('button', { type: 'button', class: 'btn small', onclick: async () => {
+            try {
+              const r = await call('windowsProviderRegister');
+              toast(r.registered ? t('Bei Windows registriert') : t('Registrierung fehlgeschlagen ({code})', { code: r.hresult }), r.registered ? 'info' : 'error');
+            } catch (e) {
+              toast(e.message, 'error');
+            }
+          } }, t('Bei Windows registrieren')),
+          h('button', { type: 'button', class: 'btn small', onclick: () => call('openWindowsPasskeySettings') }, t('Windows-Einstellungen öffnen')))),
+    ] },
+    { label: t('KI-Agenten'), content: [
+      section(t('KI-Agenten (MCP)'),
+        h('label', { class: 'inline' }, mcpEnabled, t('KI-Agenten wie Claude oder GitHub Copilot anbinden (Model Context Protocol)')),
+        h('p', { class: 'muted small' }, t('Agenten sehen beim Suchen nur Titel, Benutzer und URL. Passwörter lesen erlaubst du pro Sitzung, Einträge anlegen oder ändern bestätigst du jedes Mal. Löschen ist nicht möglich. Läuft Keevault nicht oder ist gesperrt, bekommt der Agent nichts.')),
+        s.mcpEnabled ? h('div', {},
+          field(t('Zugriff für KI-Agenten'), mcpMode, t('Freigeben geht auch per Rechtsklick auf einen Tresor oder Ordner. Ein freigegebener Ordner schließt seine Unterordner ein.')),
+          h('div', { class: 'field' }, h('label', {}, t('Freigegeben')), scopeList,
+            h('div', { class: 'inline' }, scopeVault, scopeFolder, scopeAdd)),
+          mcpBox) : h('p', { class: 'muted small' }, t('Nach dem Einschalten und Speichern erscheinen hier die Einstellungen für deinen KI-Client.'))),
+    ] },
+  ]), [
     { label: t('Abbrechen') },
     { label: t('Speichern'), primary: true, onClick: async () => {
       const changedTenant = tenant.value.trim() !== s.tenantId || client.value.trim() !== s.clientId;

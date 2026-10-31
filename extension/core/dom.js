@@ -48,6 +48,7 @@ const PATHS = {
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   wand: '<path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72Z"/><path d="m14 7 3 3M5 6v4M19 14v4M10 2v2M7 8H3M21 16h-4M11 3H9"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
+  qr: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM21 14v3M17 21h4M14 21h.5"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   caret: '<path d="m9 18 6-6-6-6"/>',
@@ -76,6 +77,16 @@ export function icon(name, size = 16) {
 
 export function iconButton(name, title, onclick, extra = {}) {
   return h('button', { type: 'button', class: `icon-btn ${extra.class || ''}`, title, 'aria-label': title, onclick, disabled: extra.disabled }, icon(name, extra.size || 16));
+}
+
+/**
+ * Success moment after a passkey sign-in or registration (prompt window, desktop dialog): key badge that pops in,
+ * a ring that spreads and a check mark – styles in styles/app.css (.passkey-success), honours reduced motion.
+ */
+export function passkeySuccess(text) {
+  return h('div', { class: 'passkey-success', role: 'status' },
+    h('div', { class: 'pk-badge' }, icon('key', 30), h('span', { class: 'pk-check' }, icon('check', 14))),
+    h('div', { class: 'pk-text' }, text));
 }
 
 export function formatDateTime(value) {
