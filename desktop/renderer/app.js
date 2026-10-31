@@ -10,6 +10,7 @@ import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
 import { MAX_FOLDER_DEPTH } from '../../extension/core/model.js';
 import { expiryState, expiringEntries, daysUntil } from '../../extension/core/health.js';
 import { healthDialog, accessReportDialog } from './reports.js';
+import { notesForLanguage } from '../../extension/core/release-notes.js';
 import * as progress from './progress.js';
 
 // Calls that can take a moment show the progress card bottom right (progress.js); the main process reports
@@ -155,6 +156,8 @@ window.pwsafe.onEvent((ev) => {
     for (const fn of updateListeners) fn(ev.state);
   } else if (ev.type === 'checkUpdates') {
     updateDialog();
+  } else if (ev.type === 'updateOffer') {
+    updateDialog(ev.state);
   }
 });
 
@@ -2700,10 +2703,27 @@ function expiryReminder() {
 
 const updateListeners = new Set();
 
-/** "Check for updates" (version label, settings, tray): result, download progress, install. */
-async function updateDialog() {
+/** Release notes from the signed manifest (CHANGELOG section) as a list; "- " lines are items, others plain text. */
+function releaseNotes(notes) {
+  const text = notesForLanguage(notes, getLanguage());
+  if (!text) return null;
+  const items = [];
+  for (const line of text.split('\n')) {
+    if (/^- /.test(line)) items.push(h('li', {}, line.slice(2)));
+    else if (line.trim() && items.length) items[items.length - 1].append(' ', line.trim());
+    else if (line.trim()) items.push(h('p', {}, line.trim()));
+  }
+  return h('div', { class: 'release-notes' }, h('h4', {}, t('Neu in dieser Version')),
+    h('ul', {}, ...items.filter((x) => x.tagName === 'LI')), ...items.filter((x) => x.tagName !== 'LI'));
+}
+
+/**
+ * "Check for updates" (version label, settings, tray): result, download progress, install. With `offered` (new
+ * version found at start, mode "ask") the dialog shows that result right away – "Later" closes it.
+ */
+async function updateDialog(offered) {
   const body = h('div', {});
-  const { close } = modal(t('Updates'), body, [{ label: t('Schließen') }]);
+  const { close } = modal(offered ? t('Update verfügbar') : t('Updates'), body, [{ label: offered ? t('Später') : t('Schließen') }]);
   const draw = (s) => {
     if (!s) return;
     const managed = s.kind === 'msi' || s.kind === 'msix';
@@ -2715,8 +2735,10 @@ async function updateDialog() {
     }
     if (s.status === 'none') return body.replaceChildren(h('p', {}, t('Keevault {version} ist aktuell.', { version: s.current })));
     if (s.status === 'available' || s.status === 'ready') {
+      const notes = releaseNotes(s.notes);
       return body.replaceChildren(
         h('p', {}, t('Version {version} ist verfügbar (installiert: {current}).', { version: s.version, current: s.current })),
+        ...(notes ? [notes] : []),
         managed
           ? h('p', { class: 'muted small' }, t('Diese Installation (MSI/MSIX) wird von deiner IT bzw. über das Windows-Paket aktualisiert.'))
           : h('p', { class: 'muted small' }, t('Keevault lädt das Update von keevault.de, installiert es und startet neu. Deine Daten bleiben unverändert.')),
@@ -2729,12 +2751,16 @@ async function updateDialog() {
             } catch (err) {
               toast(err.message, 'error');
             }
-          } }, icon('download', 14), s.status === 'ready' ? t('Jetzt installieren und neu starten') : t('Herunterladen und installieren')));
+          } }, icon('download', 14), s.status === 'ready' ? t('Jetzt installieren und neu starten') : t('Jetzt aktualisieren')));
     }
     return undefined;
   };
   updateListeners.add(draw);
   body.closest('dialog')?.addEventListener('close', () => updateListeners.delete(draw));
+  if (offered) {
+    draw(offered);
+    return close;
+  }
   draw({ status: 'checking' });
   try {
     draw(await call('checkForUpdates'));
@@ -2852,8 +2878,8 @@ function settingsDialog() {
     }, () => {});
   }
   const updateMode = h('select', { disabled: enforced('updateMode') },
-    ...[['off', 'Aus – nur manuell suchen (Standard)'], ['auto', 'Automatisch aktuell halten'], ['ask', 'Im Hintergrund laden, beim Start fragen']]
-      .map(([v, l]) => h('option', { value: v, selected: (s.updateMode || 'off') === v }, t(l))));
+    ...[['ask', 'Beim Start prüfen und Update anbieten (Standard)'], ['auto', 'Automatisch aktuell halten'], ['off', 'Aus – nur manuell suchen']]
+      .map(([v, l]) => h('option', { value: v, selected: (s.updateMode || 'ask') === v }, t(l))));
   const machine = h('div', { class: 'muted small' });
   const drawMachine = (x) => {
     if (!x?.supported) return machine.replaceChildren();

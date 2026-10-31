@@ -1,6 +1,6 @@
 # Keevault
 
-Passwort- und Passkey-Tresor mit einer Desktop-App (Windows, auch macOS/Linux) und einer Browser-Erweiterung
+Passwort- und Passkey-Tresor mit einer Desktop-App (Windows; macOS/Linux in Vorbereitung) und einer Browser-Erweiterung
 für Edge und Chrome – ähnlich wie 1Password oder Bitwarden, aber ohne eigenen Server. Die Daten liegen wahlweise
 
 - in **Azure Key Vault** – Anmeldung über **Microsoft Entra ID**, Teilen und Protokollierung über Azure RBAC, oder

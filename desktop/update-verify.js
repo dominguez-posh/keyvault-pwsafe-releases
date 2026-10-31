@@ -28,12 +28,18 @@ export function verifyManifest(manifest, signature, publicKey = UPDATE_PUBLIC_KE
   }
 }
 
-/** version, installer hash and file name from latest.yml (electron-builder's generic provider format). */
+/**
+ * version, installer hash, file name and release notes from latest.yml (electron-builder's generic provider format).
+ * notes: the "releaseNotes: |" block that scripts/release-notes.mjs appends from CHANGELOG.md – part of the signed
+ * bytes, so the text shown in the update dialog cannot be altered on the server either.
+ */
 export function parseManifest(manifest) {
   const text = String(manifest);
+  const block = /^releaseNotes:\s*\|-?[ \t]*\r?\n((?:(?:[ \t]+[^\n]*)?\r?\n)*)/m.exec(text)?.[1] || '';
   return {
     version: /^version:\s*(\S+)/m.exec(text)?.[1] || '',
     sha512: /^\s+sha512:\s*(\S+)/m.exec(text)?.[1] || /^sha512:\s*(\S+)/m.exec(text)?.[1] || '',
     url: /^\s+-\s+url:\s*(\S+)/m.exec(text)?.[1] || /^path:\s*(\S+)/m.exec(text)?.[1] || '',
+    notes: block.split(/\r?\n/).map((l) => l.replace(/^ {2}/, '')).join('\n').trim(),
   };
 }

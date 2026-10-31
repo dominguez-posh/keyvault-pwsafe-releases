@@ -15,7 +15,12 @@
     pwsh scripts/release.ps1 -Publish
 #>
 [CmdletBinding()]
-param([switch] $Publish)
+param(
+    [switch] $Publish,
+    # Also attach the macOS/Linux builds (release/ci) and the Android APK. Off since 2026-10-31: the website offers
+    # Windows only ("coming soon" for the rest) until those platforms are ready.
+    [switch] $Previews
+)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot
@@ -64,6 +69,8 @@ Invoke-Step 'Installer (EXE + MSIX)' {
         }
     }
 }
+# Release notes (CHANGELOG.md) go into the manifest before it is signed: the app shows them in its update dialog.
+Invoke-Step 'Release-Notes aus CHANGELOG.md' { node scripts/release-notes.mjs }
 # The app only accepts update manifests signed with update-key.pem (desktop/update-verify.js).
 Invoke-Step 'Update-Manifest signieren (Ed25519)' { node scripts/update-key.mjs sign release/latest.yml }
 Invoke-Step 'Installer für Administratoren (MSI)' { $env:KV_UNPACKED_DIR = $unpacked; node scripts/build-msi.mjs }
@@ -110,7 +117,7 @@ Copy-Fresh (Join-Path $root 'windows/out/KvPwSafe-Test.cer') (Join-Path $root 'r
 $assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), (Join-Path $root 'release/latest.yml.sig'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'), (Join-Path $root "dist/kvpwsafe-extension-$version-firefox.zip"))
 # Mobile app (preview): the Android debug APK goes along when it was built (mobile/README.md).
 $apk = Join-Path $root 'mobile/android/app/build/outputs/apk/debug/app-debug.apk'
-if (Test-Path $apk) {
+if ($Previews -and (Test-Path $apk)) {
     $mobileVersion = (Get-Content (Join-Path $root 'mobile/package.json') -Raw | ConvertFrom-Json).version
     $apkTarget = Join-Path $root "release/Keevault-Mobile-$mobileVersion.apk"
     Copy-Fresh $apk $apkTarget
@@ -119,7 +126,7 @@ if (Test-Path $apk) {
 # macOS/Linux (preview, unsigned): built by the GitHub workflow "Desktop macOS/Linux" and downloaded with
 # `gh run download <id> -D release/ci`; attached when present, plus copies under stable names for the website.
 $ci = Join-Path $root 'release/ci'
-if (Test-Path $ci) {
+if ($Previews -and (Test-Path $ci)) {
     $stable = @{ "Keevault-$version-mac-arm64.dmg" = 'Keevault-mac-arm64.dmg'; "Keevault-$version-mac-x64.dmg" = 'Keevault-mac-x64.dmg';
                  "Keevault-$version-linux-x86_64.AppImage" = 'Keevault-linux-x86_64.AppImage'; "Keevault-$version-linux-amd64.deb" = 'Keevault-linux-amd64.deb' }
     foreach ($f in Get-ChildItem $ci -Recurse -File | Where-Object { $_.Name -like "Keevault-$version-*" }) {
@@ -166,8 +173,11 @@ if ($Publish) {
     if ($assets -match '\.apk$') { $previews += 'Android (APK, Debug-Build)' }
     if ($previews) { $notes += " Vorschau: $($previews -join ', ') – siehe https://keevault.de/download.html." }
     $notes += " Quellcode dieser Version: Tag v$version."
+    # Changelog (scripts/release-notes.mjs, UTF-8 file: umlauts survive, unlike console output) plus the fixed text.
+    $notesFile = Join-Path $root 'release/release-notes.md'
+    [IO.File]::WriteAllText($notesFile, ([IO.File]::ReadAllText($notesFile).Trim() + "`n`n" + $notes), [Text.UTF8Encoding]::new($false))
     Invoke-Step "GitHub-Release v$version" {
         # The tag points at exactly the source the installer was built from (verifiable, see README).
-        gh release create "v$version" @assets --repo $publicRepo --target $commit --title "Keevault $version" --notes $notes
+        gh release create "v$version" @assets --repo $publicRepo --target $commit --title "Keevault $version" --notes-file $notesFile
     }
 }

@@ -47,7 +47,7 @@ Nicht konfiguriert: der Benutzer entscheidet (Standard: aus).</string>
       <string id="UpdateMode_Help">Updates der per-Benutzer-Installation (EXE) von keevault.de. MSI- und MSIX-Installationen werden immer über die Softwareverteilung aktualisiert.</string>
       <string id="UpdateMode_Off">Aus – nur manuell suchen</string>
       <string id="UpdateMode_Auto">Automatisch aktuell halten</string>
-      <string id="UpdateMode_Ask">Im Hintergrund laden, beim Start fragen</string>
+      <string id="UpdateMode_Ask">Beim Start prüfen und Update anbieten</string>
       <string id="Language">Sprache</string>
       <string id="Language_Help">Sprache der Oberfläche.</string>
       <string id="Language_Auto">Wie Windows</string>

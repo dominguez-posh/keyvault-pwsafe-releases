@@ -1,8 +1,9 @@
 // Updates from keevault.de (https://keevault.de/update/, counted there and served from the GitHub release).
-// Off by default: only "Check for updates" (settings, tray, version label) looks for a new version. Modes:
-//   off  – nothing happens by itself
+// Modes (setting updateMode, policy UpdateMode):
+//   off  – nothing happens by itself; only "Check for updates" (settings, tray, version label) looks
 //   auto – keep up to date: check at start and every 6 hours, download, install when the app quits or is locked
-//   ask  – check and download in the background, ask at the next start whether to install
+//   ask  – default: check at start; a new version is offered right away in the app (release notes from the signed
+//          manifest, one click downloads, installs and restarts; "Later" asks again at the next start)
 // Only the per-user installation (EXE/NSIS) installs updates itself; MSI and MSIX are updated by IT or the package,
 // there the check only reports the new version and links to the download page.
 
@@ -35,16 +36,16 @@ export function compareVersions(a, b) {
 
 export class Updater {
   /**
-   * mode(): current setting; onState(state): every change (renderer); ask(question) → Promise<boolean> (dialog);
-   * isIdle(): app locked/in the tray – a downloaded update may be installed right away in mode "auto";
-   * beforeInstall(): called right before the app quits for the installation; fetch: secureFetch (in memory).
+   * mode(): current setting; onState(state): every change (renderer); offer(state): mode "ask" found a new version
+   * at start – show it in the app; isIdle(): app locked/in the tray – a downloaded update may be installed right
+   * away in mode "auto"; beforeInstall(): called right before the app quits for the installation;
+   * fetch: secureFetch (in memory).
    */
-  constructor({ mode, onState, ask, isIdle, beforeInstall, fetch }) {
-    Object.assign(this, { mode, onState, ask, isIdle, beforeInstall, fetch });
+  constructor({ mode, onState, offer, isIdle, beforeInstall, fetch }) {
+    Object.assign(this, { mode, onState, offer, isIdle, beforeInstall, fetch });
     this.kind = installKind();
-    this.state = { kind: this.kind, status: 'idle', current: app.getVersion(), version: null, progress: 0, error: null, checked: null };
+    this.state = { kind: this.kind, status: 'idle', current: app.getVersion(), version: null, notes: '', progress: 0, error: null, checked: null };
     this.timer = null;
-    this.startup = true;
     if (this.kind !== 'nsis') return;
     autoUpdater.setFeedURL({ provider: 'generic', url: FEED });
     autoUpdater.autoDownload = false;
@@ -86,7 +87,7 @@ export class Updater {
     return parseManifest(manifest);
   }
 
-  /** Newest version on the server → { version } (null if none newer). Unsigned or altered manifests are rejected. */
+  /** Newest version on the server → { version, notes } (null if none newer). Unsigned or altered manifests are rejected. */
   async latest() {
     const signed = await this.signedManifest();
     if (!signed.version || compareVersions(signed.version, app.getVersion()) <= 0) return null;
@@ -99,24 +100,28 @@ export class Updater {
         throw new Error('Update-Manifest stimmt nicht mit der signierten Fassung überein.');
       }
     }
-    return { version: signed.version };
+    return { version: signed.version, notes: signed.notes };
   }
 
-  /** Background run (auto/ask): look, download quietly; installing follows in downloaded(). */
+  /**
+   * Background run: look; "auto" downloads quietly and installs in downloaded(); "ask" offers the new version in
+   * the app (the download starts only when the user clicks).
+   */
   async background() {
     if (this.mode() === 'off' || this.kind === 'dev' || ['checking', 'downloading', 'ready'].includes(this.state.status)) return;
     try {
       this.set({ status: 'checking', error: null });
       const found = await this.latest();
-      this.set({ checked: new Date().toISOString(), version: found?.version || null, status: found ? 'available' : 'none' });
-      if (found && this.kind === 'nsis') {
+      this.set({ checked: new Date().toISOString(), version: found?.version || null, notes: found?.notes || '', status: found ? 'available' : 'none' });
+      if (!found || this.kind !== 'nsis') return;
+      if (this.mode() === 'auto') {
         this.set({ status: 'downloading', progress: 0 });
         await autoUpdater.downloadUpdate();
+      } else {
+        this.offer?.(this.state);
       }
     } catch (e) {
       this.set({ status: 'error', error: e.message });
-    } finally {
-      this.startup = false;
     }
   }
 
@@ -126,7 +131,7 @@ export class Updater {
     this.set({ status: 'checking', error: null });
     try {
       const found = await this.latest();
-      this.set({ checked: new Date().toISOString(), version: found?.version || null, status: this.state.status === 'ready' ? 'ready' : found ? 'available' : 'none' });
+      this.set({ checked: new Date().toISOString(), version: found?.version || null, notes: found?.notes || '', status: this.state.status === 'ready' ? 'ready' : found ? 'available' : 'none' });
     } catch (e) {
       this.set({ status: 'error', error: e.message });
       throw e;
@@ -147,15 +152,8 @@ export class Updater {
   async downloaded(info) {
     this.set({ status: 'ready', version: info?.version || this.state.version, progress: 100 });
     if (this.manualInstall) return this.install();
-    if (this.mode() === 'auto') {
-      // Fully automatic: install once nobody is working in the app (locked or only in the tray), else on quit.
-      if (this.isIdle()) return this.install();
-      return undefined;
-    }
-    if (this.mode() === 'ask' && this.startup) {
-      // Downloaded in an earlier session (cached) – this is the next start: ask.
-      if (await this.ask(this.state.version)) return this.install();
-    }
+    // Fully automatic: install once nobody is working in the app (locked or only in the tray), else on quit.
+    if (this.mode() === 'auto' && this.isIdle()) return this.install();
     return undefined;
   }
 

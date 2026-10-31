@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { verifyManifest, parseManifest, signManifest, UPDATE_PUBLIC_KEY } from '../desktop/update-verify.js';
+import { notesForLanguage } from '../extension/core/release-notes.js';
 
 const YML = 'version: 1.2.3\nfiles:\n  - url: Keevault-Setup-1.2.3.exe\n    sha512: abc==\n    size: 1\npath: Keevault-Setup-1.2.3.exe\nsha512: abc==\nreleaseDate: 2026-10-29T00:00:00.000Z\n';
 
@@ -22,8 +23,22 @@ test('update manifest: signature verifies, anything changed or unsigned fails', 
 });
 
 test('update manifest: version, hash and file name are read from latest.yml', () => {
-  assert.deepEqual(parseManifest(YML), { version: '1.2.3', sha512: 'abc==', url: 'Keevault-Setup-1.2.3.exe' });
-  assert.deepEqual(parseManifest(''), { version: '', sha512: '', url: '' });
+  assert.deepEqual(parseManifest(YML), { version: '1.2.3', sha512: 'abc==', url: 'Keevault-Setup-1.2.3.exe', notes: '' });
+  assert.deepEqual(parseManifest(''), { version: '', sha512: '', url: '', notes: '' });
+});
+
+test('update manifest: release notes block (CHANGELOG section) is read and split by language', () => {
+  const notes = '## 1.2.3 – 2026-10-31\n- Neuer Update-Dialog\n\n  mit Details\n- Fehler behoben\n\n### English\n- New update dialog\n- Bug fixed\n';
+  const yml = `${YML}releaseNotes: |\n${notes.split('\n').map((l) => (l ? `  ${l}` : '')).join('\n')}\n`;
+  const parsed = parseManifest(yml);
+  assert.equal(parsed.version, '1.2.3');
+  assert.equal(parsed.notes, notes.trim());
+  assert.equal(notesForLanguage(parsed.notes, 'de'), '- Neuer Update-Dialog\n\n  mit Details\n- Fehler behoben');
+  assert.equal(notesForLanguage(parsed.notes, 'en'), '- New update dialog\n- Bug fixed');
+  assert.equal(notesForLanguage('## 1.2.3\n- nur Deutsch', 'en'), '- nur Deutsch', 'no English part → German');
+  assert.equal(notesForLanguage('', 'de'), '');
+  // Windows line endings as written by release.ps1 on Windows.
+  assert.equal(parseManifest(yml.replace(/\n/g, '\r\n')).notes, notes.trim());
 });
 
 test('embedded update public key is an Ed25519 key', () => {

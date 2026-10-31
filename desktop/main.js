@@ -1985,16 +1985,11 @@ app.whenReady().then(async () => {
   updater = new Updater({
     mode: () => (smokeTest ? 'off' : config.get().updateMode),
     onState: (state) => send({ type: 'update', state }),
-    ask: async (version) => {
-      const r = await dialog.showMessageBox(win?.isVisible() ? win : null, {
-        type: 'question',
-        buttons: [t('Jetzt installieren'), t('Später')],
-        defaultId: 0,
-        cancelId: 1,
-        message: t('Keevault {version} ist bereit.', { version }),
-        detail: t('Das Update wurde im Hintergrund heruntergeladen. Jetzt installieren? Keevault startet danach neu.'),
-      });
-      return r.response === 0;
+    // New version at start (mode "ask"): the renderer shows the update dialog with the release notes.
+    offer: (state) => {
+      if (smokeTest) return;
+      showWindow();
+      send({ type: 'updateOffer', state });
     },
     // Nobody working in the app: locked, or only in the tray.
     isIdle: () => !opened || !win?.isVisible(),

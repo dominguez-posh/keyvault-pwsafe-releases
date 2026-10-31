@@ -34,8 +34,8 @@ const DEFAULTS = {
   fileEmail: '',
   approvedBrowsers: [],
   extensionIds: ['pbkjijhihclckeeefbepoedgdmajioip'],
-  // Updates: off (default, only "Check for updates"), auto (keep up to date), ask (download, ask at next start).
-  updateMode: 'off',
+  // Updates: ask (default: check at start, offer the new version in the app), auto (keep up to date), off (manual only).
+  updateMode: 'ask',
   // AI agents (MCP): off by default; approved MCP client names.
   mcpEnabled: false,
   approvedAgents: [],
