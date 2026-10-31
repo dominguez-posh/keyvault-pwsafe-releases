@@ -681,7 +681,7 @@ const browserHandlers = {
     if (opened) return true;
     if (!config.get().appPin) throw new Error(t('Ohne PIN bitte in der Desktop-App entsperren'));
     await api.verifyPin(String(pin || ''));
-    await api.unlock({ entra: true });
+    await api.unlock({ entra: true, background: true });
     return true;
   },
   containers: () => browserContainers(),
@@ -1042,7 +1042,8 @@ const api = {
     config.update({ appPin: await hashPin(next) });
     return api.state();
   },
-  async unlock({ entra = true } = {}) {
+  /** background: unlocked from the browser extension (PIN) – the window stays where it is. */
+  async unlock({ entra = true, background = false } = {}) {
     requirePin();
     if (entra) {
       // With a PIN the silent sign-in from the encrypted token cache is enough; the Microsoft window only
@@ -1057,8 +1058,10 @@ const api = {
         throw e;
       }
       if (!config.get().entraUsed) config.update({ entraUsed: true });
-      win?.show();
-      win?.focus();
+      if (!background) {
+        win?.show();
+        win?.focus();
+      }
     }
     // Same account and kept data: show the state from memory at once, refresh in the background (concurrent
     // edits in the vault stay safe – every save checks the entry's version and reports a conflict).

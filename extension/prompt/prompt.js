@@ -95,16 +95,40 @@ async function renderContainers(next, filter = () => true) {
 }
 
 function lockedView(details, next) {
+  // With an app PIN: unlock right here (same as the popup and the bar in the page) – the app stays in the background.
+  const pinSet = !st?.demo && !!st?.desktop?.pinSet;
+  const pin = pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), 'aria-label': t('PIN'), class: 'pin' }) : null;
+  const msg = h('div');
+  const unlockButton = button(t('Entsperren'), () => guard(async () => {
+    if (!pin) return unlockThen(next);
+    if (!pin.value) return pin.focus();
+    unlockButton.disabled = true;
+    try {
+      await call('unlockPin', { pin: pin.value });
+      await waitForState((s) => s.open);
+      await next();
+    } catch (e) {
+      msg.replaceChildren(error(e.message));
+      pin.value = '';
+      pin.focus();
+      unlockButton.disabled = false;
+    }
+    return undefined;
+  }, next), 'btn primary');
+  pin?.addEventListener('keydown', (e) => { if (e.key === 'Enter') unlockButton.click(); });
   show([
     site(details),
     h('p', {}, details.kind === 'create'
       ? t('Der Tresor ist gesperrt. Entsperre ihn, um den Passkey in Azure Key Vault zu speichern.')
       : t('Der Tresor ist gesperrt. Entsperre ihn, um dich mit einem gespeicherten Passkey anzumelden.')),
+    pin ? h('label', { class: 'field' }, h('span', { class: 'muted small' }, t('PIN eingeben, um fortzufahren')), pin) : null,
+    msg,
   ], [
     button(t('Abbrechen'), cancel),
     button(t('Anderes Gerät verwenden'), fallback),
-    button(t('Entsperren'), () => guard(() => unlockThen(next), next), 'btn primary'),
+    unlockButton,
   ]);
+  pin?.focus();
 }
 
 function lockedHint(d, again) {

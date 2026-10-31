@@ -4,6 +4,14 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.7.14 – 2026-10-31
+- Das Passkey-Fenster der Erweiterung fragt bei gesperrter App ebenfalls direkt nach der PIN (wie Popup und Leiste).
+- Entsperren mit PIN aus der Erweiterung holt die Desktop-App nicht mehr in den Vordergrund.
+
+### English
+- The extension's passkey window also asks for the PIN directly while the app is locked (like the popup and the bar).
+- Unlocking with the PIN from the extension no longer brings the desktop app to the front.
+
 ## 0.7.13 – 2026-10-31
 - Passkey-Anmeldung bei gesperrter App: Mit gesetzter PIN entsperrst du direkt in der Leiste oben in der Seite und meldest dich gleich dort an – ohne Fenster.
 - Start aus der Browser-Erweiterung über die Windows-Shell statt als Unterprozess des Browsers (Sophos „Lockdown“ blockierte das).
