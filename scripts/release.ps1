@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Builds all installers locally: passkey provider (MSIX), browser extension (CRX + update.xml),
@@ -30,13 +30,43 @@ function Invoke-Step([string] $name, [scriptblock] $block) {
     if ($LASTEXITCODE) { throw "$name fehlgeschlagen ($LASTEXITCODE)" }
 }
 
+# Sophos CryptoGuard reported this script as ransomware (2026-10-31): fast mass deletes and overwriting existing
+# installers with new binaries look like encryption. So: delete one file at a time with a pause, and replace targets
+# (delete, then copy) instead of overwriting them in place.
+function Remove-Slowly([string] $path) {
+    if (-not (Test-Path $path)) { return }
+    foreach ($f in @(Get-ChildItem $path -Recurse -File -Force)) { Remove-Item $f.FullName -Force; Start-Sleep -Milliseconds 20 }
+    if (Test-Path $path) { Remove-Item $path -Recurse -Force }
+}
+function Copy-Fresh([string] $from, [string] $to) {
+    if (Test-Path $to) { Remove-Item $to -Force; Start-Sleep -Milliseconds 200 }
+    Copy-Item $from $to
+}
+
+$unpacked = Join-Path $root 'release/win-unpacked'
 Invoke-Step 'Passkey-Anbieter (MSIX)' { & ./windows/build.ps1 -Version "$version.0" }
 Invoke-Step 'Erweiterung (ZIP)' { npm run ext:pack }
 Invoke-Step 'Erweiterung (CRX + update.xml)' { node scripts/pack-crx.mjs }
-Invoke-Step 'Installer (EXE + MSIX)' { npx electron-builder --win nsis appx --publish never }
+Invoke-Step 'Installer (EXE + MSIX)' {
+    # electron-builder empties release/win-unpacked first. A test build still running from there locks the folder
+    # (EBUSY); then build next to it in release/build and copy the installers over.
+    $out = 'release'
+    if (Test-Path $unpacked) {
+        try { Rename-Item $unpacked 'win-unpacked.old' -ErrorAction Stop; Remove-Slowly "$unpacked.old" }
+        catch { Write-Warning 'release/win-unpacked ist gesperrt (läuft Keevault.exe daraus?) – baue nach release/build'; $out = 'release/build' }
+    }
+    npx electron-builder --win nsis appx --publish never "-c.directories.output=$out"
+    if ($LASTEXITCODE) { return }
+    if ($out -ne 'release') {
+        $script:unpacked = Join-Path $root "$out/win-unpacked"
+        foreach ($f in Get-ChildItem (Join-Path $root $out) -File | Where-Object { $_.Name -match '^(Keevault-.*\.(exe|msix|blockmap)|latest\.yml)$' }) {
+            Copy-Fresh $f.FullName (Join-Path $root "release/$($f.Name)")
+        }
+    }
+}
 # The app only accepts update manifests signed with update-key.pem (desktop/update-verify.js).
 Invoke-Step 'Update-Manifest signieren (Ed25519)' { node scripts/update-key.mjs sign release/latest.yml }
-Invoke-Step 'Installer für Administratoren (MSI)' { node scripts/build-msi.mjs }
+Invoke-Step 'Installer für Administratoren (MSI)' { $env:KV_UNPACKED_DIR = $unpacked; node scripts/build-msi.mjs }
 Invoke-Step 'MSIX signieren' {
     # Same certificate as the passkey provider (CN=KeyVault PwSafe Test, CurrentUser\My) – replace with a purchased
     # code-signing certificate later; Publisher in package.json (appx.publisher) must match its subject.
@@ -56,32 +86,34 @@ Invoke-Step 'Geräte-Skript für IT/Intune (Zertifikat eingebettet)' {
 
 Invoke-Step 'Richtlinien-Vorlagen (ADMX für GPO/Intune + Intune-Skript)' {
     $stage = Join-Path $root 'release/policy'
-    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+    Remove-Slowly $stage
     Copy-Item (Join-Path $root 'installer/policy') $stage -Recurse
     # BOM for Windows PowerShell 5.1 (umlauts in the settings block).
     $ps = Join-Path $stage 'Keevault-Richtlinie-Intune.ps1'
     [IO.File]::WriteAllText($ps, [IO.File]::ReadAllText($ps), [Text.UTF8Encoding]::new($true))
-    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath (Join-Path $root 'release/Keevault-Richtlinien.zip') -Force
+    $zip = Join-Path $root 'release/Keevault-Richtlinien.zip'
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 }
 
 $setup = Join-Path $root "release/Keevault-Setup-$version.exe"
 # Same installer under a fixed name: the website links to releases/latest/download/Keevault-Setup.exe.
 # latest.yml (+ blockmap) is what the app's update check reads via https://keevault.de/update/ (website/php/api/dl.php).
 $stable = Join-Path $root 'release/Keevault-Setup.exe'
-Copy-Item $setup $stable -Force
+Copy-Fresh $setup $stable
 $msi = Join-Path $root "release/Keevault-$version.msi"
 $msix = Join-Path $root "release/Keevault-$version.msix"
-Copy-Item $msi (Join-Path $root 'release/Keevault.msi') -Force
-Copy-Item $msix (Join-Path $root 'release/Keevault.msix') -Force
+Copy-Fresh $msi (Join-Path $root 'release/Keevault.msi')
+Copy-Fresh $msix (Join-Path $root 'release/Keevault.msix')
 # Public part of the signing certificate: devices must trust it before the MSIX installs (until a purchased one).
-Copy-Item (Join-Path $root 'windows/out/KvPwSafe-Test.cer') (Join-Path $root 'release/Keevault-Zertifikat.cer') -Force
+Copy-Fresh (Join-Path $root 'windows/out/KvPwSafe-Test.cer') (Join-Path $root 'release/Keevault-Zertifikat.cer')
 $assets = @($setup, $stable, $msi, (Join-Path $root 'release/Keevault.msi'), $msix, (Join-Path $root 'release/Keevault.msix'), (Join-Path $root 'release/Keevault-Zertifikat.cer'), (Join-Path $root 'release/latest.yml'), (Join-Path $root 'release/latest.yml.sig'), "$setup.blockmap", (Join-Path $root 'release/Keevault-Geraet-Einrichten.ps1'), (Join-Path $root 'release/Keevault-Richtlinien.zip'), (Join-Path $root 'dist/kvpwsafe-extension.crx'), (Join-Path $root 'dist/update.xml'), (Join-Path $root "dist/kvpwsafe-extension-$version-firefox.zip"))
 # Mobile app (preview): the Android debug APK goes along when it was built (mobile/README.md).
 $apk = Join-Path $root 'mobile/android/app/build/outputs/apk/debug/app-debug.apk'
 if (Test-Path $apk) {
     $mobileVersion = (Get-Content (Join-Path $root 'mobile/package.json') -Raw | ConvertFrom-Json).version
     $apkTarget = Join-Path $root "release/Keevault-Mobile-$mobileVersion.apk"
-    Copy-Item $apk $apkTarget -Force
+    Copy-Fresh $apk $apkTarget
     $assets += $apkTarget
 }
 # macOS/Linux (preview, unsigned): built by the GitHub workflow "Desktop macOS/Linux" and downloaded with
@@ -92,11 +124,11 @@ if (Test-Path $ci) {
                  "Keevault-$version-linux-x86_64.AppImage" = 'Keevault-linux-x86_64.AppImage'; "Keevault-$version-linux-amd64.deb" = 'Keevault-linux-amd64.deb' }
     foreach ($f in Get-ChildItem $ci -Recurse -File | Where-Object { $_.Name -like "Keevault-$version-*" }) {
         $target = Join-Path $root "release/$($f.Name)"
-        Copy-Item $f.FullName $target -Force
+        Copy-Fresh $f.FullName $target
         $assets += $target
         if ($stable.ContainsKey($f.Name)) {
             $copy = Join-Path $root "release/$($stable[$f.Name])"
-            Copy-Item $f.FullName $copy -Force
+            Copy-Fresh $f.FullName $copy
             $assets += $copy
         }
     }

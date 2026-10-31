@@ -141,7 +141,7 @@ Repeat once per role. Whoever sets up the vault in Keevault needs at least **Edi
 
 ![Select members](images/azure/en/06-members.svg)
 
-**Step 7 – take it over in Keevault**, see [3.4](#34-take-it-over-in-keevault-portal-only).
+**Step 7 – adopt the Key Vault in Keevault**, see [3.4](#34-adopt-the-key-vault-in-keevault-portal-only).
 
 > **Watch the Key Vault's tenant:** if the vault is created through Azure Lighthouse or from another tenant, Azure
 > often enters the *wrong* tenant into the vault. Then the roles never apply. The app detects this and offers
@@ -184,9 +184,9 @@ terraform apply
 - As a **guest** you are often not allowed to look up users in a foreign directory. Then use `object_ids` instead of
   `users`/`groups`.
 
-### 3.4 Take it over in Keevault (portal only)
+### 3.4 Adopt the Key Vault in Keevault (portal only)
 
-After one click and Terraform, the vault appears by itself. With the portal, take it over once:
+After the one-click template and Terraform, the vault appears by itself. After the portal route, adopt it once:
 
 1. In the sidebar, click **+** next to **Vaults** → **Create new Azure vault**.
 2. Choose subscription and resource group; under **Key vault** → **Use an existing empty key vault**.
@@ -339,6 +339,6 @@ The **technical details** below an error message show the Key Vault's answer, th
 - [ ] Key Vault: pricing tier Standard, **Azure RBAC**, soft delete 90 days, purge protection on
 - [ ] Network: public access or your IPs / VPN allowed
 - [ ] Roles on the Key Vault for Entra groups: Secrets User / Secrets Officer / + Data Access Administrator, plus Reader
-- [ ] Vault created or taken over in the app (marker `pws-container` present)
+- [ ] Vault created or adopted in the app (marker `pws-container` present)
 - [ ] Test entry created, a second person sees the vault
 - [ ] Optional: AuditEvent log to Log Analytics, extra protection, logo (right-click → Vault logo)

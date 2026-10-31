@@ -135,6 +135,8 @@ function newSession() {
     adapters: { file: files },
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.
     multiTenant: true,
+    // The sidebar spins the refresh icon of the vault that is being loaded or reconciled right now.
+    onBusy: (containerId, busy) => send({ type: 'busy', containerId, busy }),
   });
 }
 
@@ -970,8 +972,14 @@ const api = {
   async refreshContainer(containerId) {
     requireOpen();
     const c = await vault.container(containerId);
-    if (c.kind === 'file') await files.get(containerId).load();
-    else await vault.refreshIndex([containerId]);
+    if (c.kind === 'file') {
+      send({ type: 'busy', containerId, busy: true });
+      try {
+        await files.get(containerId).load();
+      } finally {
+        send({ type: 'busy', containerId, busy: false });
+      }
+    } else await vault.refreshIndex([containerId]);
     changed();
     return api.state();
   },
@@ -2337,6 +2345,8 @@ function runSmokeTest() {
       if (view === 'progress') {
         // Progress card bottom right as during a background reconcile (screenshot only).
         send({ type: 'progress', id: 'reconcile', label: t('Tresore werden abgeglichen …'), done: 1234, total: 2000 });
+        // … and the spinning refresh icon of the vault being reconciled.
+        send({ type: 'busy', containerId: (await vault.containers())[0]?.id, busy: true });
         await sleep(600);
       }
       if (view === 'health') await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Passwort-Check|Password check/.test(n.textContent))?.click()');

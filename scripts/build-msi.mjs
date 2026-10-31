@@ -13,7 +13,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const source = join(root, 'release', 'win-unpacked');
+// KV_UNPACKED_DIR: release.ps1 builds into release/build when a running test build locks release/win-unpacked.
+const source = process.env.KV_UNPACKED_DIR || join(root, 'release', 'win-unpacked');
 const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 // Never change: Windows recognizes the product (and replaces older versions) by it.
 const UPGRADE_CODE = '{86BFB281-FD2C-4C9A-9BF5-A8A1B3EEEFA4}';

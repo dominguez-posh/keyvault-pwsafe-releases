@@ -88,13 +88,16 @@ export class VaultSession {
    * trash(id), restore(id, itemId), purge(id, itemId), history(id, itemId), getVersion(id, itemId, v),
    * passkeyCandidates(rpId), protectionInfo(id, rpId), unlock(id, params), lock(id), updateKeyring(id, op)
    */
-  constructor({ getToken, store, fetch: fetchImpl, actor, adapters = {}, multiTenant = false }) {
+  constructor({ getToken, store, fetch: fetchImpl, actor, adapters = {}, multiTenant = false, onBusy = null }) {
     this.multiTenant = multiTenant;
     this.getToken = getToken;
     this.store = store;
     this.fetch = fetchImpl;
     this.actor = actor;
     this.adapters = adapters;
+    // onBusy(containerId, busy): called when a vault's listing/index load starts and ends (sidebar spinner).
+    this.onBusy = onBusy;
+    this.busyCount = new Map();
     this.keys = new Map();
     this.mutex = Promise.resolve();
     this.azure = new AzureClient({
@@ -654,11 +657,21 @@ export class VaultSession {
     return ((await this.store.get('containers')) || []).map((c) => ({ ...c, kind: 'keyvault' }));
   }
 
+  /** Nested loads (fast path falling back to the listing) count up and down; the callback sees only the edges. */
+  busy(containerId, delta) {
+    if (!this.onBusy) return;
+    const n = (this.busyCount.get(containerId) || 0) + delta;
+    this.busyCount.set(containerId, Math.max(n, 0));
+    if (delta > 0 && n === 1) this.onBusy(containerId, true);
+    if (delta < 0 && n <= 0) this.onBusy(containerId, false);
+  }
+
   async refreshIndex(containerIds) {
     const containers = await this.kvContainers();
     const targets = containerIds ? containers.filter((c) => containerIds.includes(c.id)) : containers;
     const fresh = {};
     await mapLimit(targets, 4, async (c) => {
+      this.busy(c.id, 1);
       try {
         const secrets = await this.kv(c).listSecrets();
         if (!secrets.some((s) => s.name === CONTAINER_SECRET)) this.writeContainerMeta(this.kv(c), { name: c.name }).catch(() => {});
@@ -683,6 +696,8 @@ export class VaultSession {
         }
       } catch (e) {
         fresh[c.id] = { items: [], loadedAt: Date.now(), error: { status: e.status || 0, message: e.message, code: e.code || e.name, tenantId: e.tenantId, detail: e.detail || '' } };
+      } finally {
+        this.busy(c.id, -1);
       }
     });
     return this.locked(async () => {
@@ -703,12 +718,15 @@ export class VaultSession {
     const fresh = {};
     const slow = [];
     await mapLimit(targets, 4, async (c) => {
+      this.busy(c.id, 1);
       try {
         const entry = await this.loadFastIndex(c);
         if (entry) fresh[c.id] = entry;
         else slow.push(c.id);
       } catch {
         slow.push(c.id);
+      } finally {
+        this.busy(c.id, -1);
       }
     });
     if (Object.keys(fresh).length) {

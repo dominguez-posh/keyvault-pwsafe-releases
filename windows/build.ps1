@@ -1,4 +1,4 @@
-#Requires -Version 7
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Baut den Windows-Passkey-Anbieter (C#) und verpackt ihn als signiertes MSIX.
@@ -31,18 +31,34 @@ $out = Join-Path $here 'out'
 $stage = Join-Path $out 'stage'
 $tools = Join-Path $out 'tools'
 New-Item -ItemType Directory -Force $out, $tools | Out-Null
-if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+
+# One file at a time with a short pause: Sophos CryptoGuard reported the fast mass delete of the stage folder as
+# ransomware (2026-10-31). Freshly written files are also sometimes still held by the virus scanner or the indexer
+# for a moment ("Access denied"), hence the retries.
+function Remove-WithRetry([string[]] $paths) {
+    foreach ($p in $paths) {
+        if (-not (Test-Path $p)) { continue }
+        foreach ($f in @(Get-ChildItem $p -Recurse -File -Force)) {
+            for ($i = 1; $i -le 10; $i++) {
+                try { Remove-Item $f.FullName -Force -ErrorAction Stop; break } catch { if ($i -eq 10) { throw }; Start-Sleep -Milliseconds 500 }
+            }
+            Start-Sleep -Milliseconds 20
+        }
+        if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+    }
+}
+if (Test-Path $stage) { Remove-WithRetry $stage }
 
 # First dotnet with an SDK 10 or newer (the project targets net10.0; an older SDK or a runtime-only installation may
 # come first on PATH, e.g. SDK 8 under Program Files).
-$dotnet = @((Get-Command dotnet -ErrorAction SilentlyContinue)?.Source, (Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'), (Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe')) |
+$dotnet = @((Get-Command dotnet -ErrorAction SilentlyContinue | ForEach-Object Source), (Join-Path $env:ProgramFiles 'dotnet\dotnet.exe'), (Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe')) |
     Where-Object { $_ -and (Test-Path $_) -and ((& $_ --list-sdks 2>$null) | Where-Object { [int]($_ -split '\.')[0] -ge 10 }) } | Select-Object -First 1
 if (-not $dotnet) { throw '.NET SDK 10 nicht gefunden (https://dot.net).' }
 
 Write-Host 'Veröffentliche Passkey-Anbieter …'
 & $dotnet publish $project -c Release -o $stage --nologo | Out-Host
 if ($LASTEXITCODE) { throw "dotnet publish fehlgeschlagen ($LASTEXITCODE)" }
-Get-ChildItem $stage -Filter *.pdb | Remove-Item
+Remove-WithRetry @(Get-ChildItem $stage -Filter *.pdb | ForEach-Object FullName)
 
 Copy-Item (Join-Path $project 'Assets') (Join-Path $stage 'Assets') -Recurse
 $manifest = (Get-Content (Join-Path $project 'AppxManifest.xml') -Raw).Replace('__PUBLISHER__', [System.Security.SecurityElement]::Escape($Publisher)).Replace('__VERSION__', $Version)

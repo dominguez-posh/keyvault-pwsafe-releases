@@ -37,6 +37,7 @@ const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { 
 const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set() };
 const explicitFolders = new Map(); // containerId → created folders (also empty ones)
 const logos = new Map(); // containerId → data URL | null (loaded once per session, refreshed on change)
+const busyContainers = new Set(); // containerIds being loaded or reconciled right now (sidebar spinner)
 const icons = new Map(); // item key → data URL (Key Vault lists only tags; icons are fetched on demand)
 const iconQueue = [];
 let iconWorkers = 0;
@@ -125,6 +126,7 @@ window.pwsafe.onEvent((ev) => {
   if (ev.type === 'locked') {
     Object.assign(ui, { selected: null, editing: null, editingItem: null });
     ui.multi.clear();
+    busyContainers.clear();
     items = [];
     render();
   } else if (ev.type === 'changed' && st?.opened) {
@@ -135,6 +137,11 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'progress') {
     progress.onEvent(ev);
     for (const fn of progressListeners) fn(ev);
+  } else if (ev.type === 'busy') {
+    // A vault is being loaded or reconciled: its refresh icon spins (also set when the sidebar is re-rendered).
+    if (ev.busy) busyContainers.add(ev.containerId);
+    else busyContainers.delete(ev.containerId);
+    for (const b of panes.sidebar.querySelectorAll('.nav-refresh')) b.classList.toggle('spinning', busyContainers.has(b.dataset.container));
   } else if (ev.type === 'windows-request') {
     checkWindowsRequests();
   } else if (ev.type === 'generator') {
@@ -502,6 +509,8 @@ function renderSidebar() {
       refreshContainer(c, refresh);
     }, { disabled: c.locked && !c.error });
     refresh.classList.add('nav-refresh');
+    refresh.dataset.container = c.id;
+    refresh.classList.toggle('spinning', busyContainers.has(c.id));
     return h('div', { class: `nav-row ${ui.containerId === c.id ? 'active' : ''}`, oncontextmenu: (e) => contextMenu(e, containerActions(c)) },
       h('button', {
         class: `nav ${ui.containerId === c.id ? 'active' : ''}`,
