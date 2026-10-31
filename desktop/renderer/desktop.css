@@ -534,3 +534,5 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .top-pim { display: none; position: absolute; top: 8px; right: 16px; z-index: 3; height: 36px; min-height: 36px; border-radius: 12px; padding: 0 14px; gap: 6px; -webkit-app-region: no-drag; }
 .frameless .top-pim { right: 152px; }
 .show-pim .top-pim { display: inline-flex; align-items: center; }
+/* Vault in the sidebar while entries are dragged over it. */
+.nav-row.drop { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 10px; background: var(--accent-soft); }

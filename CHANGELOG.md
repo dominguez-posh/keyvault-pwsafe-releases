@@ -4,6 +4,14 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.8 – 2026-10-31
+- Rechtsklick auf die freie Fläche der Liste: neuen Eintrag oder (Unter-)Ordner anlegen, den aktuellen Ordner umbenennen oder löschen, eine Ebene nach oben, alle auswählen, aktualisieren und die Tresor-Funktionen.
+- Einträge per Drag & Drop in einen anderen Tresor schieben: auf den Tresor in der Seitenleiste ziehen (auch mehrere markierte) oder einen ganzen Ordner mit Unterordnern, kurz bestätigen. Ein Ordner landet im Ziel unter seinem Namen auf oberster Ebene („Kunden/Contoso“ → „Contoso“). Ein Tresor nimmt nur an, wenn du dort schreiben darfst; aus geteilten Tresoren nicht in den persönlichen.
+
+### English
+- Right-click on the empty list area: create an entry or (sub)folder, rename or delete the current folder, go up one level, select all, refresh and the vault functions.
+- Drag entries into another vault: drop them on the vault in the sidebar (several selected ones too) or a whole folder with its subfolders, and confirm. A folder lands at the top level of the target under its own name (“Kunden/Contoso” → “Contoso”). A vault only accepts them when you may write there; nothing from shared vaults into the personal one.
+
 ## 0.8.7 – 2026-10-31
 - Optionaler „PIM“-Knopf oben rechts (Menü → Ansicht → PIM-Button): öffnet aka.ms/pim, um eine berechtigte Azure-Rolle mit Privileged Identity Management zu aktivieren.
 
