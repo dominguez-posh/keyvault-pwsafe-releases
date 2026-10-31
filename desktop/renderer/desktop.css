@@ -530,3 +530,7 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .role-mark { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; color: var(--muted); background: var(--accent-soft); cursor: help; }
 .role-mark.role-write, .role-mark.role-admin { color: var(--accent); }
 .role-mark.role-owner { color: #b7791f; background: rgba(214, 158, 46, .14); }
+/* Optional "PIM" button top right, left of the window buttons (menu → View → PIM button). */
+.top-pim { display: none; position: absolute; top: 8px; right: 16px; z-index: 3; height: 36px; min-height: 36px; border-radius: 12px; padding: 0 14px; gap: 6px; -webkit-app-region: no-drag; }
+.frameless .top-pim { right: 152px; }
+.show-pim .top-pim { display: inline-flex; align-items: center; }

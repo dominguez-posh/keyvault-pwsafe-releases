@@ -4,6 +4,12 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.7 – 2026-10-31
+- Optionaler „PIM“-Knopf oben rechts (Menü → Ansicht → PIM-Button): öffnet aka.ms/pim, um eine berechtigte Azure-Rolle mit Privileged Identity Management zu aktivieren.
+
+### English
+- Optional “PIM” button top right (menu → View → PIM button): opens aka.ms/pim to activate an eligible Azure role with Privileged Identity Management.
+
 ## 0.8.6 – 2026-10-31
 - Tresor-Überschrift aufgeräumt: Ein Symbol vor dem Namen zeigt deine Berechtigung – Auge (nur lesen), Stift (bearbeiten), Schild (verwalten), Krone (Besitzer, darf Berechtigungen vergeben); beim Darüberfahren steht sie ausgeschrieben. Demo- oder Test-Lizenz stehen rechts neben dem Namen.
 - Neu: persönlicher Tresor – kostenlos, nur für dich und nicht teilbar. Ein Assistent richtet ihn in wenigen Schritten ein: Speicherort (OneDrive, iCloud, Dropbox oder ein Netzlaufwerk – nie lokal), Masterpasswort mit Wiederherstellungsschlüssel, optional ein FIDO-Stick. Im Alltag entsperrt deine eine App-PIN App und persönlichen Tresor zugleich. Er steht oben in der Seitenleiste mit Person- und Anbieter-Symbol; Keevault zeigt, ob die Datei synchronisiert ist. Einträge aus geteilten Tresoren lassen sich nicht hineinschieben, aus dem persönlichen in geteilte schon.

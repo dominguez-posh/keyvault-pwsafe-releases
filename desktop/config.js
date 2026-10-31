@@ -59,6 +59,8 @@ const DEFAULTS = {
   entryToolbar: true,
   // View: small marks before the vaults – cloud for Azure Key Vault, drive for local files.
   sourceBadges: true,
+  // View: "PIM" button top right (opens aka.ms/pim to activate an eligible Azure role).
+  pimButton: false,
   // Personal vault: file path (OneDrive / synced folder / network drive) and its key bound to this device and the PIN.
   personalVault: null,
   personalDeviceKey: null,

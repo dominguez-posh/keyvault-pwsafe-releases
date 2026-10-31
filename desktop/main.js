@@ -2851,7 +2851,8 @@ function runSmokeTest() {
       }
       if (view === 'health') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=health]")?.click()');
       if (view === 'access') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=access]")?.click()');
-      if (view === 'mainmenu') await js('document.querySelector(".menu-btn")?.click()');
+      // Main menu screenshot also shows the optional PIM button top right.
+      if (view === 'mainmenu') await js('document.documentElement.classList.add("show-pim"); document.querySelector(".menu-btn")?.click()');
       if (view === 'multi') {
         await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Alle Einträge|All entries|All items/.test(n.textContent))?.click()');
         await sleep(400);

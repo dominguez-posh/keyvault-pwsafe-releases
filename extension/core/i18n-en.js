@@ -1103,6 +1103,8 @@ export default {
   'Für diese Sitzung': 'For this session',
   'Für 1 Stunde': 'For 1 hour',
   'Passkey verwenden': 'Use passkey',
+  'Rolle mit Privileged Identity Management aktivieren (aka.ms/pim)': 'Activate a role with Privileged Identity Management (aka.ms/pim)',
+  'PIM-Button': 'PIM button',
   'Verwalten: lesen, bearbeiten und Tresor-Einstellungen festlegen': 'Manage: read, edit and set vault settings',
   'Besitzer: darf Berechtigungen vergeben, hat selbst aber keinen Datenzugriff': 'Owner: may grant permissions but has no data access',
   'Besitzer: lesen, bearbeiten, verwalten und Berechtigungen vergeben': 'Owner: read, edit, manage and grant permissions',

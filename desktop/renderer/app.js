@@ -365,7 +365,9 @@ async function render() {
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
-  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions);
+  // Optional (menu → View): Privileged Identity Management in the browser, for activating an eligible role.
+  const pim = h('button', { type: 'button', class: 'btn top-pim', title: t('Rolle mit Privileged Identity Management aktivieren (aka.ms/pim)'), onclick: () => openUrl('https://aka.ms/pim') }, icon('shield', 15), 'PIM');
+  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions, pim);
   root.replaceChildren(shell);
   setupSplitters(shell);
   renderSidebar();
@@ -374,7 +376,7 @@ async function render() {
   loadLogos();
   if (st.requirePin && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ forced: true });
   // First start after setting up: offer the personal vault once (use an existing one or create a new one).
-  else if (!st.settings.personalVault && !st.settings.personalOffered && !document.querySelector('dialog[open]') && !st.smoke) {
+  else if (!st.settings.personalVault && !st.settings.personalOffered && !document.querySelector('dialog[open]') && !st.smoke && !st.demo) {
     call('updateSettings', { personalOffered: true }).catch(() => {});
     setTimeout(() => personalWizard(), 400);
   }
@@ -789,6 +791,7 @@ function applyViewClass() {
   const mode = st?.settings?.transparency || 'light';
   document.documentElement.classList.toggle('see-through', mode === 'light' || mode === 'strong');
   document.documentElement.classList.toggle('see-through-strong', mode === 'strong');
+  document.documentElement.classList.toggle('show-pim', st?.settings?.pimButton === true);
 }
 
 const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
@@ -825,13 +828,16 @@ function zoomControl() {
     step(1, t('Vergrößern (Strg +)'), '+'));
 }
 
-/** View: the floating toolbar of an entry on or off (the "⋯" beside the title keeps every action reachable). */
-function toolbarControl() {
-  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': t('Leiste unten'), 'data-view-value': '' });
-  const draw = () => box.replaceChildren(...[[true, t('An')], [false, t('Aus')]].map(([value, label]) => h('button', {
-    type: 'button', role: 'radio', 'aria-checked': String((st.settings.entryToolbar !== false) === value), class: (st.settings.entryToolbar !== false) === value ? 'on' : '',
-    onclick: async () => { await setView({ entryToolbar: value }); renderDetail(); },
-  }, label)));
+/** View: an on/off switch for a setting (`on` = its default when unset), `after` redraws what it affects. */
+function onOffControl(key, label, on, after) {
+  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': label, 'data-view-value': '' });
+  const draw = () => box.replaceChildren(...[[true, t('An')], [false, t('Aus')]].map(([value, text]) => {
+    const current = (st.settings[key] ?? on) === value;
+    return h('button', {
+      type: 'button', role: 'radio', 'aria-checked': String(current), class: current ? 'on' : '',
+      onclick: async () => { await setView({ [key]: value }); after?.(); },
+    }, text);
+  }));
   box.addEventListener('view-changed', draw);
   draw();
   return box;
@@ -840,21 +846,9 @@ function toolbarControl() {
 /** View → "Ansicht auf Standard": zoom, transparency, bottom bar, source marks and column widths as on first start. */
 async function resetView() {
   try { localStorage.removeItem('paneWidths'); } catch {}
-  await setView({ zoom: 1, transparency: 'light', entryToolbar: true, sourceBadges: true });
+  await setView({ zoom: 1, transparency: 'light', entryToolbar: true, sourceBadges: true, pimButton: false });
   await render();
   toast(t('Ansicht zurückgesetzt'));
-}
-
-/** View: the source marks (Azure / local) before the vaults on or off. */
-function sourceControl() {
-  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': t('Speicherort'), 'data-view-value': '' });
-  const draw = () => box.replaceChildren(...[[true, t('An')], [false, t('Aus')]].map(([value, label]) => h('button', {
-    type: 'button', role: 'radio', 'aria-checked': String((st.settings.sourceBadges !== false) === value), class: (st.settings.sourceBadges !== false) === value ? 'on' : '',
-    onclick: async () => { await setView({ sourceBadges: value }); renderSidebar(); },
-  }, label)));
-  box.addEventListener('view-changed', draw);
-  draw();
-  return box;
 }
 
 function transparencyControl() {
@@ -932,8 +926,9 @@ function mainMenu(anchor) {
     h('div', { class: 'main-menu-label' }, t('Ansicht')),
     viewRow(t('Zoom'), zoomControl()),
     viewRow(t('Transparenz'), transparencyControl()),
-    viewRow(t('Leiste unten'), toolbarControl()),
-    viewRow(t('Speicherort'), sourceControl()),
+    viewRow(t('Leiste unten'), onOffControl('entryToolbar', t('Leiste unten'), true, renderDetail)),
+    viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
+    viewRow(t('PIM-Button'), onOffControl('pimButton', t('PIM-Button'), false)),
     entry('view-reset', 'refresh', t('Ansicht auf Standard'), resetView),
     h('div', { class: 'context-sep' }),
     entry('lock', 'lock', t('Sperren'), () => call('lock')));
