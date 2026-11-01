@@ -38,6 +38,42 @@ function step(name, fn) {
     throw new Error(`${name} fehlgeschlagen: ${e.message}`);
   }
 }
+// A release is built from committed files only: 0.9.6 packed a file that was being saved at that moment (cut off in
+// the middle – the app did not start). Uncommitted changes stop the release before anything is built.
+{
+  const dirty = execSync('git status --porcelain', { cwd: root, encoding: 'utf8' }).trim();
+  if (dirty) throw new Error(`Nicht committete Änderungen – erst committen, dann veröffentlichen:\n${dirty}`);
+}
+
+/**
+ * The packed app must be exactly the committed code: every file in app.asar that git knows is compared byte for byte
+ * with HEAD, and every .js file must parse. Runs right after electron-builder, before anything is signed or published.
+ */
+async function verifyPackage(asarPath) {
+  const { extractAll } = await import('@electron/asar');
+  const dir = join(root, 'release', 'asar-check');
+  rmSync(dir, { recursive: true, force: true });
+  try { extractAll(asarPath, dir); } catch { /* native modules may stay unpacked – the JavaScript is extracted */ }
+  const tracked = new Set(execSync('git ls-files', { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean));
+  const walk = (d) => readdirSync(d).flatMap((n) => { const p = join(d, n); return statSync(p).isDirectory() ? walk(p) : [p]; });
+  const problems = [];
+  let checked = 0;
+  for (const file of walk(dir)) {
+    const rel = file.slice(dir.length + 1).split('\\').join('/');
+    if (!tracked.has(rel) || rel === 'package.json') continue;
+    checked++;
+    const head = execFileSync('git', ['show', `HEAD:${rel}`], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+    if (!head.equals(readFileSync(file))) problems.push(`${rel}: weicht vom Commit ab`);
+    else if (/\.(m?js|cjs)$/.test(rel)) {
+      try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); } catch (e) { problems.push(`${rel}: Syntaxfehler ${String(e.stderr || '').split('\n').find((l) => /Error/.test(l)) || ''}`); }
+    }
+  }
+  rmSync(dir, { recursive: true, force: true });
+  if (!checked) throw new Error('app.asar enthält keine bekannten Dateien');
+  if (problems.length) throw new Error(`Paket fehlerhaft:\n${problems.join('\n')}`);
+  console.log(`app.asar geprüft: ${checked} Dateien wie im Commit`);
+}
+
 /** Replace instead of overwrite: deleting and creating looks less like encryption to CryptoGuard than rewriting in place. */
 function copyFresh(from, to) {
   if (existsSync(to)) rmSync(to, { force: true });
@@ -166,6 +202,7 @@ step('Installer (EXE + MSIX)', () => {
     }
   }
 });
+await verifyPackage(join(unpacked, 'resources', 'app.asar'));
 // Release notes (CHANGELOG.md) go into the manifest before it is signed: the app shows them in its update dialog.
 step('Release-Notes aus CHANGELOG.md', () => run(process.execPath, [R('scripts/release-notes.mjs')]));
 // The app only accepts update manifests signed with update-key.pem (desktop/update-verify.js).
