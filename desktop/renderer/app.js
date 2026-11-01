@@ -956,6 +956,8 @@ function mainMenu(anchor) {
   document.body.append(menu);
   const r = anchor.getBoundingClientRect();
   menu.style.top = `${r.bottom + 8}px`;
+  // Small window: the menu ends 10 px above the bottom edge and scrolls instead of being cut off.
+  menu.style.maxHeight = `${Math.max(160, window.innerHeight - r.bottom - 18)}px`;
   menu.style.left = `${Math.max(10, r.right - menu.offsetWidth)}px`;
   window.addEventListener('mousedown', outside, true);
   window.addEventListener('keydown', onKey, true);
@@ -1792,9 +1794,11 @@ function contextMenu(event, actions) {
   };
   document.body.append(menu);
   const { innerWidth: w, innerHeight: hgt } = window;
+  // Taller than the window (small window, long menu): it scrolls from the top edge – submenus then open inside it.
+  if (menu.getBoundingClientRect().height > hgt - 16) menu.classList.add('scrolls');
   const rect = menu.getBoundingClientRect();
-  menu.style.left = `${Math.min(event.clientX, w - rect.width - 8)}px`;
-  menu.style.top = `${Math.min(event.clientY, hgt - rect.height - 8)}px`;
+  menu.style.left = `${Math.max(8, Math.min(event.clientX, w - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(event.clientY, hgt - rect.height - 8))}px`;
   window.addEventListener('mousedown', outside, true);
   window.addEventListener('keydown', onKey, true);
   window.addEventListener('blur', close);

@@ -224,6 +224,8 @@ body { overflow: hidden; }
 .info-table td .icon-btn { margin-left: 6px; vertical-align: middle; }
 /* Context submenus and sliced list rendering */
 .context-group { position: relative; }
+.context-menu.scrolls { max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.context-menu.scrolls .context-sub { position: static; margin-left: 12px; }
 .context-group > button.has-sub > .icon:last-child { margin-left: auto; opacity: 0.6; }
 .context-sub { display: none; position: absolute; top: -6px; left: 100%; min-width: 230px; }
 .context-group.open > .context-sub { display: block; }
@@ -334,7 +336,7 @@ body { overflow: hidden; }
 .menu-dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: #e8a400; box-shadow: 0 0 0 2px var(--bg); }
 .main-menu { position: fixed; z-index: 1000; width: 270px; padding: 6px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
   box-shadow: 0 18px 40px color-mix(in srgb, var(--accent) 14%, transparent), 0 4px 14px rgba(20, 26, 38, .12); -webkit-app-region: no-drag;
-  transform-origin: top right; animation: menu-in .14s cubic-bezier(.2, .9, .3, 1.1); }
+  transform-origin: top right; animation: menu-in .14s cubic-bezier(.2, .9, .3, 1.1); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .main-menu.closing { animation: menu-out .12s ease-in forwards; }
 .main-menu-account { display: flex; align-items: center; gap: 10px; margin: 0 0 6px; padding: 10px; border-radius: 12px; background: var(--bg); }
 .main-menu-avatar { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
