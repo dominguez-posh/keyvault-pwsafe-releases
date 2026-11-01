@@ -4,6 +4,12 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.3 – 2026-11-01
+- Kleines Fenster: Das Hauptmenü endet am Fensterrand und lässt sich scrollen statt abgeschnitten zu werden; zu lange Kontextmenüs ebenso.
+
+### English
+- Small window: the main menu ends at the window edge and scrolls instead of being cut off; overlong context menus too.
+
 ## 0.9.2 – 2026-11-01
 - Auto-Type funktioniert wieder auf Geräten mit App Control / WDAC: PowerShell läuft dort im eingeschränkten Sprachmodus, Keevault tippt jetzt über sein eigenes Hilfsprogramm. Ein Zielfenster, das als Administrator läuft, wird gemeldet statt still zu scheitern.
 - Kopieren: Kein „Die Zwischenablage ist nicht verfügbar“ mehr, wenn ein anderes Programm (Zwischenablage-Verlauf, Virenschutz) die Zwischenablage kurz festhält.

@@ -3104,6 +3104,15 @@ function runSmokeTest() {
       if (view === 'access') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=access]")?.click()');
       // Main menu screenshot also shows the optional PIM button top right.
       if (view === 'mainmenu') await js('document.documentElement.classList.add("show-admin"); document.querySelector(".menu-btn")?.click()');
+      if (view === 'mainmenu-small') {
+        // Small window: the main menu ends above the bottom edge and scrolls (screenshot only).
+        win.setSize(900, 560);
+        await sleep(400);
+        await js('document.querySelector(".menu-btn")?.click()');
+        await sleep(300);
+        const fits = await js('(() => { const m = document.querySelector(".main-menu"); return !!m && m.getBoundingClientRect().bottom <= innerHeight && m.scrollHeight > m.clientHeight; })()');
+        if (!fits) errors.push('mainmenu-small: menu cut off or not scrollable');
+      }
       if (view === 'multi') {
         await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Alle Einträge|All entries|All items/.test(n.textContent))?.click()');
         await sleep(400);
