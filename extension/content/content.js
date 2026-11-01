@@ -857,10 +857,34 @@
   if (SIGN_IN_HOSTS.test(location.hostname)) initSignIn();
 
   async function initSignIn() {
+    if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) declineStaySignedIn();
     const job = await call('cs:signIn').catch(() => null);
     if (job) return runSignIn(job, () => call('cs:signIn').catch(() => null));
     if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) offerMicrosoftAccounts();
     return undefined;
+  }
+
+  // "Stay signed in?" after a sign-in Keevault did in this tab (last 2 minutes): answered with "No" – nothing stays signed
+  // in on the browser by itself. Sign-ins done by hand keep the question.
+  const markSignedIn = () => { try { sessionStorage.setItem('kvMsSignedInAt', String(Date.now())); } catch { /* storage blocked */ } };
+  function declineStaySignedIn() {
+    let recent = false;
+    try { recent = Date.now() - Number(sessionStorage.getItem('kvMsSignedInAt') || 0) < 120_000; } catch { /* storage blocked */ }
+    if (!recent) return;
+    const started = Date.now();
+    const look = () => {
+      if (!alive || Date.now() - started > 20_000) return;
+      const kmsi = document.querySelector('#KmsiCheckboxField, input[name="DontShowAgain"], #KmsiDescription, [data-testid="kmsiVideo"]');
+      const no = document.querySelector('#idBtn_Back') || document.querySelector('#declineButton');
+      if (kmsi && no && !no.disabled && visible(no)) {
+        try { sessionStorage.removeItem('kvMsSignedInAt'); } catch { /* storage blocked */ }
+        no.click();
+        return;
+      }
+      setTimeout(look, 400);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', look, { once: true });
+    else look();
   }
 
   const visibleInput = (sel) => { const e = document.querySelector(sel); return e && usable(e) ? e : null; };
@@ -893,16 +917,17 @@
           if (pw && job.password && !done.has('pw')) {
             done.add('pw');
             setValue(pw, job.password);
+            markSignedIn();
             next();
             // Without a one-time code this was the last step: the sign-in is used up (no second automatic sign-in).
-            if (!job.totp) { onDone(); stop(); }
+            if (!job.totp) { onDone(); stop(); declineStaySignedIn(); }
             return;
           }
           const otc = visibleInput('input[name=otc]');
           if (otc && !done.has('otc')) {
             // Ask again: the code has to be current when it is typed in.
             const current = await fresh();
-            if (current?.totp) { done.add('otc'); setValue(otc, current.totp); next(); onDone(); stop(); }
+            if (current?.totp) { done.add('otc'); setValue(otc, current.totp); markSignedIn(); next(); onDone(); stop(); declineStaySignedIn(); }
             return;
           }
         } else if (!done.has('form')) {

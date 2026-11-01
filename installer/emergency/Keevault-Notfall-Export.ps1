@@ -48,7 +48,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)][string[]]$Vault,
-    [string]$OutputFolder = (Join-Path ([Environment]::GetFolderPath('Desktop')) ("Keevault-Notfall-" + (Get-Date -Format 'yyyyMMdd-HHmm'))),
+    # Desktop, or the home folder where there is none (servers, Linux/macOS with PowerShell 7).
+    [string]$OutputFolder = (Join-Path $(if ([Environment]::GetFolderPath('Desktop')) { [Environment]::GetFolderPath('Desktop') } else { $HOME }) ("Keevault-Notfall-" + (Get-Date -Format 'yyyyMMdd-HHmm'))),
     [ValidateSet('All', 'Csv', 'Json', 'KeePass')][string]$Format = 'All',
     [string]$TenantId = 'organizations',
     [string]$RecoveryKey

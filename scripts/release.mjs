@@ -3,6 +3,10 @@
 // (CryptoGuard reported the build scripts as ransomware), node is not affected.
 //   node scripts/release.mjs                 build everything locally (release/Keevault-Setup-<version>.exe, MSI, MSIX)
 //   node scripts/release.mjs --publish       plus: source to the public repo, GitHub release v<version>
+//   … --publish --hotfix                    straight to Prod ("Latest") – emergencies only
+//   … --publish --early-access              as a pre-release (Early Access channel); source on the public repo's
+//                                            "early-access" branch, "Latest" and main untouched. Normally run by
+//                                            .github/workflows/early-access.yml; Prod: promote-production.yml.
 //   node scripts/release.mjs --previews      also attach macOS/Linux (release/ci) and the Android APK (off since
 //                                            2026-10-31: the website offers Windows only)
 // Local on purpose: extension-key.pem and update-key.pem never leave this machine.
@@ -15,6 +19,11 @@ import { createHash } from 'node:crypto';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const publish = process.argv.includes('--publish');
+const earlyAccess = process.argv.includes('--early-access');
+// Prod comes from Early Access (promote-production.yml, same files). Straight to Prod only as a deliberate hotfix.
+if (publish && !earlyAccess && !process.argv.includes('--hotfix')) {
+  throw new Error('Direkt nach Prod nur mit --hotfix. Normal: Early Access (GitHub Actions „Early Access veröffentlichen“), danach „Prod freigeben“.');
+}
 const previews = process.argv.includes('--previews');
 // VS Code's terminal sets this; child processes (npx, electron-builder) must not inherit it.
 delete process.env.ELECTRON_RUN_AS_NODE;
@@ -292,14 +301,19 @@ if (publish) {
   // The private repository keeps website, license tool and notes; scripts/export-public.mjs leaves them out.
   const publicRepo = 'dominguez-posh/keyvault-pwsafe-releases';
   const pub = join(dirname(root.replace(/[\\/]$/, '')), 'keevault-public');
+  // Early Access: the source goes to the branch "early-access" (main follows only when the release is promoted).
+  const branch = earlyAccess ? 'early-access' : 'main';
   step('Quellcode ins öffentliche Repo', () => {
     if (!existsSync(join(pub, '.git'))) run('git', ['clone', `https://github.com/${publicRepo}.git`, pub]);
-    run('git', ['-C', pub, 'pull', '--ff-only']);
+    run('git', ['-C', pub, 'fetch', 'origin']);
+    const remote = execFileSync('git', ['-C', pub, 'branch', '-r'], { encoding: 'utf8' });
+    // early-access starts from main the first time; later it stays ahead of main (Prod moves main forward to it).
+    run('git', ['-C', pub, 'checkout', '-B', branch, remote.includes(`origin/${branch}`) ? `origin/${branch}` : 'origin/main']);
     run(process.execPath, [R('scripts/export-public.mjs'), pub]);
     run('git', ['-C', pub, 'add', '-A']);
     const changed = execFileSync('git', ['-C', pub, 'status', '--porcelain'], { encoding: 'utf8' }).trim() !== '';
-    if (changed) run('git', ['-C', pub, 'commit', '-m', `Keevault ${version}`]);
-    run('git', ['-C', pub, 'push', 'origin', 'HEAD']);
+    if (changed) run('git', ['-C', pub, 'commit', '-m', `Keevault ${version}${earlyAccess ? ' (Early Access)' : ''}`]);
+    run('git', ['-C', pub, 'push', 'origin', `HEAD:${branch}`]);
   });
   const commit = out('git', ['-C', pub, 'rev-parse', 'HEAD']).trim();
   let notes = 'EXE (pro Benutzer), MSI (pro Gerät, GPO/Intune: msiexec /i Keevault.msi /qn) und MSIX (Zertifikat Keevault-Zertifikat.cer vorher vertrauen). Installer mit Passkey-Anbieter und Browser-Erweiterung (Edge/Chrome per Richtlinie).';
@@ -314,6 +328,9 @@ if (publish) {
   writeFileSync(notesFile, `${readFileSync(notesFile, 'utf8').trim()}\n\n${notes}\n`);
   step(`GitHub-Release v${version}`, () => {
     // The tag points at exactly the source the installer was built from (verifiable, see README).
-    run('gh', ['release', 'create', `v${version}`, ...assets, '--repo', publicRepo, '--target', commit, '--title', `Keevault ${version}`, '--notes-file', notesFile]);
+    run('gh', ['release', 'create', `v${version}`, ...assets, '--repo', publicRepo, '--target', commit,
+      '--title', `Keevault ${version}${earlyAccess ? ' (Early Access)' : ''}`, '--notes-file', notesFile,
+      // Pre-release: only the Early Access update channel (keevault.de/update/beta) sees it; "Latest" stays.
+      ...(earlyAccess ? ['--prerelease', '--latest=false'] : [])]);
   });
 }
