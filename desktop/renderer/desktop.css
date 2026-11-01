@@ -248,8 +248,15 @@ body { overflow: hidden; }
 .sidebar-vaults.many { max-height: 212px; overflow-y: auto; padding-right: 2px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 45%, transparent) transparent; }
 .sidebar-vaults.many::-webkit-scrollbar { width: 6px; }
 .sidebar-vaults.many::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 45%, transparent); border-radius: 3px; }
-.vault-search { margin: 0 2px 6px; }
-.vault-search input { min-height: 32px; padding-top: 4px; padding-bottom: 4px; border-radius: 10px; font-size: 13px; background: var(--surface); }
+/* Vault search in the section header: only the magnifier, the field slides open on hover, click or while it holds text. */
+.vault-find { position: relative; display: inline-flex; align-items: center; }
+.vault-find .icon-btn { width: 26px; height: 26px; color: var(--muted); }
+/* The field opens to the left over the "Vaults" label – nothing in the header moves or overflows. */
+.vault-find input { position: absolute; right: calc(100% + 2px); top: 50%; transform: translateY(-50%); z-index: 1; width: 0; min-height: 0; height: 26px; padding: 0; border: 1px solid transparent; border-radius: 8px; opacity: 0; background: var(--surface);
+  font: inherit; font-size: 12.5px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--text); transition: width .18s ease, opacity .18s ease, padding .18s ease; }
+.vault-find:hover input, .vault-find:focus-within input, .vault-find.open input { width: 150px; padding: 0 8px; opacity: 1; border-color: var(--border); }
+.vault-find input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) { .vault-find input { transition: none; } }
 .account { gap: 2px; margin-top: 10px; padding: 8px 6px 8px 8px; border: 0; border-radius: 14px; background: var(--surface); box-shadow: 0 1px 3px rgba(20, 26, 38, .08); }
 
 .list-pane { margin: 10px 0; padding: 16px 12px; border: 1px solid var(--border); border-radius: 18px 0 0 18px; background: var(--surface); gap: 12px; }
@@ -500,7 +507,15 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 /* The personal vault: its own place right below the views, a hairline above it. */
 .personal-slot { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
 /* Organisation of the signed-in account next to "Help". */
-.sidebar-foot { align-items: center; gap: 8px; }
+.sidebar-foot { align-items: center; gap: 8px; flex-wrap: wrap; }
+/* Admin mode: "Passwords | Devices" across the sidebar bottom, the same segment style as the menu's view switches. */
+.mode-switch { flex: 1 0 100%; display: flex; margin-bottom: 4px; }
+.mode-switch button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.mode-switch button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 26, 38, .12); }
+.mode-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* List head while devices are shown: a clear marker beside the title, so nobody wonders where the passwords went. */
+.mode-badge { flex: none; align-self: center; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; }
 .org-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; margin-left: auto; color: var(--muted); font-size: 12px; }
 .org-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Vault heading: permission symbol, name, then license and state tags on the same line. */
@@ -538,5 +553,23 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .admin-link span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-link:hover, .admin-link:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
 .admin-link-icon { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+/* Linked entry in the device form: a field that opens a search window instead of a drop-down with every entry. */
+.link-pick { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.link-pick:hover, .link-pick:focus-visible { border-color: var(--accent); outline: none; }
+.link-pick > .icon { flex: none; color: var(--muted); }
+.link-pick.empty .link-pick-text { color: var(--muted); }
+.link-pick-main { flex: 1; min-width: 0; display: grid; }
+.link-pick-text, .link-pick-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-pick-sub { font-size: 12px; color: var(--muted); }
+.link-pick-dialog { display: grid; gap: 10px; width: min(520px, 80vw); }
+.link-pick-search { width: 100%; box-sizing: border-box; }
+.link-pick-list { display: grid; gap: 2px; max-height: min(420px, 55vh); overflow-y: auto; scrollbar-width: thin; }
+.link-pick-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 8px; border: 0; border-radius: 10px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.link-pick-row:hover, .link-pick-row:focus-visible { background: var(--surface-2); outline: none; }
+.link-pick-row.on { background: var(--accent-soft); }
+.link-pick-row > .icon { color: var(--accent); }
+.link-pick-none { flex: none; width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+.link-pick-row .avatar.small { flex: none; width: 28px; height: 28px; font-size: 12px; border-radius: 8px; }
+.link-pick-empty { padding: 8px; margin: 0; }
 .connect-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .value.linked { display: inline-flex; align-items: center; gap: 4px; }

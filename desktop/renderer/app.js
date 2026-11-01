@@ -55,7 +55,7 @@ if (/Win/.test(navigator.platform)) {
   }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] });
 }
 const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { class: 'list-pane' }), detail: h('section', { class: 'detail-pane' }) };
-const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '', searchAll: false };
+const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '', searchAll: false, devices: false };
 // Vaults that fit in the sidebar without scrolling; with more, the list scrolls and a search appears above it.
 const VAULTS_FIT = 5;
 const explicitFolders = new Map(); // containerId → created folders (also empty ones)
@@ -380,7 +380,7 @@ async function render() {
   if (st.requirePin && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ forced: true });
   else if (!document.querySelector('dialog[open]') && !st.smoke && !st.demo) checkOtherInstallation();
   // First start after setting up: offer the personal vault once (use an existing one or create a new one).
-  else if (!st.settings.personalVault && !st.settings.personalOffered && !document.querySelector('dialog[open]') && !st.smoke && !st.demo) {
+  else if (!(st.settings.personalVaults || []).length && !st.settings.personalOffered && !document.querySelector('dialog[open]') && !st.smoke && !st.demo) {
     call('updateSettings', { personalOffered: true }).catch(() => {});
     setTimeout(() => personalWizard(), 400);
   }
@@ -731,7 +731,7 @@ function renderSidebar() {
       c.error ? h('span', { class: 'badge danger' }, '!') : c.locked ? icon('lock', 13) : h('span', { class: 'count' }, c.count ?? '')),
       refresh);
   };
-  const personal = st.containers.find((c) => c.personal);
+  const personal = st.containers.filter((c) => c.personal);
   const containers = st.containers.filter((c) => !c.personal).map(vaultRow);
   setChildren(panes.sidebar,
     h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), h('span', { class: 'brand-name' }, 'Keevault'),
@@ -739,15 +739,15 @@ function renderSidebar() {
       h('span', { class: 'spacer' }),
       iconButton('lock', t('Sperren'), () => call('lock')),
       mainMenuButton()),
-    nav('all', t('Alle Einträge'), 'shield', items.filter((i) => i.type !== 'server').length),
+    nav('all', deviceMode() ? t('Alle Geräte') : t('Alle Einträge'), 'shield', items.filter((i) => (i.type === 'server') === deviceMode()).length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite).length),
     nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
-    personal ? h('div', { class: 'personal-slot' }, vaultRow(personal)) : null,
-    h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length ? h('span', { class: 'count' }, containers.length) : null,
+    personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow)) : null,
+    h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length > 1 ? vaultFinder() : null, containers.length ? h('span', { class: 'count' }, containers.length) : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
     // Pinned to the bottom edge (sticky): stays reachable however many vaults the list above holds.
-    h('div', { class: 'sidebar-foot' }, h('button', { type: 'button', class: 'help-btn', title: t('Hilfe und Tipps (F1)'), onclick: helpDialog },
+    h('div', { class: 'sidebar-foot' }, adminMode() ? modeSwitch() : null, h('button', { type: 'button', class: 'help-btn', title: t('Hilfe und Tipps (F1)'), onclick: helpDialog },
       h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe')), orgLabel()),
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
@@ -933,7 +933,13 @@ function mainMenu(anchor) {
     viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
     viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
     viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
-    viewRow(t('Admin-Werkzeuge'), onOffControl('adminTools', t('Admin-Werkzeuge'), false, () => setView({ pimButton: false }))),
+    // Admin mode changes the list (devices tab), the New menu and the open entry (admin tiles): redraw them.
+    viewRow(t('Admin-Werkzeuge'), onOffControl('adminTools', t('Admin-Werkzeuge'), false, async () => {
+      await setView({ pimButton: false });
+      renderSidebar();
+      renderList();
+      renderDetail();
+    })),
     entry('view-reset', 'refresh', t('Ansicht auf Standard'), resetView),
     h('div', { class: 'context-sep' }),
     entry('lock', 'lock', t('Sperren'), () => call('lock')));
@@ -966,15 +972,16 @@ function mainMenu(anchor) {
 }
 
 /**
- * The vaults in the sidebar: with more than VAULTS_FIT a search field appears above them and the list scrolls in
- * its own area (thin scrollbar). The search filters the rows in place, so the field keeps its focus while typing.
+ * The vaults in the sidebar: with more than VAULTS_FIT the list scrolls in its own area (thin scrollbar). The search
+ * (magnifier in the section header, vaultFinder) filters the rows in place, so its field keeps the focus while typing.
  */
+let filterVaults = () => {};
 function vaultList(rows) {
   const many = rows.length > VAULTS_FIT;
   const list = h('div', { class: `sidebar-vaults ${many ? 'many' : ''}` }, ...rows);
   const empty = h('p', { class: 'muted small pad', hidden: true }, t('Kein Tresor gefunden'));
   const apply = () => {
-    const q = many ? ui.vaultQuery.trim().toLowerCase() : '';
+    const q = ui.vaultQuery.trim().toLowerCase();
     let shown = 0;
     for (const row of rows) {
       const name = row.querySelector('.nav-label')?.textContent.toLowerCase() || '';
@@ -984,18 +991,59 @@ function vaultList(rows) {
     empty.hidden = shown > 0;
   };
   apply();
-  if (!many) return list;
-  const input = h('input', { type: 'search', placeholder: t('Tresore suchen'), 'aria-label': t('Tresore suchen'), value: ui.vaultQuery, oninput: (e) => {
-    ui.vaultQuery = e.target.value;
-    apply();
-  } });
-  return h('div', { class: 'vault-block' }, h('div', { class: 'search vault-search' }, icon('search', 14), input), list, empty);
+  filterVaults = apply;
+  return h('div', { class: 'vault-block' }, list, empty);
+}
+
+/** Vault search: a quiet magnifier in the "Vaults" header; the field slides open on hover or click, Esc clears it. */
+function vaultFinder() {
+  const box = h('span', { class: `vault-find ${ui.vaultQuery ? 'open' : ''}` });
+  const input = h('input', { type: 'search', placeholder: t('Tresore suchen'), 'aria-label': t('Tresore suchen'), value: ui.vaultQuery,
+    oninput: (e) => {
+      ui.vaultQuery = e.target.value;
+      box.classList.toggle('open', !!ui.vaultQuery);
+      filterVaults();
+    },
+    onkeydown: (e) => {
+      if (e.key !== 'Escape') return;
+      input.value = '';
+      ui.vaultQuery = '';
+      filterVaults();
+      box.classList.remove('open');
+      input.blur();
+    } });
+  input.addEventListener('blur', () => { if (!input.value) box.classList.remove('open'); });
+  const button = iconButton('search', t('Tresore suchen'), () => { box.classList.add('open'); input.focus(); });
+  box.append(input, button);
+  return box;
 }
 
 const adminMode = () => st?.settings?.adminTools === true;
+// Admin mode: the switch at the bottom of the sidebar shows either the passwords (logins, notes, cards, …) or the
+// devices – cleanly apart, the list head says which.
+const deviceMode = () => adminMode() && ui.devices;
 
-/** Type pills above the list (only the kinds that occur, and only when there is more than one). Admin mode: "Devices". */
+/** Sidebar bottom (admin mode): "Passwords | Devices" in the segment style of the menu. */
+function modeSwitch() {
+  const choose = (devices) => {
+    if (ui.devices === devices) return;
+    ui.devices = devices;
+    ui.type = '';
+    ui.selected = null;
+    ui.editing = null;
+    ui.multi.clear();
+    renderSidebar();
+    renderList();
+    renderDetail();
+  };
+  const b = (devices, iconName, label) => h('button', { type: 'button', role: 'radio', 'aria-checked': String(ui.devices === devices), class: ui.devices === devices ? 'on' : '',
+    dataset: { mode: devices ? 'devices' : 'items' }, onclick: () => choose(devices) }, icon(iconName, 14), label);
+  return h('div', { class: 'seg mode-switch', role: 'radiogroup', 'aria-label': t('Anzeigen') }, b(false, 'key', t('Passwörter')), b(true, 'external', t('Geräte')));
+}
+
+/** Type pills above the list (only the kinds that occur, and only when there is more than one; not for devices). */
 function typePills(base) {
+  if (deviceMode()) return null;
   const kinds = [
     ['login', t('Logins'), (i) => i.type === 'login'],
     ['passkey', t('Passkeys'), (i) => i.rpIds.length > 0],
@@ -1003,14 +1051,13 @@ function typePills(base) {
     ['card', t('Karten'), (i) => i.type === 'card'],
     ['certificate', t('Zertifikate'), (i) => i.type === 'certificate'],
   ].filter(([key, , test]) => !(key === 'passkey' && ui.view === 'passkeys' && !ui.containerId) && base.some(test));
-  if (adminMode()) kinds.push(['device', t('Geräte'), TYPE_TESTS.device]);
   if (kinds.length < 2) return null;
   const pill = (key, label) => h('button', { type: 'button', role: 'tab', class: `pill ${ui.type === key ? 'on' : ''}`, 'aria-selected': String(ui.type === key), dataset: { type: key },
     onclick: () => { ui.type = key; renderList(); } }, label);
   return h('div', { class: 'pills', role: 'tablist', 'aria-label': t('Filter') }, pill('', t('Alle')), ...kinds.map(([key, label]) => pill(key, label)));
 }
 
-const TYPE_TESTS = { device: (i) => i.type === 'server', login: (i) => i.type === 'login', passkey: (i) => i.rpIds.length > 0, note: (i) => i.type === 'note', card: (i) => i.type === 'card', certificate: (i) => i.type === 'certificate' };
+const TYPE_TESTS = { login: (i) => i.type === 'login', passkey: (i) => i.rpIds.length > 0, note: (i) => i.type === 'note', card: (i) => i.type === 'card', certificate: (i) => i.type === 'certificate' };
 
 async function refresh() {
   try {
@@ -1026,10 +1073,10 @@ async function refresh() {
 // ---------------------------------------------------------------- list
 
 function visibleItems({ ignoreType = false } = {}) {
-  if (ui.type === 'device' && !adminMode()) ui.type = '';
-  // Devices only in their own tab (admin mode); everywhere else the list holds the entries people sign in with.
-  let list = ui.type === 'device' && !ignoreType ? items : items.filter((i) => i.type !== 'server');
-  if (!ignoreType && ui.type && TYPE_TESTS[ui.type]) list = list.filter(TYPE_TESTS[ui.type]);
+  if (ui.devices && !adminMode()) ui.devices = false;
+  // Devices only with the switch on "Devices" (admin mode); otherwise the list holds the entries people sign in with.
+  let list = deviceMode() ? items.filter((i) => i.type === 'server') : items.filter((i) => i.type !== 'server');
+  if (!deviceMode() && !ignoreType && ui.type && TYPE_TESTS[ui.type]) list = list.filter(TYPE_TESTS[ui.type]);
   const q = ui.query.trim().toLowerCase();
   // Search scope: the current vault (default) or, switched to "All", every vault.
   const global = !!q && ui.searchAll;
@@ -1179,14 +1226,14 @@ function renderList() {
     call('protectionInfo', container.id).then((info) => {
       panes.list.querySelector('.list-scroll').replaceChildren(info.secure
         ? secureUnlockPanel(container, info)
-        : unlockPanel(container, info, protectCtx, async () => { await reloadAll(); if (container.personal && !st.settings.personalDeviceKey) personalPinPrompt(); }));
+        : unlockPanel(container, info, protectCtx, async () => { await reloadAll(); if (container.personal && !(await call('personalBound', container.id).catch(() => true))) personalPinPrompt(); }));
     }, (e) => panes.list.querySelector('.list-scroll').replaceChildren(notice(e.message)));
     return;
   }
 
   // "New" at the top right of the list: a click creates a login, the arrow offers the other kinds and a folder.
   const newButton = h('span', { class: 'new-split' },
-    h('button', { type: 'button', class: 'new-main', title: t('Neuer Eintrag (Strg+N)'), onclick: () => (ui.type === 'device' && adminMode() ? newItem('server', { type: 'server', server: { kind: 'server' } }) : newItem('login')) },
+    h('button', { type: 'button', class: 'new-main', title: t('Neuer Eintrag (Strg+N)'), onclick: () => (deviceMode() ? newItem('server', { type: 'server', server: { kind: 'windows' } }) : newItem('login')) },
       h('span', { class: 'new-plus' }, icon('plus', 15)), t('Neu')),
     h('button', { type: 'button', class: 'new-more', title: t('Was anlegen?'), 'aria-label': t('Was anlegen?'), onclick: (e) => {
       const r = e.currentTarget.closest('.new-split').getBoundingClientRect();
@@ -1195,7 +1242,7 @@ function renderList() {
   topActions.replaceChildren();
   setChildren(panes.list,
     h('div', { class: 'list-head' }, container && logos.get(container.id) ? h('img', { class: 'container-logo large', src: logos.get(container.id), alt: '' }) : null,
-      listTitle(title, container), newButton),
+      listTitle(title, container), deviceMode() ? h('span', { class: 'mode-badge', title: t('Es werden Geräte angezeigt – unten links auf „Passwörter“ umschalten') }, icon('external', 13), t('Geräte')) : null, newButton),
     container?.error ? notice(container.error.status !== 403 ? container.error.message
       : container.rbac === false
         ? t('{message}. Dieser Key Vault nutzt Zugriffsrichtlinien statt Azure RBAC: Stelle ihn unter „Zugriffskonfiguration“ auf „Azure RBAC“ um oder lege eine Zugriffsrichtlinie für dein Konto an.', { message: container.error.message })
@@ -1253,7 +1300,8 @@ function renderList() {
         field?.setSelectionRange(field.value.length, field.value.length);
       },
     }, label))) : null;
-  search.placeholder = container ? (ui.searchAll ? t('Alle Tresore durchsuchen') : t('In „{vault}“ suchen', { vault: container.name })) : t('Suchen (Titel, Benutzer, Website, Ordner)');
+  search.placeholder = deviceMode() ? t('Geräte suchen (Name, Adresse, Ordner)')
+    : container ? (ui.searchAll ? t('Alle Tresore durchsuchen') : t('In „{vault}“ suchen', { vault: container.name })) : t('Suchen (Titel, Benutzer, Website, Ordner)');
   topSearch.replaceChildren(h('div', { class: `search ${scope ? 'with-scope' : ''}` }, icon('search'), search, scope || h('kbd', { 'aria-hidden': 'true' }, t('Strg F'))));
   renderRows();
   if (container && !container.error) {
@@ -1402,8 +1450,7 @@ function newMenuItems(container) {
     '-',
     // Devices (server, Azure VM) only with the admin tools on.
     ...(adminMode() ? [
-      { action: 'new-server', icon: 'external', label: t('Neuer Server'), onClick: () => newItem('server', { type: 'server', server: { kind: 'server' } }) },
-      { action: 'new-azurevm', icon: 'globe', label: t('Neue Azure-VM (Bastion)'), onClick: () => newItem('server', { type: 'server', server: { kind: 'azurevm' } }) },
+      { action: 'new-server', icon: 'external', label: t('Neue VM / neuer Server'), onClick: () => newItem('server', { type: 'server', server: { kind: 'windows' } }) },
     ] : []),
     { action: 'new-microsoft', icon: 'globe', label: t('Neuer Microsoft-Login'), onClick: () => newItem('login', entryTemplate('microsoft', { msAdmin: st?.settings?.adminTools === true })) },
     { action: 'new-ad', icon: 'user', label: t('Neuer Active-Directory-Logon'), onClick: () => newItem('login', entryTemplate('ad')) },
@@ -2635,7 +2682,7 @@ async function renderDetail() {
 
 /** Logins a server entry can link to (accounts for RDP, TeamViewer, Bastion); Microsoft admin accounts marked. */
 const linkOptions = () => items.filter((i) => i.type === 'login')
-  .map((i) => ({ key: i.key, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin }))
+  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin }))
   .sort((a, b) => a.title.localeCompare(b.title));
 
 function linkTitle(key) {
@@ -2647,6 +2694,8 @@ async function connectServer(containerId, id, method) {
   try {
     const r = await call('connectServer', { containerId, id, method });
     if (method === 'rdp') toast(r.prompt ? t('Remotedesktop gestartet – bitte dort anmelden') : t('Remotedesktop gestartet'));
+    else if (method === 'ssh') toast(r.copied ? t('SSH gestartet – das Passwort liegt in der Zwischenablage (im Terminal mit Rechtsklick einfügen)') : t('SSH gestartet'));
+    else if (method === 'mgmt') toast(t('Verwaltungsseite im Browser geöffnet'));
     else if (method === 'teamviewer') toast(r.copied ? t('TeamViewer geöffnet – das Passwort liegt in der Zwischenablage') : t('TeamViewer gestartet'));
     else toast(r.signIn ? t('Bastion geöffnet – die Browser-Erweiterung meldet dich an') : t('Bastion geöffnet – ohne Browser-Erweiterung bitte selbst anmelden'));
   } catch (e) {
@@ -2845,7 +2894,9 @@ function containerMenu() {
     onClick();
   } }, icon(iconName, 20), h('div', {}, h('b', {}, title), h('div', { class: 'muted small' }, text)));
   const { close } = modal(t('Tresor hinzufügen'), h('div', {},
-    st.settings.personalVault ? null : option('user', t('Persönlicher Tresor (kostenlos)'), t('Nur für dich, verschlüsselt in deinem OneDrive (oder einem anderen synchronisierten Ordner bzw. Netzlaufwerk). Masterpasswort, App-PIN, optional FIDO-Stick.'), personalWizard),
+    (st.settings.personalVaults || []).length
+      ? option('user', t('Weiterer persönlicher Tresor (kostenlos)'), t('Zum Beispiel privat und geschäftlich getrennt – Einträge lassen sich zwischen deinen persönlichen Tresoren frei verschieben.'), personalWizard)
+      : option('user', t('Persönlicher Tresor (kostenlos)'), t('Nur für dich, verschlüsselt in deinem OneDrive (oder einem anderen synchronisierten Ordner bzw. Netzlaufwerk). Masterpasswort, App-PIN, optional FIDO-Stick.'), personalWizard),
     option('note', t('Neuer Datei-Tresor'), t('Verschlüsselte Datei wie bei KeePass, abgesichert mit Passkey und/oder Masterpasswort.'), createFileDialog),
     option('folder', t('Datei-Tresor öffnen'), t('Vorhandene .kvpws-Datei, z. B. von einem Netzlaufwerk.'), openFile),
     option('link', t('Vorhandenen Key Vault hinzufügen'), st.signedIn
@@ -2889,7 +2940,8 @@ function fileRiskBox() {
  * key. The vault is free and for one person only.
  */
 async function personalWizard() {
-  const s = { step: 0, info: null, mode: 'create', id: null, recoveryKey: null };
+  const more = (st.settings.personalVaults || []).length > 0;
+  const s = { step: 0, info: null, mode: 'create', id: null, recoveryKey: null, name: more ? '' : t('Persönlich') };
   const body = h('div', { class: 'wizard' });
   const { close } = modal(t('Persönlicher Tresor'), body, []);
   const steps = [t('Start'), t('Speicherort'), t('Schutz'), t('FIDO-Stick'), t('Fertig')];
@@ -2931,22 +2983,31 @@ async function personalWizard() {
         h('ul', { class: 'wizard-points' },
           h('li', {}, t('Verschlüsselt mit deinem Masterpasswort – niemand sonst kann ihn öffnen, auch kein Admin.')),
           h('li', {}, t('Im Alltag entsperrst du mit deiner App-PIN; optional zusätzlich mit einem FIDO-Stick.')),
-          h('li', {}, t('Nicht teilbar und ohne Lizenz.'))),
-        buttons(btn(t('Abbrechen'), () => close()), btn(t('Weiter'), async () => { s.info = await call('personalInfo'); go(1); }, { primary: true })),
+          h('li', {}, t('Nicht teilbar und ohne Lizenz.')),
+          more ? h('li', {}, t('Mehrere persönliche Tresore (z. B. privat und geschäftlich) – Einträge verschiebst du zwischen ihnen frei.')) : null),
+        field(t('Name'), h('input', { class: 'wiz-name', value: s.name, placeholder: t('z. B. Privat oder Geschäft'), oninput: (e) => { s.name = e.target.value; } })),
+        buttons(btn(t('Abbrechen'), () => close()), btn(t('Weiter'), async () => {
+          s.name = s.name.trim();
+          if (!s.name) throw new Error(t('Bitte einen Namen eingeben'));
+          if (st.containers.some((c) => c.personal && c.name.toLowerCase() === s.name.toLowerCase())) throw new Error(t('Es gibt schon einen persönlichen Tresor mit diesem Namen'));
+          s.info = await call('personalInfo', s.name);
+          go(1);
+        }, { primary: true })),
       ];
     } else if (s.step === 1) {
       const info = s.info;
-      const ok = info?.folder && info.location && REMOTE_KINDS.includes(info.location.kind);
+      const ok = info?.folder && info.location && REMOTE_KINDS.includes(info.location.kind) && !info.added;
       content = [
         h('p', {}, t('Speicherort der Datei:')),
         h('div', { class: 'wizard-path' }, icon('folder', 16), h('code', {}, info?.path || '–')),
         locationLine(info),
-        info?.exists ? h('div', { class: 'wizard-choice' },
+        info?.added ? notice(t('Dieser persönliche Tresor ist schon eingebunden – bitte einen anderen Namen oder Ordner wählen.'), 'warn') : null,
+        info?.exists && !info.added ? h('div', { class: 'wizard-choice' },
           h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'pmode', checked: s.mode === 'use', onchange: () => { s.mode = 'use'; } }), t('Bestehenden Tresor verwenden (dort liegt schon einer)')),
           h('label', { class: 'inline muted' }, h('input', { type: 'radio', name: 'pmode', disabled: true }), t('Neu erstellen – dafür einen anderen Ordner wählen'))) : null,
         buttons(
           btn(t('Zurück'), () => go(0)),
-          btn(t('Anderen Ordner wählen …'), async () => { const r = await call('choosePersonalFolder'); if (r) { s.info = r; s.mode = r.exists ? 'use' : 'create'; draw(); } }),
+          btn(t('Anderen Ordner wählen …'), async () => { const r = await call('choosePersonalFolder', s.name); if (r) { s.info = r; s.mode = r.exists ? 'use' : 'create'; draw(); } }),
           btn(t('Weiter'), () => { s.mode = info.exists ? 'use' : 'create'; go(2); }, { primary: true, disabled: !ok })),
       ];
     } else if (s.step === 2) {
@@ -2962,7 +3023,7 @@ async function personalWizard() {
           if (pw.value.length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
           if (pw.value !== pw2.value) throw new Error(t('Die Passwörter stimmen nicht überein'));
           const pin = await ensurePin(pf);
-          const r = await call('createPersonal', { folder: s.info.folder, password: pw.value, pin });
+          const r = await call('createPersonal', { folder: s.info.folder, password: pw.value, pin, name: s.name });
           s.id = r.id;
           s.recoveryKey = r.recoveryKey;
           await reloadAll();
@@ -2974,7 +3035,7 @@ async function personalWizard() {
         pf.el,
         buttons(btn(t('Zurück'), () => go(1)), btn(t('Verwenden und entsperren'), async () => {
           const pin = await ensurePin(pf);
-          const r = await call('usePersonal', { folder: s.info.folder });
+          const r = await call('usePersonal', { folder: s.info.folder, name: s.name });
           s.id = r.id;
           await call('unlockContainer', r.id, { password: pw.value });
           await call('bindPersonalWithPin', pin);
