@@ -4,7 +4,7 @@
 import { app, BrowserWindow, ipcMain, shell, clipboard, dialog, powerMonitor, protocol, net, nativeTheme, session, Tray, Menu, nativeImage, globalShortcut, Notification, safeStorage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { statSync, readFileSync } from 'node:fs';
+import { statSync, readFileSync, rmSync } from 'node:fs';
 import { spawn, execFile as execFileCb } from 'node:child_process';
 import crypto from 'node:crypto';
 import { randomUUID } from 'node:crypto';
@@ -14,6 +14,7 @@ import { Config } from './config.js';
 import { FileContainers } from './files.js';
 import { hashPin, verifyPin, PinGuard, MIN_PIN_LENGTH } from './pin.js';
 import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.js';
+import { featureChecks } from './smoke-features.js';
 import { totpCode } from '../extension/core/totp.js';
 import { BrowserBridge, launchPath, pipePath, registerNativeHost, unregisterNativeHost } from './bridge.js';
 import { Updater, UPDATE_MODES } from './updater.js';
@@ -64,6 +65,8 @@ if (!app.isPackaged) process.env.KVPWSAFE_DEV_PIPE = '1';
 if (demo) {
   // Separate profile so that the demo never touches real settings, tokens or files.
   app.setPath('userData', path.join(app.getPath('temp'), `kvpwsafe-demo-${process.pid}`));
+  // Smoke runs start empty: Windows reuses process IDs, and files of an earlier run ("file exists") broke the flows.
+  if (smokeTest) rmSync(app.getPath('userData'), { recursive: true, force: true });
   process.env.KVPWSAFE_TENANT_ID = 'demo';
   process.env.KVPWSAFE_CLIENT_ID = 'demo';
 }
@@ -515,16 +518,27 @@ async function refreshFileLocations() {
 }
 
 const defaultPersonalFolder = () => process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer || null;
+const personalPaths = () => config.get().personalVaults || [];
 
-/** Where the personal vault would go (default: OneDrive root) and whether a vault file is already there. */
-async function personalInfo(folder = defaultPersonalFolder()) {
+/**
+ * File of a personal vault: the first one is Keevault-Persoenlich.kvpws, more (e.g. "Geschäft") get their name in it –
+ * Keevault-Geschaeft.kvpws – so several personal vaults live side by side in the same OneDrive.
+ */
+function personalFileName(name) {
+  const slug = String(name || '').trim().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/Ä/g, 'Ae').replace(/Ö/g, 'Oe').replace(/Ü/g, 'Ue').replace(/ß/g, 'ss')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  return !slug || slug === 'Persoenlich' ? PERSONAL_FILE : `Keevault-${slug}.kvpws`;
+}
+
+/** Where a personal vault would go (default: OneDrive root) and whether a vault file is already there. */
+async function personalInfo(folder = defaultPersonalFolder(), name = '') {
   const s = config.get();
-  const filePath = folder ? path.join(folder, PERSONAL_FILE) : null;
+  const filePath = folder ? path.join(folder, personalFileName(name)) : null;
   let exists = false;
   if (filePath) {
     try { exists = (await fs.stat(filePath)).isFile(); } catch { /* none yet */ }
   }
-  return { folder, path: filePath, exists, location: folder ? await locate(folder) : null, configured: s.personalVault || null, pinSet: !!s.appPin };
+  return { folder, name, path: filePath, exists, added: !!filePath && personalPaths().includes(filePath), location: folder ? await locate(folder) : null, configured: personalPaths(), pinSet: !!s.appPin };
 }
 
 function requirePersonalLocation(info) {
@@ -534,42 +548,48 @@ function requirePersonalLocation(info) {
   }
 }
 
-async function createPersonal({ folder, password, pin }) {
+async function createPersonal({ folder, password, pin, name = '' }) {
   requireOpen();
   if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
   await api.verifyPin(String(pin || '')); // the PIN binds the key on this device
   if (String(password || '').length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
-  const info = await personalInfo(folder || defaultPersonalFolder());
+  const info = await personalInfo(folder || defaultPersonalFolder(), name);
   requirePersonalLocation(info);
   if (info.exists) throw new Error(t('Dort liegt schon ein persönlicher Tresor – „Bestehenden verwenden“ wählen.'));
-  const r = await files.create(info.path, t('Persönlich'), { password }, actor());
-  config.update({ personalVault: info.path });
+  const r = await files.create(info.path, String(name || '').trim() || t('Persönlich'), { password }, actor());
+  config.update({ personalVaults: [...personalPaths().filter((p) => p !== info.path), info.path] });
   fileLocations.set(info.path, await locate(info.path) || info.location);
-  await bindPersonalKey({ force: true }).catch(() => {});
+  await bindPersonalKey(personalEntries().find((e) => e.path === info.path), { force: true }).catch(() => {});
   changed();
   return { id: r.id, recoveryKey: r.recoveryKey };
 }
 
-async function usePersonal({ folder }) {
+async function usePersonal({ folder, name = '' }) {
   requireOpen();
   if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
-  const info = await personalInfo(folder || defaultPersonalFolder());
+  const info = await personalInfo(folder || defaultPersonalFolder(), name);
   requirePersonalLocation(info);
   if (!info.exists) throw new Error(t('Dort liegt kein persönlicher Tresor.'));
+  if (info.added) throw new Error(t('Dieser persönliche Tresor ist schon eingebunden.'));
   const id = await files.open(info.path);
-  config.update({ personalVault: info.path, personalDeviceKey: null });
+  const { [info.path]: _old, ...keys } = config.get().personalDeviceKeys || {};
+  config.update({ personalVaults: [...personalPaths(), info.path], personalDeviceKeys: keys });
   fileLocations.set(info.path, await locate(info.path) || info.location);
   changed();
   return { id };
 }
 
-const personalEntry = () => [...(files?.entries?.values() || [])].find((e) => e.path && e.path === config.get().personalVault);
+const personalEntries = () => [...(files?.entries?.values() || [])].filter((e) => e.path && personalPaths().includes(e.path));
 
-/** Stores the unlocked personal vault key for this device: PIN-derived AES-GCM, then DPAPI (Windows account). */
-async function bindPersonalKey({ force = false } = {}) {
-  const entry = personalEntry();
+/** Binds every unlocked personal vault (force: also those bound before, e.g. after a PIN change). */
+async function bindPersonalKeys({ force = false } = {}) {
+  for (const entry of personalEntries()) await bindPersonalKey(entry, { force });
+}
+
+/** Stores an unlocked personal vault's key for this device: PIN-derived AES-GCM, then DPAPI (Windows account). */
+async function bindPersonalKey(entry, { force = false } = {}) {
   if (!entry?.vault || entry.vault.locked || !entry.vault.ck?.raw) return;
-  if (!force && config.get().personalDeviceKey) return;
+  if (!force && config.get().personalDeviceKeys?.[entry.path]) return;
   if (!recentPin || Date.now() - recentPin.at > 10 * 60_000 || !safeStorage.isEncryptionAvailable()) return;
   const salt = crypto.randomBytes(16);
   const key = crypto.pbkdf2Sync(recentPin.pin, salt, 310_000, 32, 'sha256');
@@ -578,13 +598,22 @@ async function bindPersonalKey({ force = false } = {}) {
   cipher.setAAD(Buffer.from(`keevault-personal|${entry.id}`));
   const ct = Buffer.concat([cipher.update(Buffer.from(entry.vault.ck.raw)), cipher.final(), cipher.getAuthTag()]);
   const blob = JSON.stringify({ v: 1, vault: entry.id, salt: salt.toString('base64'), iv: iv.toString('base64'), ct: ct.toString('base64') });
-  config.update({ personalDeviceKey: safeStorage.encryptString(blob).toString('base64') });
+  config.update({ personalDeviceKeys: { ...config.get().personalDeviceKeys, [entry.path]: safeStorage.encryptString(blob).toString('base64') } });
 }
 
-/** A correct PIN unlocks the personal vault on this device (when its key was bound here before). */
+/** A correct PIN unlocks every personal vault on this device whose key was bound here before. */
 async function unlockPersonalWithPin(pin) {
-  const stored = config.get().personalDeviceKey;
-  const entry = personalEntry();
+  for (const entry of personalEntries()) {
+    try {
+      await unlockPersonalEntry(entry, pin);
+    } catch (e) {
+      diag(`PERSONAL pin unlock failed (${path.basename(entry.path)}): ${e.message}`);
+    }
+  }
+}
+
+async function unlockPersonalEntry(entry, pin) {
+  const stored = config.get().personalDeviceKeys?.[entry.path];
   if (!stored || !entry?.vault || !entry.vault.locked) return;
   const blob = JSON.parse(safeStorage.decryptString(Buffer.from(stored, 'base64')));
   if (blob.vault !== entry.id) return;
@@ -604,18 +633,21 @@ function helperExe() {
   return candidates.find((p) => { try { return statSync(p).isFile(); } catch { return false; } }) || null;
 }
 
-/** Clipboard with history/cloud markers through the own helper (stdin, no command line, no window). */
-function copyViaHelperExe(text) {
+/** Runs the own helper in one mode with the text on stdin (no command line, no window); its exit code, null if missing. */
+function runHelperExe(mode, text) {
   const exe = helperExe();
-  if (!exe) return Promise.resolve(false);
+  if (!exe) return Promise.resolve(null);
   return new Promise((resolve) => {
-    const child = spawn(exe, ['--clipboard'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
-    const timer = setTimeout(() => { child.kill(); resolve(false); }, 4000);
-    child.on('error', () => { clearTimeout(timer); resolve(false); });
-    child.on('exit', (code) => { clearTimeout(timer); resolve(code === 0); });
+    const child = spawn(exe, [mode], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    const timer = setTimeout(() => { child.kill(); resolve(null); }, 4000);
+    child.on('error', () => { clearTimeout(timer); resolve(null); });
+    child.on('exit', (code) => { clearTimeout(timer); resolve(code); });
     child.stdin.end(Buffer.from(text, 'utf8'));
   });
 }
+
+/** Clipboard with history/cloud markers, read back by the helper itself: true only when the text arrived. */
+const copyViaHelperExe = (text) => runHelperExe('--clipboard', text).then((code) => code === 0);
 
 /**
  * Auto-type through the own helper (stdin, no command line, no window). App Control policies put PowerShell into
@@ -682,6 +714,13 @@ const splitEntryKey = (key) => {
 };
 
 /** Account of a server connection: the linked entry, else the server entry's own user name and password. */
+/** Linked accounts of a device must lie in the device's own vault (same readers – no access through the back door). */
+function checkDeviceLinks(containerId, s) {
+  for (const link of [s.rdpLink, s.tvLink, s.bastionLoginLink, s.bastionVmLink]) {
+    if (link && splitEntryKey(link)[0] !== containerId) throw new Error(t('Verknüpfte Einträge müssen im selben Tresor liegen wie das Gerät.'));
+  }
+}
+
 async function serverAccount(item, link) {
   if (link) {
     try {
@@ -691,6 +730,24 @@ async function serverAccount(item, link) {
     }
   }
   return { username: item.username, password: item.password };
+}
+
+/**
+ * SSH in its own console window (Windows OpenSSH client, no shell in between). ssh takes no password on the command
+ * line: it goes to the clipboard (history/cloud markers, cleared after the set time) for pasting at the prompt.
+ * Host and user are checked strictly – nothing that ssh could read as an option or a shell could interpret.
+ */
+async function launchSsh(host, port, username, password) {
+  if (!/^[\w[][\w.:[\]-]*$/.test(host)) throw new Error(t('Ungültige Serveradresse'));
+  if (username && !/^[\w.@\\-]+$/.test(username)) throw new Error(t('Ungültiger Benutzername für SSH'));
+  if (smokeTest) return { copied: !!password };
+  if (process.platform !== 'win32') throw new Error(t('SSH-Verbindungen gibt es zurzeit nur unter Windows.'));
+  const exe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe');
+  try { statSync(exe); } catch { throw new Error(t('OpenSSH-Client nicht gefunden – unter Einstellungen → System → Optionale Features „OpenSSH-Client“ hinzufügen.')); }
+  // detached: a console program gets its own window on Windows.
+  spawn(exe, [...(username ? ['-l', username] : []), '-p', String(port || 22), host], { detached: true, stdio: 'ignore' }).unref();
+  if (password) await copyToClipboard(password);
+  return { copied: !!password };
 }
 
 /**
@@ -771,39 +828,40 @@ async function otherInstallation() {
 }
 
 async function copyToClipboard(text) {
-  if (process.platform === 'win32' && !smokeTest && !demo) {
-    // The helper is a PowerShell process; endpoint protection may block or stall it (Sophos, 2026-10-31) – then
-    // copy plainly after 1.5 s instead of hanging without any feedback.
-    // Order: the PowerShell helper (warm, fast); if it is blocked (endpoint protection, Constrained Language Mode),
-    // Keevault-Update.exe --clipboard (windows/Setup/Clip.cs) sets the same markers. Only if both fail the text goes
-    // to the clipboard without them – noted in the diagnostics log.
-    let ok = !psClipboardBlocked && await Promise.race([copySecret(text).then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 1500))]);
-    if (!ok && !psClipboardBlocked) {
-      psClipboardBlocked = true;
-      diag('COPY PowerShell helper unavailable – using Keevault-Update.exe');
-    }
-    if (!ok) ok = await copyViaHelperExe(text);
-    if (!ok) {
-      diag('COPY no helper – plain clipboard (without history/cloud markers)');
-      clipboard.writeText(text);
+  // Windows: Keevault-Update.exe --clipboard (windows/Setup/Clip.cs) writes with the history/cloud markers and reads
+  // the text back itself. Electron's clipboard.readText() returns nothing on some machines (2026-11-01: every copy
+  // reported "clipboard not available" although it had worked) – so it decides nothing here any more.
+  // Without the helper (development without windows/out): the PowerShell helper, which App Control or endpoint
+  // protection may block (then after 1.5 s), and last the plain clipboard without markers – noted in the log.
+  let verified = false;
+  if (process.platform === 'win32') {
+    const code = await runHelperExe('--clipboard', text);
+    verified = code === 0;
+    if (!verified) {
+      diag(`COPY Keevault-Update.exe ${code === null ? 'unavailable' : `exit ${code}`} – fallback`);
+      const ps = !smokeTest && !demo && !psClipboardBlocked
+        && await Promise.race([copySecret(text).then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 1500))]);
+      if (!ps) {
+        psClipboardBlocked = true;
+        diag('COPY plain clipboard (without history/cloud markers)');
+        clipboard.writeText(text);
+      }
     }
   } else {
     clipboard.writeText(text);
   }
-  // Read back with a few retries: right after the helper wrote it, clipboard history or endpoint protection may
-  // still hold the clipboard open – a read then returns '' although the copy succeeded (2026-11-01).
-  let copied = false;
-  for (let i = 0; i < 10 && !(copied = clipboard.readText() === text); i++) await new Promise((r) => setTimeout(r, 50));
-  if (!copied) {
-    diag('COPY read-back failed – writing plainly');
-    clipboard.writeText(text);
-    if (clipboard.readText() !== text) throw new Error(t('Die Zwischenablage ist nicht verfügbar.'));
+  if (!verified) {
+    // Electron's read-back: only another text counts as failure – an empty or missing result says nothing.
+    const back = clipboard.readText();
+    if (typeof back === 'string' && back && back !== text) throw new Error(t('Die Zwischenablage ist nicht verfügbar.'));
   }
   clearTimeout(clipboardTimer);
   const seconds = Number(config.get().clipboardSeconds) || 0;
   if (seconds > 0) {
-    clipboardTimer = setTimeout(() => {
-      if (clipboard.readText() === text) clipboard.clear();
+    // Cleared only if it still holds this text (something copied since stays) – compared by the helper on Windows.
+    clipboardTimer = setTimeout(async () => {
+      const code = process.platform === 'win32' ? await runHelperExe('--clipboard-clear', text) : null;
+      if (code === null && clipboard.readText() === text) clipboard.clear();
     }, seconds * 1000);
   }
 }
@@ -1450,7 +1508,7 @@ const api = {
     if (!next) await offlineMirror().remove().catch(() => {});
     if (next == null) {
       if (s.requirePin) throw new Error(t('Eure Organisation verlangt eine PIN'));
-      if (s.personalVault) throw new Error(t('Der persönliche Tresor braucht eine App-PIN'));
+      if (personalPaths().length) throw new Error(t('Der persönliche Tresor braucht eine App-PIN'));
       config.update({ appPin: null });
       return api.state();
     }
@@ -1459,7 +1517,7 @@ const api = {
     // The personal vault key on this device is bound to the PIN: re-bind it to the new one (or drop it while locked –
     // then the master password is asked once).
     recentPin = { pin: String(next), at: Date.now() };
-    await bindPersonalKey({ force: true }).catch(() => config.update({ personalDeviceKey: null }));
+    await bindPersonalKeys({ force: true }).catch(() => config.update({ personalDeviceKeys: {} }));
     return api.state();
   },
   /** background: unlocked from the browser extension (PIN) – the window stays where it is. */
@@ -1587,6 +1645,7 @@ const api = {
   },
   item: (containerId, id, fresh) => vault.getItem(containerId, id, { fresh }),
   save: async (containerId, item, expectedVersion) => {
+    if (item?.type === 'server' && item.server) checkDeviceLinks(containerId, item.server);
     const saved = await vault.saveItem(containerId, item, { expectedVersion });
     config.update({ defaultContainer: containerId });
     return saved;
@@ -1985,22 +2044,27 @@ const api = {
   unlockContainer: async (containerId, params) => {
     const r = await vault.unlockContainer(containerId, params);
     // Personal vault opened with the master password: bind its key to this device and the PIN for next time.
-    if ((await vault.container(containerId).catch(() => null))?.personal) await bindPersonalKey().catch(() => {});
+    if ((await vault.container(containerId).catch(() => null))?.personal) await bindPersonalKeys().catch(() => {});
     changed();
     return r;
   },
-  personalInfo: () => personalInfo(),
-  async choosePersonalFolder() {
+  personalInfo: (name = '') => personalInfo(undefined, name),
+  async choosePersonalFolder(name = '') {
     const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: t('Ordner für den persönlichen Tresor'), properties: ['openDirectory'] });
     if (canceled || !filePaths[0]) return null;
-    return personalInfo(filePaths[0]);
+    return personalInfo(filePaths[0], name);
+  },
+  /** Whether this personal vault opens with the PIN on this device (else the renderer offers to bind it). */
+  personalBound: async (containerId) => {
+    const entry = personalEntries().find((e) => e.id === containerId);
+    return !!entry && !!config.get().personalDeviceKeys?.[entry.path];
   },
   createPersonal: (opts) => createPersonal(opts),
   usePersonal: (opts) => usePersonal(opts),
   /** After unlocking the personal vault with the master password: bind its key to this device and the PIN. */
   async bindPersonalWithPin(pin) {
     await api.verifyPin(String(pin || ''));
-    await bindPersonalKey({ force: true });
+    await bindPersonalKeys({ force: true });
     return true;
   },
   async unlockContainerPasskey(containerId) {
@@ -2266,10 +2330,21 @@ const api = {
     const item = await vault.getItem(containerId, id);
     if (item.type !== 'server') throw new Error(t('Kein Server-Eintrag'));
     const s = item.server;
+    checkDeviceLinks(containerId, s);
     if (method === 'rdp') {
       if (!s.host) throw new Error(t('Kein Server (IP oder Name) hinterlegt'));
       const account = await serverAccount(item, s.rdpLink);
       return { method, ...launchRdp(s.host, s.port, account.username, account.password) };
+    }
+    if (method === 'ssh') {
+      if (!s.host) throw new Error(t('Kein Server (IP oder Name) hinterlegt'));
+      const account = await serverAccount(item, s.rdpLink);
+      return { method, ...(await launchSsh(s.host, s.port, account.username, account.password)) };
+    }
+    if (method === 'mgmt') {
+      if (!/^https?:\/\//i.test(s.mgmtUrl)) throw new Error(t('Keine Verwaltungsseite hinterlegt'));
+      if (!smokeTest) await shell.openExternal(s.mgmtUrl);
+      return { method };
     }
     if (method === 'teamviewer') {
       if (!s.tvId) throw new Error(t('Keine TeamViewer-ID hinterlegt'));
@@ -2618,10 +2693,15 @@ app.whenReady().then(async () => {
     },
   });
   files = new FileContainers({
-    personalPath: () => config.get().personalVault || null,
+    personalPaths,
     locations: fileLocations,
     paths: () => config.get().fileContainers,
-    setPaths: (paths) => config.update({ fileContainers: paths }),
+    // A file vault taken out of the app is no longer a personal vault either (its device key goes with it).
+    setPaths: (paths) => config.update({
+      fileContainers: paths,
+      personalVaults: personalPaths().filter((p) => paths.includes(p)),
+      personalDeviceKeys: Object.fromEntries(Object.entries(config.get().personalDeviceKeys || {}).filter(([p]) => paths.includes(p))),
+    }),
     pins: () => config.get().fileIds,
     setPins: (fileIds) => config.update({ fileIds }),
     onChange: () => changed(),
@@ -2951,9 +3031,15 @@ function runSmokeTest() {
           [3, new Map([['id', new Uint8Array([7, 7, 7])], ['name', 'win@example.com']])],
           [4, [new Map([['alg', -7], ['type', 'public-key']])]],
         ]));
+        // A login with the account's user name but another address is offered as save target (and comes first).
+        const sameUserTarget = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.locked);
+        const sameUser = await vault.saveItem(sameUserTarget.id, { type: 'login', title: 'Konto ohne Adresse', username: 'WIN@example.com', password: 'x' });
         const created = windows.request('create', { request: Buffer.from(createReq).toString('base64'), transactionId: 'smoke-create' });
         await sleep(800);
         if (!(await js('!!document.querySelector("dialog[open] .unlock-head")'))) errors.push('windows: confirmation dialog missing');
+        const offered = (await windows.list()).find((p) => p.id === 'smoke-create')?.logins || [];
+        if (offered[0]?.id !== sameUser.id || !offered[0]?.sameUser) errors.push('windows: login with the same user name not offered first as save target');
+        await vault.deleteItem(sameUserTarget.id, sameUser.id);
         const target = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.locked);
         await api.windowsDecision('smoke-create', { containerId: target.id, title: 'Windows-Test' });
         const made = decode(Buffer.from((await created).response, 'base64'));
@@ -3104,6 +3190,66 @@ function runSmokeTest() {
       if (view === 'access') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=access]")?.click()');
       // Main menu screenshot also shows the optional PIM button top right.
       if (view === 'mainmenu') await js('document.documentElement.classList.add("show-admin"); document.querySelector(".menu-btn")?.click()');
+      if (view === 'devlinux' || view === 'devvmware') {
+        // New device in the form: Linux asks for SSH port and SSH account, VMware for the vSphere client (screenshot).
+        config.update({ adminTools: true });
+        changed();
+        await sleep(800);
+        await js('document.querySelector(".new-split button:last-child")?.click()');
+        await sleep(300);
+        await js('document.querySelector("[data-action=new-server]")?.click()');
+        await sleep(500);
+        const kind = view === 'devlinux' ? 'linux' : 'vmware';
+        await js(`(() => { const s = document.querySelector("select[name=srvKind]"); s.value = "${kind}"; s.dispatchEvent(new Event("change")); })()`);
+        await sleep(300);
+        const port = await js('document.querySelector("input[name=srvPort]")?.value');
+        if (view === 'devlinux' && port !== '22') errors.push(`devlinux: SSH port ${port}`);
+        await js('document.querySelector("select[name=srvKind]")?.scrollIntoView({ block: "start" })');
+        await sleep(200);
+      }
+      if (view === 'linkpick') {
+        // Device form: the linked RDP account is picked in a search window; typing filters, a click takes it.
+        try {
+          const kvc = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error && !c.locked);
+          await vault.saveItem(kvc.id, { type: 'server', title: 'PICK01', server: { host: '10.0.0.9' } });
+          const foreign = (await vault.summaries()).find((x) => x.containerId !== kvc.id && x.type === 'login');
+          if (foreign && await api.save(kvc.id, { type: 'server', title: 'X', server: { host: 'x', rdpLink: foreign.key } }).then(() => true, () => false)) {
+            errors.push('linkpick: link into another vault was saved');
+          }
+          config.update({ adminTools: true });
+          changed();
+          await sleep(800);
+          await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
+          await sleep(300);
+          await js('document.querySelector(".mode-switch [data-mode=devices]")?.click()');
+          await sleep(300);
+          await js('[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.textContent.includes("PICK01"))?.click()');
+          await sleep(500);
+          await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
+          await sleep(300);
+          await js('document.querySelector(".context-menu [data-action=edit]")?.click()');
+          await sleep(500);
+          await js('document.querySelector(".link-pick[data-name=srvRdpLink]")?.click()');
+          await sleep(300);
+          await js('(() => { const q = document.querySelector("dialog[open] .link-pick-search"); q.value = "firewall"; q.dispatchEvent(new Event("input")); })()');
+          await sleep(300);
+          const hits = await js('document.querySelectorAll("dialog[open] .link-pick-row").length');
+          if (hits !== 1) errors.push(`linkpick: search found ${hits} entries instead of 1`);
+          await js('document.querySelector("dialog[open] .link-pick-row")?.click()');
+          await sleep(300);
+          const chosen = await js('document.querySelector(".link-pick[data-name=srvRdpLink] .link-pick-text")?.textContent || ""');
+          if (!/firewall/i.test(chosen)) errors.push(`linkpick: choice not taken (${chosen})`);
+          await js('document.querySelector(".link-pick[data-name=srvBastionLogin]")?.click()');
+          await sleep(400);
+        } catch (e) {
+          errors.push(`linkpick: ${e.message}`);
+        }
+      }
+      if (view === 'vaultsearch') {
+        // Vault search opened in the sidebar header, one hit (screenshot).
+        await js('document.querySelector(".vault-find .icon-btn")?.click(); const q = document.querySelector(".vault-find input"); q.value = "Team"; q.dispatchEvent(new Event("input"))');
+        await sleep(400);
+      }
       if (view === 'mainmenu-small') {
         // Small window: the main menu ends above the bottom edge and scrolls (screenshot only).
         win.setSize(900, 560);
@@ -3207,14 +3353,16 @@ function runSmokeTest() {
         const r = await js('JSON.stringify({ folder: document.querySelector(".editor [name=folder]")?.value, title: document.querySelector(".editor input[name=title]")?.value })');
         if (!/"folder":"Monitoring"/.test(r) || !/"title":"Neuer Test"/.test(r)) errors.push(`newfolder: form did not take the folder over (${r})`);
       }
-      if (view === 'personal') {
-        // Personal vault end to end: create (master password + PIN), free, PIN unlock after lock, not shareable,
-        // nothing moved in from a shared vault, local folders refused (screenshot/smoke only).
+      if (!view || view === 'personal') {
+        // Personal vaults end to end (every smoke run): create (master password + PIN), free, PIN unlock after lock,
+        // not shareable, nothing moved in from a shared vault, local folders refused; a second one ("Geschäft") in its
+        // own file, entries move freely between the two, one PIN opens both, the same one cannot be added twice.
         try {
           const dir = path.join(app.getPath('temp'), `kv-personal-${process.pid}`);
+          await fs.rm(dir, { recursive: true, force: true });
           await fs.mkdir(dir, { recursive: true });
           process.env.KVPWSAFE_TEST_REMOTE = dir;
-          config.update({ appPin: await hashPin('2468'), pinGuard: null, personalVault: null, personalDeviceKey: null });
+          config.update({ appPin: await hashPin('2468'), pinGuard: null, personalVaults: [], personalDeviceKeys: {} });
           pinGuard.restore(null);
           const r = await createPersonal({ folder: dir, password: 'Persoenlich-Test-123!', pin: '2468' });
           if (!r.recoveryKey) errors.push('personal: no recovery key');
@@ -3223,7 +3371,7 @@ function runSmokeTest() {
           if (!(await vault.licenseState(r.id)).licensed) errors.push('personal: not free');
           await vault.saveItem(r.id, { title: 'Privat', username: 'me', password: 'x' });
           files.get(r.id).lock();
-          if (!config.get().personalDeviceKey) errors.push('personal: key not bound to the device');
+          if (!Object.keys(config.get().personalDeviceKeys || {}).length) errors.push('personal: key not bound to the device');
           await api.verifyPin('2468');
           if (files.get(r.id).locked) errors.push('personal: PIN did not unlock the vault');
           if (await files.updateKeyring(r.id, { type: 'createInvite' }, 'x').then(() => true, () => false)) errors.push('personal: invitation was allowed');
@@ -3233,8 +3381,25 @@ function runSmokeTest() {
           const local = path.join(app.getPath('temp'), `kv-local-${process.pid}`);
           await fs.mkdir(local, { recursive: true });
           if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
+          // A second personal vault: own file beside the first, free, listed as personal.
+          const biz = await createPersonal({ folder: dir, password: 'Geschaeft-Test-123!', pin: '2468', name: 'Geschäft' });
+          const bizFile = files.entries.get(biz.id)?.path || '';
+          if (path.basename(bizFile) !== 'Keevault-Geschaeft.kvpws') errors.push(`personal: second vault file ${path.basename(bizFile)}`);
+          if (config.get().personalVaults.length !== 2) errors.push(`personal: ${config.get().personalVaults.length} personal vaults listed`);
+          if (!(await vault.container(biz.id)).personal || !(await vault.licenseState(biz.id)).licensed) errors.push('personal: second vault not personal/free');
+          const privat = (await vault.summaries()).find((x) => x.containerId === r.id && x.title === 'Privat');
+          if (!privat) errors.push('personal: entry "Privat" not found');
+          else await vault.moveItem(r.id, biz.id, privat.id).catch((e) => errors.push(`personal: move between personal vaults refused (${e.message})`));
+          if (!(await vault.summaries()).some((x) => x.containerId === biz.id && x.title === 'Privat')) errors.push('personal: entry did not arrive in the second personal vault');
+          files.get(r.id).lock();
+          files.get(biz.id).lock();
+          await api.verifyPin('2468');
+          if (files.get(r.id).locked || files.get(biz.id).locked) errors.push('personal: one PIN did not open both personal vaults');
+          if (await usePersonal({ folder: dir, name: 'Geschäft' }).then(() => true, () => false)) errors.push('personal: the same personal vault added twice');
           changed();
-          await sleep(600);
+          await sleep(800);
+          const shown = await js('document.querySelectorAll(".personal-slot .nav-label").length');
+          if (shown < 2) errors.push(`personal: sidebar shows ${shown} personal vaults`);
         } catch (e) {
           errors.push(`personal: ${e.message}`);
         }
@@ -3272,6 +3437,15 @@ function runSmokeTest() {
           if (r.method !== 'bastion' || (await signInFor('x.bastion.azure.com'))?.password !== full.password) errors.push('admin: Bastion VM sign-in missing');
           if ((await api.connectServer({ containerId: kvc.id, id: saved.id, method: 'rdp' })).method !== 'rdp') errors.push('admin: RDP failed');
           if ((await api.connectServer({ containerId: kvc.id, id: saved.id, method: 'teamviewer' })).method !== 'teamviewer') errors.push('admin: TeamViewer failed');
+          // Linux: SSH instead of RDP, password to the clipboard; an address that ssh would read as an option is refused.
+          const lnx = await vault.saveItem(kvc.id, { type: 'server', title: 'LNX01', username: 'root', password: 'lnx-pw', server: { kind: 'linux', host: '10.0.0.7' } });
+          if ((await vault.getItem(kvc.id, lnx.id)).server.port !== 22 || !(await vault.summaries()).find((x) => x.id === lnx.id)?.methods.includes('ssh')) errors.push('admin: Linux device without SSH');
+          if (!(await api.connectServer({ containerId: kvc.id, id: lnx.id, method: 'ssh' })).copied) errors.push('admin: SSH failed');
+          const evil = await vault.saveItem(kvc.id, { type: 'server', title: 'EVIL', server: { kind: 'linux', host: '-oProxyCommand=calc' } });
+          if (await api.connectServer({ containerId: kvc.id, id: evil.id, method: 'ssh' }).then(() => true, () => false)) errors.push('admin: SSH option injection not refused');
+          await vault.deleteItem(kvc.id, evil.id);
+          const vm = await vault.saveItem(kvc.id, { type: 'server', title: 'VMW01', server: { kind: 'vmware', host: 'vmw01', mgmtUrl: 'https://vcenter.contoso.local' } });
+          if ((await api.connectServer({ containerId: kvc.id, id: vm.id, method: 'mgmt' })).method !== 'mgmt') errors.push('admin: vSphere page failed');
           signInJobs = [];
           config.update({ adminTools: true });
           changed();
@@ -3279,7 +3453,7 @@ function runSmokeTest() {
           await js('document.documentElement.classList.add("show-admin")');
           if (view === 'serveritem' || view === 'serveredit') await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
           await sleep(400);
-          if (view === 'serveritem' || view === 'serveredit' || view === 'admin') await js('document.querySelector(".pills [data-type=device]")?.click()');
+          if (view === 'serveritem' || view === 'serveredit' || view === 'admin') await js('document.querySelector(".mode-switch [data-mode=devices]")?.click()');
           await sleep(300);
           if (view === 'serveritem' || view === 'serveredit') {
             if (!(await js('[...document.querySelectorAll(".list li.row-item[data-key]")].some((r) => r.textContent.includes("DC01"))'))) errors.push('devices tab: DC01 missing');
@@ -3347,6 +3521,14 @@ function runSmokeTest() {
         await js('document.querySelector(".nav-section .icon-btn")?.click()');
         await sleep(300);
         await js('document.querySelectorAll("dialog[open] .option-card")[2]?.click()');
+      }
+      // Feature checks of the recent functions (desktop/smoke-features.js) – the normal run only, views keep their state.
+      if (!view) {
+        await featureChecks({
+          js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe,
+          clipboardHas: async (text) => (await runHelperExe('--clipboard-clear', text)) === 0,
+          clearSignIns: () => { signInJobs = []; },
+        }).catch((err) => errors.push(`features: ${err.stack || err.message}`));
       }
       if (view) await sleep(1200);
       // Layout check (development): KVPWSAFE_MEASURE="<selector>[,<selector>…]" prints each match's box.

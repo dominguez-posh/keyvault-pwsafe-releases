@@ -4,6 +4,26 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.4 – 2026-11-01
+- Geräte: Verknüpfte Konten (RDP, TeamViewer, Bastion) werden in einem Fenster mit Suche ausgewählt statt in einer langen Liste.
+- Geräte: Verknüpfen geht nur noch mit Einträgen im selben Tresor; die App lehnt Verweise in andere Tresore beim Speichern und Verbinden ab.
+- Kopieren: Keevault prüft selbst (eigenes Hilfsprogramm), ob der Text in der Zwischenablage angekommen ist – auf manchen Rechnern meldete die App sonst „Die Zwischenablage ist nicht verfügbar“, obwohl das Kopieren geklappt hatte. Auch das automatische Leeren nach der eingestellten Zeit funktioniert dort jetzt.
+- Mehrere persönliche Tresore (z. B. privat und geschäftlich): „+“ → „Weiterer persönlicher Tresor“, eigener Name und eigene Datei; Einträge lassen sich zwischen persönlichen Tresoren frei verschieben, die App-PIN entsperrt alle.
+- Admin-Modus: Unten in der Seitenleiste schaltet „Passwörter | Geräte“ zwischen Einträgen und Geräten um (statt eines Reiters); bei Geräten zeigt die Liste oben „Geräte“ und das Suchfeld „Geräte suchen“.
+- Tresor-Suche: Lupe in der Überschrift „Tresore“, das Suchfeld öffnet sich beim Darüberfahren (oder Klick), Esc leert es – bei jeder Anzahl Tresore.
+- Admin-Modus ein/aus wirkt sofort auf Liste (Reiter „Geräte“) und geöffneten Eintrag.
+- Geräte: Ein Menüpunkt „Neue VM / neuer Server“, der Typ wird im Eintrag gewählt – Windows-Server (RDP), Linux-Server (SSH), Azure-VM (Bastion), VMware-VM (vSphere-Client), Hyper-V-VM (Windows Admin Center) oder sonstiges Gerät; VMs mit Windows oder Linux. SSH öffnet ein Terminal, das Passwort liegt in der Zwischenablage.
+
+### English
+- Devices: linked accounts (RDP, TeamViewer, Bastion) are picked in a window with search instead of a long list.
+- Devices: links only to entries in the same vault; the app refuses links into other vaults when saving and connecting.
+- Copy: Keevault checks with its own helper that the text arrived on the clipboard – on some machines the app reported "The clipboard is not available" although copying had worked. Clearing after the set time works there now too.
+- Several personal vaults (e.g. private and business): "+" → "Another personal vault", own name and file; entries move freely between personal vaults, the app PIN unlocks all of them.
+- Admin mode: "Passwords | Devices" at the bottom of the sidebar switches between entries and devices (instead of a tab); with devices the list head shows "Devices" and the search says "Search devices".
+- Vault search: magnifier in the "Vaults" header, the field opens on hover (or click), Esc clears it – with any number of vaults.
+- Switching admin mode updates the list ("Devices" tab) and the open entry at once.
+- Devices: one menu item "New VM / server", the kind is chosen in the entry – Windows server (RDP), Linux server (SSH), Azure VM (Bastion), VMware VM (vSphere client), Hyper-V VM (Windows Admin Center) or other device; VMs run Windows or Linux. SSH opens a terminal, the password is on the clipboard.
+
 ## 0.9.3 – 2026-11-01
 - Kleines Fenster: Das Hauptmenü endet am Fensterrand und lässt sich scrollen statt abgeschnitten zu werden; zu lange Kontextmenüs ebenso.
 

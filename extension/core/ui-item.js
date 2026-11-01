@@ -1,9 +1,9 @@
 // Item detail view and editor, shared by the extension popup and the desktop app.
 
-import { h, icon, iconButton, formatDateTime, avatar, toast } from './dom.js';
+import { h, icon, iconButton, formatDateTime, avatar, toast, modal } from './dom.js';
 import { totpCode, parseTotp } from './totp.js';
 import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator.js';
-import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods, isMicrosoftLogin, DEVICE_KINDS } from './model.js';
+import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods, isMicrosoftLogin, DEVICE_KINDS, deviceOs, defaultPort } from './model.js';
 import { t } from './i18n.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 import { expiryState } from './health.js';
@@ -213,15 +213,16 @@ function serverRows(item, ctx) {
   const s = item.server;
   const rows = [];
   const methods = serverMethods(item);
-  const LABELS = { rdp: [t('Remotedesktop (RDP)'), 'external'], teamviewer: [t('TeamViewer'), 'external'], bastion: [t('Bastion im Browser'), 'globe'] };
+  const os = deviceOs(s);
+  const LABELS = { rdp: [t('Remotedesktop (RDP)'), 'external'], ssh: [t('SSH'), 'external'], teamviewer: [t('TeamViewer'), 'external'], bastion: [t('Bastion im Browser'), 'globe'], mgmt: [mgmtLabel(s.kind), 'globe'] };
   if (ctx.connect && methods.length) {
     rows.push(h('div', { class: 'field' }, h('label', {}, t('Verbinden')), h('div', { class: 'connect-row' },
       ...methods.map((m) => h('button', { type: 'button', class: 'btn small', dataset: { connect: m }, onclick: () => ctx.connect(item, m) }, icon(LABELS[m][1], 14), LABELS[m][0])))));
   }
-  if (s.host) rows.push(textField(t('Server (IP oder Name)'), s.port && s.port !== 3389 ? `${s.host}:${s.port}` : s.host, ctx));
+  if (s.host) rows.push(textField(t('Server (IP oder Name)'), s.port && s.port !== defaultPort(os) ? `${s.host}:${s.port}` : s.host, ctx));
   const link = (label, key) => h('div', { class: 'field' }, h('label', {}, label),
     h('div', { class: 'field-row' }, h('span', { class: 'value linked' }, icon('link', 14), ' ', ctx.linkTitle?.(key) || t('Verknüpfter Eintrag'))));
-  if (s.rdpLink) rows.push(link(t('RDP-Konto'), s.rdpLink));
+  if (s.rdpLink) rows.push(link(os === 'linux' ? t('SSH-Konto') : t('RDP-Konto'), s.rdpLink));
   if (s.tvId) rows.push(textField(t('TeamViewer-ID'), s.tvId, ctx));
   if (s.tvLink) rows.push(link(t('TeamViewer-Passwort'), s.tvLink));
   else if (s.tvPassword) rows.push(secretField(t('TeamViewer-Passwort'), s.tvPassword, ctx));
@@ -230,9 +231,21 @@ function serverRows(item, ctx) {
       h('a', { href: '#', class: 'url', title: s.bastionUrl, onclick: (e) => { e.preventDefault(); ctx.openUrl(s.bastionUrl); } }, s.bastionUrl),
       iconButton('copy', t('Kopieren'), () => ctx.copy(s.bastionUrl, t('Adresse'))))));
   }
+  if (s.mgmtUrl) {
+    rows.push(h('div', { class: 'field' }, h('label', {}, t('Verwaltungsseite')), h('div', { class: 'field-row' },
+      h('a', { href: '#', class: 'url', title: s.mgmtUrl, onclick: (e) => { e.preventDefault(); ctx.openUrl(s.mgmtUrl); } }, s.mgmtUrl),
+      iconButton('copy', t('Kopieren'), () => ctx.copy(s.mgmtUrl, t('Adresse'))))));
+  }
   if (s.bastionLoginLink) rows.push(link(t('Microsoft-Anmeldung (Bastion)'), s.bastionLoginLink));
   if (s.bastionVmLink) rows.push(link(t('Konto auf dem Server (Bastion)'), s.bastionVmLink));
   return rows;
+}
+
+/** Button text of a device's management page by kind. */
+function mgmtLabel(kind) {
+  if (kind === 'vmware') return t('vSphere-Client');
+  if (kind === 'hyperv') return t('Windows Admin Center');
+  return t('Verwaltungsseite');
 }
 
 function passkeyList(passkeys, ctx) {
@@ -424,18 +437,75 @@ export function itemForm(item, ctx) {
 
   // Server: links to other entries are a select over ctx.linkOptions (desktop); without them (popup) the stored
   // links are kept as they are. A link the user cannot see any more stays selected as "not available".
-  const linkSelect = (name, value, emptyLabel, options = ctx.linkOptions) => {
-    if (!options) return h('input', { type: 'hidden', name, value });
-    const known = options.some((o) => o.key === value);
-    return h('select', { name },
-      h('option', { value: '', selected: !value }, emptyLabel),
-      value && !known ? h('option', { value, selected: true }, t('Verknüpfter Eintrag (nicht verfügbar)')) : null,
-      ...options.map((o) => h('option', { value: o.key, selected: o.key === value }, [o.title, o.username, o.container].filter(Boolean).join(' · '))));
+  // Linked entry: a field showing the choice; a click opens a window with search over title, user name and vault –
+  // a plain drop-down is unusable with hundreds of entries. The element carries .value and fires "change" like a select.
+  // Only entries of the device's own vault: whoever can read the device can read its accounts – a link into another
+  // vault would hand them to people without access there (and break for everyone else).
+  const sameVault = (options) => (options || []).filter((o) => !o.containerId || o.containerId === containerSelect.value);
+  const linkPickers = [];
+  const linkSelect = (name, value, emptyLabel, allOptions = ctx.linkOptions) => {
+    if (!allOptions) return h('input', { type: 'hidden', name, value });
+    let options = sameVault(allOptions);
+    let current = value || '';
+    const label = h('span', { class: 'link-pick-text' });
+    const sub = h('span', { class: 'link-pick-sub' });
+    const field = h('button', { type: 'button', class: 'link-pick', dataset: { name }, 'aria-haspopup': 'dialog' },
+      icon('link', 14), h('span', { class: 'link-pick-main' }, label, sub), icon('search', 14));
+    const draw = () => {
+      const o = options.find((x) => x.key === current);
+      label.textContent = !current ? emptyLabel : o ? o.title : t('Verknüpfter Eintrag (nicht verfügbar)');
+      sub.textContent = o ? [o.username, o.container].filter(Boolean).join(' · ') : '';
+      sub.hidden = !sub.textContent;
+      field.classList.toggle('empty', !current);
+    };
+    const choose = (key) => {
+      current = key;
+      draw();
+      field.dispatchEvent(new Event('change'));
+    };
+    Object.defineProperty(field, 'value', { get: () => current, set: (v) => { current = v || ''; draw(); } });
+    // Another vault chosen for a new device: offer its entries, drop a link that pointed into the old one.
+    linkPickers.push(() => {
+      options = sameVault(allOptions);
+      if (current && !options.some((o) => o.key === current)) choose('');
+      else draw();
+    });
+    field.addEventListener('click', () => {
+      const search = h('input', { type: 'search', class: 'link-pick-search', placeholder: t('Eintrag suchen (Titel, Benutzer, Tresor) …'), 'aria-label': t('Eintrag suchen') });
+      const list = h('div', { class: 'link-pick-list', role: 'listbox' });
+      const row = (key, title, detail, extra) => h('button', { type: 'button', role: 'option', class: `link-pick-row ${key === current ? 'on' : ''}`, 'aria-selected': String(key === current),
+        onclick: () => { choose(key); close(); } },
+      extra, h('span', { class: 'link-pick-main' }, h('span', { class: 'link-pick-text' }, title), detail ? h('span', { class: 'link-pick-sub' }, detail) : null),
+      key === current ? icon('check', 14) : null);
+      const LIMIT = 200;
+      const fill = () => {
+        const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        const hits = options.filter((o) => words.every((w) => [o.title, o.username, o.container].join(' ').toLowerCase().includes(w)));
+        list.replaceChildren(...[
+          words.length ? null : row('', emptyLabel, '', h('span', { class: 'link-pick-none' }, icon('x', 14))),
+          ...hits.slice(0, LIMIT).map((o) => row(o.key, o.title, [o.username, o.container].filter(Boolean).join(' · '), avatar(o.title, 'avatar small'))),
+          hits.length ? null : h('p', { class: 'muted small link-pick-empty' }, t('Kein Eintrag gefunden.')),
+          hits.length > LIMIT ? h('p', { class: 'muted small link-pick-empty' }, t('{count} weitere – Suche verfeinern', { count: hits.length - LIMIT })) : null].filter(Boolean));
+      };
+      search.addEventListener('input', fill);
+      search.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        list.querySelector('.link-pick-row')?.click();
+      });
+      fill();
+      const { close } = modal(t('Eintrag verknüpfen'), h('div', { class: 'link-pick-dialog' }, search, list), [{ label: t('Abbrechen') }]);
+      setTimeout(() => search.focus(), 0);
+    });
+    draw();
+    return field;
   };
   const sv = it.server;
   const srvKind = h('select', { name: 'srvKind' }, ...Object.entries(DEVICE_KINDS).map(([k, label]) => h('option', { value: k, selected: k === sv.kind }, t(label))));
   const srvHost = h('input', { name: 'srvHost', value: sv.host, placeholder: t('z. B. 10.0.0.4 oder dc01.contoso.local'), autocomplete: 'off', spellcheck: 'false' });
-  const srvPort = h('input', { name: 'srvPort', value: String(sv.port || 3389), inputmode: 'numeric', autocomplete: 'off' });
+  const srvPort = h('input', { name: 'srvPort', value: String(sv.port || defaultPort(sv.os)), inputmode: 'numeric', autocomplete: 'off' });
+  const srvOs = h('select', { name: 'srvOs' }, h('option', { value: 'windows', selected: sv.os !== 'linux' }, t('Windows (RDP)')), h('option', { value: 'linux', selected: sv.os === 'linux' }, t('Linux (SSH)')));
+  const srvMgmt = h('input', { name: 'srvMgmt', value: sv.mgmtUrl, placeholder: 'https://vcenter.contoso.local', autocomplete: 'off', spellcheck: 'false' });
   const srvRdpLink = linkSelect('srvRdpLink', sv.rdpLink, t('Eigener Benutzer und Passwort'));
   const srvUser = h('input', { name: 'srvUser', value: it.type === 'server' ? it.username : '', placeholder: 'DOMAIN\\user · user@domain', autocomplete: 'off', spellcheck: 'false' });
   const srvPass = secretInputEl('srvPass', it.type === 'server' ? it.password : '');
@@ -452,16 +522,43 @@ export function itemForm(item, ctx) {
     srvOwn.hidden = !!srvRdpLink.value;
     srvTvOwn.hidden = !!srvTvLink.value;
   };
+  // The kind decides what the form asks for: RDP or SSH (port and account label), Bastion only for Azure VMs, the
+  // management page for VMware, Hyper-V and other devices. Data already entered stays visible.
+  const osRow = row(t('Betriebssystem'), srvOs);
+  const portLabel = h('label', {}, '');
+  const accountLabel = h('label', {}, '');
+  const mgmtLabelEl = h('label', {}, '');
+  const mgmtRow = h('div', { class: 'field' }, mgmtLabelEl, srvMgmt);
+  let shownOs = sv.os;
+  const syncKind = () => {
+    const kind = srvKind.value;
+    osRow.hidden = kind === 'windows' || kind === 'linux';
+    const os = deviceOs({ kind, os: srvOs.value });
+    if (os !== shownOs && srvPort.value.trim() === String(defaultPort(shownOs))) srvPort.value = String(defaultPort(os));
+    shownOs = os;
+    portLabel.textContent = os === 'linux' ? t('SSH-Port') : t('RDP-Port');
+    accountLabel.textContent = os === 'linux' ? t('SSH-Konto') : t('RDP-Konto');
+    mgmtLabelEl.textContent = kind === 'vmware' ? t('vSphere-Client / vCenter (Adresse)') : kind === 'hyperv' ? t('Windows Admin Center (Adresse)') : t('Verwaltungsseite (Adresse)');
+    mgmtRow.hidden = !['vmware', 'hyperv', 'other'].includes(kind) && !srvMgmt.value;
+    bastionBox.hidden = kind !== 'azurevm' && !srvBastion.value;
+  };
   srvRdpLink.addEventListener?.('change', syncServer);
   srvTvLink.addEventListener?.('change', syncServer);
   syncServer();
-  const serverOnly = h('div', { class: 'server-only' },
-    row(t('Gerätetyp'), srvKind),
-    h('div', { class: 'grid2 server-host' }, row(t('Server (IP oder Name)'), srvHost), row(t('RDP-Port'), srvPort)),
-    row(t('RDP-Konto'), srvRdpLink), srvOwn,
-    h('div', { class: 'grid2' }, row(t('TeamViewer-ID'), srvTvId), row(t('TeamViewer-Passwort aus'), srvTvLink)), srvTvOwn,
+  containerSelect.addEventListener('change', () => linkPickers.forEach((refresh) => refresh()));
+  const bastionBox = h('div', {},
     row(t('Bastion-Link'), srvBastion),
-    h('div', { class: 'grid2' }, row(t('Microsoft-Anmeldung (Bastion)'), srvBastionLogin), row(t('Konto auf dem Server (Bastion)'), srvBastionVm)),
+    h('div', { class: 'grid2' }, row(t('Microsoft-Anmeldung (Bastion)'), srvBastionLogin), row(t('Konto auf dem Server (Bastion)'), srvBastionVm)));
+  srvKind.addEventListener('change', syncKind);
+  srvOs.addEventListener('change', syncKind);
+  syncKind();
+  const serverOnly = h('div', { class: 'server-only' },
+    row(t('Gerätetyp'), srvKind), osRow,
+    h('div', { class: 'grid2 server-host' }, row(t('Server (IP oder Name)'), srvHost), h('div', { class: 'field' }, portLabel, srvPort)),
+    h('div', { class: 'field' }, accountLabel, srvRdpLink), srvOwn,
+    mgmtRow,
+    h('div', { class: 'grid2' }, row(t('TeamViewer-ID'), srvTvId), row(t('TeamViewer-Passwort aus'), srvTvLink)), srvTvOwn,
+    bastionBox,
     h('p', { class: 'muted small' }, t('Verknüpfte Einträge bleiben, wo sie sind – Keevault liest sie erst beim Verbinden.')));
 
   const loginOnly = h('div', { class: 'login-only' },
@@ -577,7 +674,7 @@ export function itemForm(item, ctx) {
       card: type === 'card' ? { holder: cardHolder.value, number: cardNumber.value, expiry: cardExpiry.value, cvc: cardCvc.value, pin: cardPin.value } : undefined,
       cert: type === 'certificate' ? cert : undefined,
       server: type === 'server' ? {
-        kind: srvKind.value, host: srvHost.value, port: srvPort.value, rdpLink: srvRdpLink.value, tvId: srvTvId.value,
+        kind: srvKind.value, os: srvOs.value, mgmtUrl: srvMgmt.value, host: srvHost.value, port: srvPort.value, rdpLink: srvRdpLink.value, tvId: srvTvId.value,
         tvLink: srvTvLink.value, tvPassword: srvTvLink.value ? '' : srvTvPass.value,
         bastionUrl: srvBastion.value, bastionLoginLink: srvBastionLogin.value, bastionVmLink: srvBastionVm.value,
       } : undefined,

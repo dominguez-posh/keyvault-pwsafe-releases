@@ -33,10 +33,11 @@ export class FileContainers {
    * paths(): configured file paths, setPaths(paths), onChange(): notify UI/browser.
    * pins() / setPins(map): file ID seen per path – a file swapped for another one is refused.
    */
-  constructor({ paths, setPaths, onChange, pins = () => ({}), setPins = () => {}, personalPath = () => null, locations = new Map() }) {
+  constructor({ paths, setPaths, onChange, pins = () => ({}), setPins = () => {}, personalPaths = () => [], locations = new Map() }) {
     this.paths = paths;
     // The personal vault (free, one person, never local – desktop/main.js) and where each file lives.
-    this.personalPath = personalPath;
+    this.personalPaths = personalPaths;
+    this.isPersonal = (p) => !!p && (this.personalPaths() || []).includes(p);
     this.locations = locations;
     this.setPaths = setPaths;
     this.pins = pins;
@@ -93,7 +94,7 @@ export class FileContainers {
       id: e.id,
       name: e.vault?.name || path.basename(e.path),
       path: e.path,
-      personal: !!e.path && e.path === this.personalPath(),
+      personal: this.isPersonal(e.path),
       location: this.locations.get(e.path) || null,
       protected: true,
       locked: !e.vault || e.vault.locked,
@@ -189,7 +190,7 @@ export class FileContainers {
     if (vault.secure) throw new Error(t('Abgesicherte Dateien verwalten Zugriff über Benutzer und Rollen'));
     if (vault.locked) throw new Error(t('Der Datei-Tresor ist gesperrt'));
     // The personal vault belongs to one person: no invitations.
-    if (op?.type === 'createInvite' && this.entries.get(id)?.path === this.personalPath()) throw new Error(t('Der persönliche Tresor lässt sich nicht teilen'));
+    if (op?.type === 'createInvite' && this.isPersonal(this.entries.get(id)?.path)) throw new Error(t('Der persönliche Tresor lässt sich nicht teilen'));
     const { keyring, ...extra } = await applyKeyringOp(vault.keyring, vault.ck, op, actor);
     await vault.setKeyring(keyring);
     return extra;

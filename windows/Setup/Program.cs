@@ -6,6 +6,7 @@
 //                                              started by the app for an update: waits for the app to quit, installs,
 //                                              starts the new version with --updated-from=<old version>
 //   Keevault-Update.exe --clipboard            stdin text → clipboard, kept out of history and cloud clipboard (Clip.cs)
+//   Keevault-Update.exe --clipboard-clear      clears the clipboard if it still holds the stdin text (Clip.cs)
 //   Keevault-Update.exe --type                 stdin text → typed into the focused window (auto-type, Typing.cs)
 //   Keevault-Update.exe --rdp                  stdin host/port/user/password → mstsc with a temporary credential (Rdp.cs)
 //   … --screenshot <png> --page welcome|progress|done|error|update|updated [--theme light|dark] [--lang de|en]
@@ -40,6 +41,7 @@ namespace Keevault.Setup
         {
             var args = Args.Parse(argv);
             // Clipboard with history/cloud markers for the app (no window, no WPF).
+            if (args.Has("clipboard-clear")) return Clip.ClearIfEquals();
             if (args.Has("clipboard")) return Clip.Run();
             // Auto-type into the focused window (no window, no WPF).
             if (args.Has("type")) return Typing.Run();

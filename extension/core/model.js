@@ -12,8 +12,12 @@ export const ITEM_PREFIX = 'pws-';
 // Key Vault allows 25 KB per secret value; keep headroom.
 export const MAX_ITEM_BYTES = 24 * 1024;
 export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat', server: 'Gerät' };
-// Kinds of a device entry (type "server", admin tools): only the label and the preset fields differ.
-export const DEVICE_KINDS = { server: 'Server', azurevm: 'Azure-VM', other: 'Sonstiges Gerät' };
+// Kinds of a device entry (type "server", admin tools): they decide which connections the entry offers – Windows
+// RDP, Linux SSH, Azure VM Bastion, VMware vSphere client, Hyper-V Windows Admin Center (both as "management page").
+export const DEVICE_KINDS = { windows: 'Windows-Server', linux: 'Linux-Server', azurevm: 'Azure-VM', vmware: 'VMware-VM', hyperv: 'Hyper-V-VM', other: 'Sonstiges Gerät' };
+// VMs and other devices run Windows (RDP) or Linux (SSH); Windows and Linux servers say it with their kind.
+export const deviceOs = (s) => (s.kind === 'linux' ? 'linux' : s.kind === 'windows' ? 'windows' : s.os === 'linux' ? 'linux' : 'windows');
+export const defaultPort = (os) => (os === 'linux' ? 22 : 3389);
 
 // Microsoft logo (four squares, 64 px PNG) for the entry templates below.
 const MICROSOFT_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAeUlEQVR42u3QwQmAMBBE0a3FiuzIZtKENhWwgclJSAV78X2Y88CrkvT1nke6tv9eT6VrAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABIqjHTtq3cla4BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACDpjy2f2ivpvesFLQAAAABJRU5ErkJggg==';
@@ -182,10 +186,16 @@ const linkKey = (v) => (/^[^/\s]+\/[^/\s]+$/.test(str(v).trim()) ? str(v).trim()
  */
 function normalizeServer(s = {}) {
   const port = Number.parseInt(s?.port, 10);
+  // "server" (0.9.2) was the RDP server – now "windows".
+  const kind = Object.hasOwn(DEVICE_KINDS, s?.kind) ? s.kind : 'windows';
+  const os = deviceOs({ kind, os: s?.os });
   return {
-    kind: Object.hasOwn(DEVICE_KINDS, s?.kind) ? s.kind : 'server',
+    kind,
+    os,
     host: str(s?.host).trim(),
-    port: port > 0 && port < 65536 ? port : 3389,
+    port: port > 0 && port < 65536 ? port : defaultPort(os),
+    // Management page in the browser: vSphere client / vCenter, Windows Admin Center, the device's web interface.
+    mgmtUrl: normalizeUrl(str(s?.mgmtUrl)) || '',
     rdpLink: linkKey(s?.rdpLink),
     tvId: str(s?.tvId).replace(/\s+/g, ''),
     tvPassword: str(s?.tvPassword),
@@ -199,7 +209,7 @@ function normalizeServer(s = {}) {
 /** Connection methods a server entry offers (also mirrored into its tags for the server list). */
 export function serverMethods(item) {
   const s = item.server || {};
-  return [s.host ? 'rdp' : '', s.tvId ? 'teamviewer' : '', s.bastionUrl ? 'bastion' : ''].filter(Boolean);
+  return [s.host ? (deviceOs(s) === 'linux' ? 'ssh' : 'rdp') : '', s.tvId ? 'teamviewer' : '', s.bastionUrl ? 'bastion' : '', s.mgmtUrl ? 'mgmt' : ''].filter(Boolean);
 }
 
 /** Card number in groups of four for display ("4111 1111 1111 1111"). */

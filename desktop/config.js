@@ -68,8 +68,9 @@ const DEFAULTS = {
   // Second installation found (path|version) the user chose not to be told about again.
   otherInstallDismissed: '',
   // Personal vault: file path (OneDrive / synced folder / network drive) and its key bound to this device and the PIN.
-  personalVault: null,
-  personalDeviceKey: null,
+  // Personal vaults (paths; several, e.g. private and business) and their keys bound to this device and the PIN.
+  personalVaults: [],
+  personalDeviceKeys: {},
   personalOffered: false, // the wizard opened once by itself
 };
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'mcpEnabled', 'offlineMirror',
@@ -87,6 +88,13 @@ export class Config {
   constructor() {
     this.file = path.join(app.getPath('userData'), 'settings.json');
     this.user = readJson(this.file) || {};
+    // One personal vault (0.9.3 and earlier) → the list; written with the next update of the settings.
+    if (this.user.personalVault && !Array.isArray(this.user.personalVaults)) {
+      this.user.personalVaults = [this.user.personalVault];
+      if (this.user.personalDeviceKey) this.user.personalDeviceKeys = { [this.user.personalVault]: this.user.personalDeviceKey };
+    }
+    delete this.user.personalVault;
+    delete this.user.personalDeviceKey;
     const candidates = [
       path.join(path.dirname(process.execPath), 'kvpwsafe.config.json'),
       process.env.ProgramData && path.join(process.env.ProgramData, 'Keevault', 'kvpwsafe.config.json'),
