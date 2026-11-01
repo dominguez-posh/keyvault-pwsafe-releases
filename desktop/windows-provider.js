@@ -55,8 +55,20 @@ export async function providerStatus() {
 
 export const registerProvider = () => runProvider(['--register']);
 
-/** Package shipped with the installer (resources\provider). */
+/** Package shipped with the installer (resources\provider): identity only, the program lies beside it. */
 export const bundledPackage = () => path.join(process.resourcesPath || '', 'provider', 'KvPwSafe.PasskeyProvider.msix');
+const bundledProgram = () => path.join(process.resourcesPath || '', 'provider', 'KvPwSafe.PasskeyProvider.exe');
+// Since 0.9.1 a package with external location (no entry of its own under Settings → Apps); up to 0.9.0 a stand-alone
+// package "Keevault Passkeys" that is replaced on the first start.
+const PACKAGE = 'Keevault.Passkeys';
+const OLD_PACKAGE = 'KvPwSafe.PasskeyProvider';
+
+async function packageVersion(name) {
+  const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-AppxPackage -Name ${name}).Version`], { windowsHide: true }).catch(() => ({ stdout: '' }));
+  return String(stdout).trim();
+}
+
+const removePackage = (name) => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-AppxPackage -Name ${name} | Remove-AppxPackage`], { windowsHide: true }).catch(() => {});
 
 const bundledCertificate = () => path.join(process.resourcesPath || '', 'provider', 'KvPwSafe-Test.cer');
 const setupScript = () => path.join(process.resourcesPath || '', 'setup.ps1');
@@ -83,15 +95,23 @@ const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
 export async function ensureProvider(expectedVersion) {
   let status = await providerStatus();
   if (!status.supported) return status;
-  let outdated = false;
-  if (status.installed && expectedVersion && fs.existsSync(bundledPackage())) {
-    // Update: the package carries the app version (x.y.z.0); install the bundled one if ours is newer.
-    const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '(Get-AppxPackage -Name KvPwSafe.PasskeyProvider).Version'], { windowsHide: true }).catch(() => ({ stdout: '' }));
-    outdated = !!String(stdout).trim() && isNewerVersion(expectedVersion, stdout);
+  if (!fs.existsSync(bundledPackage()) || !fs.existsSync(bundledProgram())) return status;
+  // The stand-alone package of 0.9.0 and earlier: sign it out of Windows and remove it (same alias and COM class).
+  let migrated = false;
+  if (await packageVersion(OLD_PACKAGE)) {
+    if (aliasExists()) await runProvider(['--unregister']).catch(() => {});
+    await removePackage(OLD_PACKAGE);
+    status = await providerStatus();
+    migrated = true;
   }
-  if ((!status.installed || outdated) && fs.existsSync(bundledPackage())) {
+  // Update: the package carries the app version (x.y.z.0); register the bundled one if ours is newer.
+  const current = await packageVersion(PACKAGE);
+  const outdated = !!current && !!expectedVersion && isNewerVersion(expectedVersion, current);
+  if (!current || outdated) {
     try {
-      await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Add-AppxPackage -Path ${psQuote(bundledPackage())}`], { windowsHide: true });
+      // The installation folder (resources\provider\…exe inside) is the package's external location.
+      const external = path.dirname(path.dirname(path.dirname(bundledProgram())));
+      await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Add-AppxPackage -Path ${psQuote(bundledPackage())} -ExternalLocation ${psQuote(external)} -ForceApplicationShutdown`], { windowsHide: true });
     } catch (e) {
       return { ...status, installError: String(e.stderr || e.message).split('\n').find((l) => l.trim()) || e.message };
     }
@@ -101,13 +121,21 @@ export async function ensureProvider(expectedVersion) {
     await registerProvider();
     status = await providerStatus();
   }
-  return status;
+  return migrated ? { ...status, migrated } : status;
 }
 
 /**
  * Device-wide parts that need an administrator (or IT via Intune): trust for the self-signed certificate of
  * the provider package and the browser policy that installs the extension.
  */
+/** Turned off: unregister from Windows and remove the package, so no "Keevault Passkeys" stays in the app list. */
+export async function removeProvider() {
+  if (process.platform !== 'win32') return;
+  if (aliasExists()) await run(aliasPath(), ['--unregister'], { windowsHide: true }).catch(() => {});
+  await removePackage(PACKAGE);
+  await removePackage(OLD_PACKAGE);
+}
+
 export async function machineSetupStatus() {
   if (process.platform !== 'win32') return { supported: false };
   let certTrusted = true;

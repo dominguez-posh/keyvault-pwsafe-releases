@@ -63,12 +63,27 @@ window.startGet = () => {
     .then((c) => { results.get = 'resolved'; results.getJson = c.toJSON(); }, (e) => { results.get = e.name; results.getMessage = e.message; });
 };
 </script>`;
-const server = createServer((_req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(page));
+// Imitation of the Microsoft sign-in (served as login.microsoftonline.com, see --host-resolver-rules): account name,
+// then password, each confirmed with #idSIButton9 – what the extension fills is recorded in window.signedIn.
+const msPage = `<!doctype html><meta charset="utf-8"><title>Sign in</title>
+<form onsubmit="return false"><input name="loginfmt" type="email" placeholder="Email">
+<input name="passwd" type="password" placeholder="Password" style="display:none">
+<input type="submit" id="idSIButton9" value="Next"></form>
+<script>
+window.signedIn = {};
+document.getElementById('idSIButton9').addEventListener('click', () => {
+  const user = document.querySelector('[name=loginfmt]');
+  const pw = document.querySelector('[name=passwd]');
+  if (user.style.display !== 'none') { signedIn.user = user.value; user.style.display = 'none'; pw.style.display = ''; }
+  else signedIn.password = pw.value;
+});
+</script>`;
+const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/ms') ? msPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 
 const proc = spawn(browser, [
-  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging',
+  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1',
   `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
 
@@ -353,6 +368,37 @@ try {
     }
   }
   pageErrors(tab.sessionId, 'testpage');
+
+  // Microsoft sign-in: the bar offers the Microsoft account of the demo vault; a click signs in (name, then password).
+  const ms = await open(`http://login.microsoftonline.com:${server.address().port}/ms`);
+  await sleep(2500);
+  await shot(ms.sessionId, 'ext-ms-bar');
+  const width = await evaluate(ms.sessionId, 'innerWidth');
+  let msResult = null;
+  // The bar sits in a closed shadow root at the top right: click its first account (trusted click by position).
+  for (const y of [78, 90, 66]) {
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: width - 16 - 170, y, button: 'left', clickCount: 1 }, ms.sessionId);
+    msResult = await waitFor(async () => { const r = await evaluate(ms.sessionId, 'signedIn'); return r.password && r; }, 6000);
+    if (msResult) break;
+  }
+  // First in the bar: the demo's emergency account (Azure login, sorted by title).
+  check(msResult?.user === 'breakglass@contoso.onmicrosoft.com', `Microsoft-Anmeldung: Konto ${msResult?.user}`);
+  check(msResult?.password === 'Xc5&rM8!pLq3#Vz7', 'Microsoft-Anmeldung: Passwort nicht eingetragen');
+  pageErrors(ms.sessionId, 'ms-signin');
+
+  // "Remember": tick the box, choose the account – the next Microsoft sign-in starts by itself after the countdown.
+  const ms2 = await open(`http://login.microsoftonline.com:${server.address().port}/ms?2`);
+  await sleep(2500);
+  const tap = async (sessionId, x, y) => {
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, sessionId);
+  };
+  await tap(ms2.sessionId, width - 16 - 340 + 26, 161);
+  await tap(ms2.sessionId, width - 16 - 170, 78);
+  check(await waitFor(async () => (await evaluate(ms2.sessionId, 'signedIn')).password), 'Merken: Anmeldung nach Klick fehlt');
+  const ms3 = await open(`http://login.microsoftonline.com:${server.address().port}/ms?3`);
+  const auto = await waitFor(async () => { const r = await evaluate(ms3.sessionId, 'signedIn'); return r.password && r; }, 10000);
+  check(auto?.user === 'breakglass@contoso.onmicrosoft.com', `Merken: keine automatische Anmeldung (${auto?.user})`);
+  pageErrors(ms3.sessionId, 'ms-auto');
 
   // Import of the sample CSV.
   const before = (await sw(options.sessionId, 'items')).length;

@@ -1,6 +1,6 @@
 {
   "name": "keyvault-pwsafe",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Passwort- und Passkey-Tresor auf Azure Key Vault mit Entra-ID-Anmeldung: Desktop-App und Browser-Erweiterung",
   "type": "module",
   "main": "desktop/main.js",
@@ -99,6 +99,10 @@
       {
         "from": "windows/out/KvPwSafe.PasskeyProvider.msix",
         "to": "provider/KvPwSafe.PasskeyProvider.msix"
+      },
+      {
+        "from": "windows/out/stage/KvPwSafe.PasskeyProvider.exe",
+        "to": "provider/KvPwSafe.PasskeyProvider.exe"
       },
       {
         "from": "windows/out/KvPwSafe-Test.cer",

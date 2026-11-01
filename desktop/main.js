@@ -4,8 +4,8 @@
 import { app, BrowserWindow, ipcMain, shell, clipboard, dialog, powerMonitor, protocol, net, nativeTheme, session, Tray, Menu, nativeImage, globalShortcut, Notification, safeStorage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { statSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { statSync, readFileSync } from 'node:fs';
+import { spawn, execFile as execFileCb } from 'node:child_process';
 import crypto from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -33,7 +33,7 @@ import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
 import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder } from '../extension/core/model.js';
 import { itemsToCsv } from '../extension/core/export.js';
-import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
+import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, removeProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.join(here, '..');
@@ -704,6 +704,45 @@ async function launchTeamViewer(id, password) {
 const ADMIN_CENTER_HOSTS = ['admin.microsoft.com', 'entra.microsoft.com', 'intune.microsoft.com', 'security.microsoft.com', 'purview.microsoft.com',
   'admin.exchange.microsoft.com', 'admin.teams.microsoft.com', 'portal.azure.com'];
 
+/**
+ * A second copy installed another way – the per-machine MSI next to the per-user EXE or the other way round. Both
+ * appear as "Keevault" in the Start menu and only one of them is kept up to date, so people end up in an old version.
+ * Returns { dir, version, kind } of the other copy, or null.
+ */
+async function otherInstallation() {
+  if (process.platform !== 'win32' || !app.isPackaged) return null;
+  const own = path.dirname(process.execPath).toLowerCase().replace(/\\+$/, '');
+  const machineDir = await new Promise((resolve) => {
+    execFileCb('reg', ['query', 'HKLM\\Software\\Keevault', '/v', 'InstallDir'], { windowsHide: true }, (err, out) => {
+      resolve(err ? null : (/InstallDir\s+REG_SZ\s+(.+)/i.exec(String(out))?.[1] || '').trim() || null);
+    });
+  });
+  const local = process.env.LOCALAPPDATA || '';
+  const candidates = [
+    machineDir && { dir: machineDir, kind: 'msi' },
+    { dir: path.join(local, 'Programs', 'KeyVault PwSafe', 'Keevault'), kind: 'nsis' },
+    { dir: path.join(local, 'Programs', 'Keevault'), kind: 'nsis' },
+  ].filter(Boolean);
+  for (const c of candidates) {
+    const dir = c.dir.replace(/[\\/]+$/, '');
+    if (dir.toLowerCase() === own) continue;
+    try {
+      if (!statSync(path.join(dir, 'Keevault.exe')).isFile()) continue;
+    } catch {
+      continue;
+    }
+    let version = '';
+    try {
+      // Electron reads into app.asar like a folder.
+      version = JSON.parse(readFileSync(path.join(dir, 'resources', 'app.asar', 'package.json'), 'utf8')).version || '';
+    } catch {
+      // unknown version
+    }
+    return { dir, version, kind: c.kind };
+  }
+  return null;
+}
+
 async function copyToClipboard(text) {
   if (process.platform === 'win32' && !smokeTest && !demo) {
     // The helper is a PowerShell process; endpoint protection may block or stall it (Sophos, 2026-10-31) – then
@@ -1178,6 +1217,10 @@ const bridgeHandlers = new Proxy({}, {
  * policy) are reported once per version with the option to set them up with administrator rights.
  */
 async function setupWindowsProvider() {
+  // Until 0.9.0 the provider was installed for everyone: where it is there and nobody chose, it stays on.
+  if (app.isPackaged && process.platform === 'win32' && !config.has('windowsProvider') && (await providerStatus().catch(() => ({}))).installed) {
+    config.update({ windowsProvider: true });
+  }
   if (!config.get().windowsProvider && !config.get().browserIntegration) return;
   let status = config.get().windowsProvider ? await ensureProvider(`${app.getVersion()}.0`) : null;
   const machine = await machineSetupStatus();
@@ -1202,6 +1245,8 @@ async function setupWindowsProvider() {
     }
   }
   if (!status) return;
+  // Switched from the stand-alone package (0.9.0 and earlier): Windows wants the provider switched on again.
+  if (status.migrated) config.update({ windowsProviderHint: false });
   if (!status.registered || status.enabled || config.get().windowsProviderHint) return;
   config.update({ windowsProviderHint: true });
   const r = await dialog.showMessageBox(win, {
@@ -1329,6 +1374,11 @@ const api = {
       if (!UPDATE_MODES.includes(s.updateMode)) config.update({ updateMode: 'off' });
       updater?.applyMode();
       if (config.get().updateMode !== 'off') updater?.background();
+    }
+    // Passkey provider on demand: installed when turned on, removed again when turned off.
+    if (app.isPackaged && !demo && before.windowsProvider !== s.windowsProvider) {
+      if (s.windowsProvider) setupWindowsProvider().catch(() => {});
+      else removeProvider().catch(() => {});
     }
     if (before.browserIntegration !== s.browserIntegration || before.windowsProvider !== s.windowsProvider
       || JSON.stringify(before.extensionIds) !== JSON.stringify(s.extensionIds) || before.mcpEnabled !== s.mcpEnabled) await applyBrowserIntegration();
@@ -2135,6 +2185,9 @@ const api = {
     await typeText(value);
     return true;
   },
+  otherInstallation: () => otherInstallation(),
+  /** Windows "Installed apps" (to remove a second Keevault installation). */
+  openAppsSettings: () => shell.openExternal('ms-settings:appsfeatures'),
   openExternal: (url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   },
@@ -2797,6 +2850,8 @@ function runSmokeTest() {
       // Secured file (passkey only): admin creates, folders, change log, access request + approval.
       try {
         const secured = path.join(app.getPath('userData'), 'team.kvpws');
+        // The demo profile is named after the process ID – a reused ID finds the file of an earlier run.
+        await fs.rm(secured, { force: true });
         const { id } = await api.createSecureFile({ path: secured, name: 'Team-Datei', email: 'Alex@Contoso.com', attachment: 'cross-platform' });
         await api.addFolder(id, 'Kunden/Contoso');
         await api.save(id, { title: 'Contoso VPN', username: 'vpn', password: 'p1', folder: 'Kunden/Contoso' });

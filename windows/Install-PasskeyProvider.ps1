@@ -19,6 +19,8 @@
 param(
     [string] $Package = (Join-Path $PSScriptRoot 'out\KvPwSafe.PasskeyProvider.msix'),
     [string] $Certificate = (Join-Path $PSScriptRoot 'out\KvPwSafe-Test.cer'),
+    # External location of the package: the folder with resources\provider\KvPwSafe.PasskeyProvider.exe.
+    [string] $ExternalLocation = (Join-Path $PSScriptRoot 'out\external'),
     [switch] $Uninstall
 )
 
@@ -27,6 +29,7 @@ $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\kvpwsafe-passkeys.ex
 
 if ($Uninstall) {
     if (Test-Path $alias) { & $alias --unregister | Out-Host }
+    Get-AppxPackage -Name 'Keevault.Passkeys' | Remove-AppxPackage
     Get-AppxPackage -Name 'KvPwSafe.PasskeyProvider' | Remove-AppxPackage
     Write-Host 'Passkey-Anbieter entfernt.'
     return
@@ -46,7 +49,9 @@ if (Test-Path $Certificate) {
 }
 
 Write-Host 'Installiere Paket …'
-Add-AppxPackage -Path $Package -ForceUpdateFromAnyVersion
+# The stand-alone package of earlier builds uses the same alias and COM class: remove it first.
+Get-AppxPackage -Name 'KvPwSafe.PasskeyProvider' | Remove-AppxPackage
+Add-AppxPackage -Path $Package -ExternalLocation $ExternalLocation -ForceUpdateFromAnyVersion
 Start-Sleep -Seconds 1
 if (-not (Test-Path $alias)) { throw "Alias $alias fehlt – Installation prüfen." }
 

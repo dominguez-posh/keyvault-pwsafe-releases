@@ -25,7 +25,9 @@ $ErrorActionPreference = 'Continue'
 $EmbeddedCertificate = '__CERTIFICATE_BASE64__'
 $ExtensionId = 'pbkjijhihclckeeefbepoedgdmajioip'
 $UpdateUrl = 'https://github.com/dominguez-posh/keyvault-pwsafe-releases/releases/latest/download/update.xml'
-$PackageName = 'KvPwSafe.PasskeyProvider'
+# Package with external location since 0.9.1; the stand-alone package of earlier versions is removed as well.
+$PackageName = 'Keevault.Passkeys'
+$OldPackageName = 'KvPwSafe.PasskeyProvider'
 $HostName = 'com.kvpwsafe.desktop'
 $Policies = @('HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist', 'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist')
 
@@ -110,6 +112,7 @@ elseif ($Action -eq 'Uninstall') {
     }
     Step 'Passkey-Anbieter entfernen' {
         Get-AppxPackage -Name $PackageName | Remove-AppxPackage
+        Get-AppxPackage -Name $OldPackageName | Remove-AppxPackage
     }
     Step 'Browser-Anbindung entfernen' {
         foreach ($k in @("HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName", "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName", 'HKCU:\Software\KeyVault PwSafe')) {

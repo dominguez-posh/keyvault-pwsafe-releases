@@ -67,6 +67,8 @@ const DEFAULTS = {
   adminTools: false,
   // Break-glass accounts per tenant ({ [tenantId]: [{ id, type, displayName, detail }] }): preset when creating a vault.
   breakGlass: {},
+  // Second installation found (path|version) the user chose not to be told about again.
+  otherInstallDismissed: '',
   // Personal vault: file path (OneDrive / synced folder / network drive) and its key bound to this device and the PIN.
   personalVault: null,
   personalDeviceKey: null,
@@ -105,8 +107,9 @@ export class Config {
   get() {
     // "defaults" in the organization file (e.g. written by the installer) preset values the user may change.
     const presets = Object.fromEntries(Object.entries(this.org.defaults || {}).filter(([k]) => k in DEFAULTS));
-    // The installed app sets itself up: browser integration and passkey provider on unless the user turns them off.
-    const installed = app.isPackaged ? { browserIntegration: true, windowsProvider: true } : {};
+    // The installed app sets up the browser integration unless the user turns it off. The Windows passkey provider
+    // (a package of its own) is only installed when someone turns it on – the extension's passkeys work without it.
+    const installed = app.isPackaged ? { browserIntegration: true } : {};
     const s = { ...DEFAULTS, ...installed, ...presets, ...this.user };
     const enforced = [];
     for (const key of ORG_KEYS) {
@@ -118,6 +121,11 @@ export class Config {
     s.policyContainers = Array.isArray(this.org.containers) ? this.org.containers : [];
     s.enforced = enforced;
     return s;
+  }
+
+  /** Whether the user (not a default or preset) set this key. */
+  has(key) {
+    return Object.hasOwn(this.user, key);
   }
 
   update(patch) {
