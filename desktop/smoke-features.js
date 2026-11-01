@@ -12,14 +12,19 @@ export async function featureChecks(ctx) {
   const { js, sleep, errors, win, api, vault, config, changed, clipboardHas } = ctx;
   const fail = (area, message) => errors.push(`features/${area}: ${message}`);
   const closeDialogs = () => js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); document.querySelector(".context-menu, .main-menu")?.remove(); true');
-  // Admin mode the way a person switches it: menu → View → Admin tools.
+  // Admin mode the way a person switches it: menu → "Activate admin mode …" → app PIN; "End admin mode" without.
   const setAdmin = async (on) => {
-    await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=view]")?.click()');
+    const pin = on ? await ctx.ensurePin() : '';
+    await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=main]")?.click()');
     await sleep(300);
-    await js(`[...document.querySelectorAll('.main-menu .seg[aria-label="Admin-Werkzeuge"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(on ? 'An' : 'Aus')})?.click()`);
-    await sleep(900);
-    await js('document.querySelector(".main-menu")?.remove()');
-    if (config.get().adminTools !== on) fail('admin', `menu switch did not set admin mode ${on ? 'on' : 'off'}`);
+    await js(`document.querySelector(".main-menu [data-action=${on ? 'admin-on' : 'admin-off'}]")?.click()`);
+    await sleep(400);
+    if (on) {
+      await js(`(() => { const p = document.querySelector("dialog[open] .admin-pin"); if (p) { p.value = ${JSON.stringify(pin)}; } document.querySelector("dialog[open] .modal-footer .btn.primary")?.click(); })()`);
+    }
+    for (let i = 0; i < 10 && config.get().adminTools !== on; i++) await sleep(300);
+    await sleep(600);
+    if (config.get().adminTools !== on) fail('admin', `menu did not switch admin mode ${on ? 'on' : 'off'}`);
   };
   // Always the same demo vault (the order of unlocked vaults varies between runs); the UI is opened on it.
   const open = (await vault.containers()).filter((c) => c.kind === 'keyvault' && !c.error && !c.locked);
@@ -75,6 +80,11 @@ export async function featureChecks(ctx) {
       // The copy runs through Keevault-Update.exe (a process start): wait up to 3 s for the text.
       let arrived = false;
       for (let i = 0; i < 10 && !arrived; i++) { await sleep(300); arrived = await clipboardHas(login.username); }
+      // Someone copying on the same machine meanwhile overwrites it: one more click before it counts as failed.
+      if (!arrived) {
+        await js('document.querySelector(".detail-pane .field-row .icon-btn[title=Kopieren], .detail-pane .field-row .icon-btn[title=Copy]")?.click()');
+        for (let i = 0; i < 10 && !arrived; i++) { await sleep(300); arrived = await clipboardHas(login.username); }
+      }
       if (!arrived) fail('clipboard', 'copy button in the entry did not reach the clipboard');
       if (await js('!!document.querySelector(".toast.error")')) fail('clipboard', `error toast: ${await js('document.querySelector(".toast.error")?.textContent')}`);
       const marker = `kv-smoke-${Date.now()}`;
@@ -113,6 +123,7 @@ export async function featureChecks(ctx) {
         await js(`document.querySelector(".main-menu [data-action=${action}]")?.click()`);
         await sleep(500);
         if (!(await js('!!document.querySelector("dialog[open]")'))) fail('mainmenu', `${what} did not open`);
+        if (action === 'settings' && !(await js('!!document.querySelector("dialog[open] select[name=updateChannel] option[value=beta]")'))) fail('mainmenu', 'settings without the update channel (Stable / Early Access)');
         await closeDialogs();
         await sleep(200);
       }
@@ -224,8 +235,13 @@ export async function featureChecks(ctx) {
     };
     await step('newmenu', async () => {
       const items = await newMenu();
-      for (const a of ['new-login', 'new-note', 'new-card', 'new-certificate', 'new-microsoft', 'new-ad']) if (!items.includes(a)) fail('newmenu', `"${a}" missing`);
-      if (items.includes('new-server')) fail('newmenu', 'devices can be created without admin mode');
+      for (const a of ['new-login', 'new-note', 'new-card', 'new-certificate']) if (!items.includes(a)) fail('newmenu', `"${a}" missing`);
+      // Without admin mode the menu stays simple: no devices, no admin templates.
+      for (const a of ['new-server', 'new-microsoft', 'new-ad']) if (items.includes(a)) fail('newmenu', `"${a}" offered without admin mode`);
+      await js('document.querySelector(".context-menu")?.remove()');
+      // The templates: in admin mode on the passwords side.
+      await setAdmin(true);
+      if (!(await newMenu()).includes('new-microsoft')) fail('templates', 'admin mode without the Microsoft template');
       // Open and click in one go: a redraw in between would close the menu.
       await js('document.querySelector(".context-menu")?.remove(); document.querySelector(".new-split .new-more")?.click(); document.querySelector(".context-menu [data-action=new-microsoft]")?.click()');
       await sleep(500);
@@ -241,6 +257,7 @@ export async function featureChecks(ctx) {
       const ad = await js('[...document.querySelectorAll(".detail-pane .custom-field input")].map((i) => i.value).join("|")');
       if (!/Domänencontroller|Domain controller/.test(ad)) fail('templates', `AD logon fields: ${ad}`);
       await cancelEditor();
+      await setAdmin(false);
     });
 
     // ---- list: right-click on the empty area, entry without the removed bottom toolbar
@@ -264,7 +281,12 @@ export async function featureChecks(ctx) {
       await save({ type: 'login', title: 'Smoke in A', username: 'a', password: 'x', folder: 'Smoke A' });
       await save({ type: 'login', title: 'Smoke in B', username: 'b', password: 'x', folder: 'Smoke B' });
       await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
-      await sleep(400);
+      // Both folders must be on screen (the list redraws after each save).
+      for (let i = 0; i < 15; i++) {
+        await sleep(300);
+        const rows = String(await js('[...document.querySelectorAll(".list .folder-row .row-title")].map((e) => e.textContent).join("|")'));
+        if (rows.includes('Smoke A') && rows.includes('Smoke B')) break;
+      }
       const drag = (from, to) => js(`(() => {
         const rows = [...document.querySelectorAll(".list .folder-row")];
         const src = rows.find((r) => r.querySelector(".row-title")?.textContent === ${JSON.stringify(from)});
@@ -323,6 +345,16 @@ export async function featureChecks(ctx) {
       // Back where it was (the demo entry keeps its passkey for the other checks).
       const full = await vault.getItem(kvc.id, target.id, { fresh: true });
       if (full.passkeys[0]) await api.movePasskey({ from: { containerId: kvc.id, id: target.id }, to: { containerId: kvc.id, id: grafana.id }, credentialId: full.passkeys[0].credentialId });
+    });
+
+    // ---- admin mode only with the PIN: a wrong PIN and a settings patch do not switch it on
+    await step('adminpin', async () => {
+      await ctx.ensurePin();
+      if (await api.updateSettings({ adminTools: true }).then(() => true, () => false)) fail('adminpin', 'settings patch switched admin mode on');
+      if (await api.activateAdminMode('0000').then(() => true, () => false)) fail('adminpin', 'wrong PIN switched admin mode on');
+      ctx.resetPinGuard();
+      if (config.get().adminTools) fail('adminpin', 'admin mode on without the right PIN');
+      if (await js('[...document.querySelectorAll(".main-menu .seg")].some((s) => /Admin/.test(s.getAttribute("aria-label") || ""))')) fail('adminpin', 'old admin switch still in the menu');
     });
 
     // ---- admin mode: badge, devices tab, Microsoft entry tiles with sign-in for that account

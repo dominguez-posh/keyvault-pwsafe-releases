@@ -77,14 +77,22 @@ const msPage = `<!doctype html><meta charset="utf-8"><title>Sign in</title>
 <form onsubmit="return false"><input name="loginfmt" type="email" placeholder="Email">
 <input name="passwd" type="password" placeholder="Password" style="display:none">
 <input type="submit" id="idSIButton9" value="Next"></form>
+<div id="kmsi" style="display:none"><div id="KmsiDescription">Angemeldet bleiben?</div><input type="checkbox" id="KmsiCheckboxField">
+<input type="button" id="idBtn_Back" value="Nein"></div>
 <script>
 window.signedIn = {};
 document.getElementById('idSIButton9').addEventListener('click', () => {
   const user = document.querySelector('[name=loginfmt]');
   const pw = document.querySelector('[name=passwd]');
   if (user.style.display !== 'none') { signedIn.user = user.value; user.style.display = 'none'; pw.style.display = ''; }
-  else signedIn.password = pw.value;
+  else {
+    signedIn.password = pw.value;
+    // Like Microsoft: after the password the "Stay signed in?" question (Keevault answers "No" after its own sign-in).
+    pw.style.display = 'none';
+    document.getElementById('kmsi').style.display = '';
+  }
 });
+document.getElementById('idBtn_Back').addEventListener('click', () => { signedIn.staySignedIn = 'no'; });
 </script>`;
 const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/ms') ? msPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
@@ -392,6 +400,8 @@ try {
   // First in the bar: the demo's emergency account (Azure login, sorted by title).
   check(msResult?.user === 'breakglass@contoso.onmicrosoft.com', `Microsoft-Anmeldung: Konto ${msResult?.user}`);
   check(msResult?.password === 'Xc5&rM8!pLq3#Vz7', 'Microsoft-Anmeldung: Passwort nicht eingetragen');
+  const kmsi = await waitFor(async () => (await evaluate(ms.sessionId, 'signedIn')).staySignedIn, 6000);
+  check(kmsi === 'no', '„Angemeldet bleiben?“ nach der Keevault-Anmeldung nicht mit „Nein“ beantwortet');
   pageErrors(ms.sessionId, 'ms-signin');
 
   // "Remember": tick the box, choose the account – the next Microsoft sign-in starts by itself after the countdown.

@@ -1,5 +1,5 @@
 # Every push: tests and checks, extension packages as artifact. Tags v*: additionally the portable Windows app.
-# The installer and the GitHub release are built locally (scripts/release.ps1) – the extension key stays local.
+# Smoke test on Windows on every push. Releases: early-access.yml (Dev → Early Access) and promote-production.yml.
 name: Build
 
 on:
@@ -30,6 +30,29 @@ jobs:
         with:
           name: extension
           path: dist/*.zip
+
+  smoke:
+    name: Smoke-Test (Windows)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - run: npm ci
+      # Keevault-Update.exe (clipboard, auto-type, rollback self-test) as the app uses it.
+      - name: Hilfsprogramm bauen
+        shell: pwsh
+        run: |
+          dotnet build windows/Setup -c Release -o windows/out/setup-update --nologo
+          Copy-Item windows/out/setup-update/Keevault-Setup.exe windows/out/Keevault-Update.exe
+      - run: npm test
+      - run: npm run smoke
 
   desktop:
     name: Desktop-App (Windows)

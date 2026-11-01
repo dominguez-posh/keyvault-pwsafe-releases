@@ -51,6 +51,8 @@ namespace Keevault.Setup
             if (args.Has("location")) return Location.Run(args.Get("location"));
             // Remote desktop with an account from the vault: temporary credential for mstsc (Rdp.cs).
             if (args.Has("rdp")) return Rdp.Run();
+            // Test of the rollback in a temporary folder (test/setup-rollback.test.js).
+            if (args.Has("rollback-selftest")) return Rollback.SelfTest(args.Get("rollback-selftest"));
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             var window = new SetupWindow(args);
             if (args.Has("screenshot"))
@@ -149,6 +151,9 @@ namespace Keevault.Setup
             ["Melde dich mit deinem Microsoft-Konto an und verbinde deinen Tresor."] = "Sign in with your Microsoft account and connect your vault.",
             ["Keevault starten"] = "Start Keevault",
             ["Installation fehlgeschlagen"] = "Installation failed",
+            ["Die vorherige Version wurde wiederhergestellt."] = "The previous version was restored.",
+            ["Die unvollständige Installation wurde entfernt."] = "The incomplete installation was removed.",
+            ["Die Installation ist unvollständig – Programmdateien fehlen danach (meist hat eine Sicherheitssoftware sie entfernt oder das Setup beendet)."] = "The installation is incomplete – program files are missing afterwards (usually security software removed them or ended the setup).",
             ["Erneut versuchen"] = "Try again",
             ["Schließen"] = "Close",
             ["Keevault wird aktualisiert"] = "Updating Keevault",
@@ -691,20 +696,42 @@ namespace Keevault.Setup
                     ShowError(Text.T("Installation fehlgeschlagen"), SetupError.PayloadMissing(), null);
                     return;
                 }
+                // Rollback: the folder that will be (re)installed is saved first; a failed or incomplete setup restores it.
+                var target = installDirChanged ? installDir : ExistingInstallDir() ?? installDir;
+                rollback = await Task.Run(() => Rollback.Prepare(target));
                 // /D= must come last and unquoted (NSIS).
                 var code = await RunHidden(setup, "/S" + (installDirChanged ? " /D=" + installDir : ""));
-                if (code != 0) { ShowError(Text.T("Installation fehlgeschlagen"), SetupError.FromExitCode(code), RunInstall); return; }
+                UpdateLog.Write($"install: exit code {code}");
+                if (code != 0 || !Rollback.Complete(ExistingInstallDir() ?? target))
+                {
+                    await FailWithRollback(Text.T("Installation fehlgeschlagen"), code != 0 ? SetupError.FromExitCode(code) : SetupError.Incomplete(), RunInstall);
+                    return;
+                }
+                rollback.Discard();
+                rollback = null;
                 await ShowDone(Text.T("Keevault ist bereit"), Text.T("Melde dich mit deinem Microsoft-Konto an und verbinde deinen Tresor."),
                     new Button(this, Text.T("Keevault starten"), ButtonKind.Primary, () => { StartApp(null); Close(); }));
             }
             catch (Exception e)
             {
-                ShowError(Text.T("Installation fehlgeschlagen"), SetupError.FromException(e), RunInstall);
+                await FailWithRollback(Text.T("Installation fehlgeschlagen"), SetupError.FromException(e), RunInstall);
             }
             finally
             {
                 try { Directory.Delete(temp, true); } catch { /* still in use: Windows cleans up the temp folder */ }
             }
+        }
+
+        private Rollback rollback;
+
+        /// <summary>Error after a setup run: first the previous state back (rollback), then the error with what happened.</summary>
+        private async Task FailWithRollback(string heading, SetupError error, Func<Task> retry)
+        {
+            var undone = rollback != null && await Task.Run(() => rollback.Undo());
+            var hadCopy = rollback?.HasCopyBefore ?? false;
+            rollback = null;
+            ShowError(heading, error, retry);
+            if (undone) subtitle.Text += "\n" + (hadCopy ? Text.T("Die vorherige Version wurde wiederhergestellt.") : Text.T("Die unvollständige Installation wurde entfernt."));
         }
 
         /// <summary>
@@ -733,6 +760,7 @@ namespace Keevault.Setup
                 var dir = ExistingInstallDir();
                 var code = 0;
                 List<string> left = null;
+                rollback = await Task.Run(() => Rollback.Prepare(dir));
                 for (var attempt = 1; attempt <= 2; attempt++)
                 {
                     left = await InstallProcesses.Release(dir, TimeSpan.FromSeconds(attempt == 1 ? 20 : 10));
@@ -743,7 +771,9 @@ namespace Keevault.Setup
                     if (code != 2) break;
                     await Task.Delay(3000);
                 }
-                if (code != 0) { FailUpdate(SetupError.FromExitCode(code), true, code == 2 ? left : null); return; }
+                if (code != 0 || !Rollback.Complete(ExistingInstallDir() ?? dir)) { await FailUpdateWithRollback(code != 0 ? SetupError.FromExitCode(code) : SetupError.Incomplete(), true, code == 2 ? left : null); return; }
+                rollback?.Discard();
+                rollback = null;
                 UpdateLog.Write("done");
                 var to = args.Get("to");
                 await ShowDone(to != null ? Text.T("Aktualisiert auf {0}", to) : Text.T("Keevault ist bereit"), Text.T("Keevault startet …"), null);
@@ -756,8 +786,16 @@ namespace Keevault.Setup
             {
                 UpdateLog.Write("error: " + e);
                 var error = SetupError.FromException(e);
-                FailUpdate(error, error.Code != "KV-S5", null);
+                await FailUpdateWithRollback(error, error.Code != "KV-S5", null);
             }
+        }
+
+        private async Task FailUpdateWithRollback(SetupError error, bool canRetry, List<string> stillOpen)
+        {
+            var undone = rollback != null && await Task.Run(() => rollback.Undo());
+            rollback = null;
+            FailUpdate(error, canRetry, stillOpen);
+            if (undone && !args.Has("silent")) subtitle.Text += "\n" + Text.T("Die vorherige Version wurde wiederhergestellt.");
         }
 
         private void FailUpdate(SetupError error, bool canRetry, List<string> stillOpen)

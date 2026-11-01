@@ -18,6 +18,7 @@ const VALUES = {
   UnlockPrompt: { setting: 'unlockPrompt', type: 'string' },
   Language: { setting: 'language', type: 'string' },
   UpdateMode: { setting: 'updateMode', type: 'string' },
+  UpdateChannel: { setting: 'updateChannel', type: 'string' }, // stable | beta (Early Access)
   AutoLockMinutes: { setting: 'autoLockMinutes', type: 'number' },
   ClipboardSeconds: { setting: 'clipboardSeconds', type: 'number' },
   RequirePin: { setting: 'requirePin', type: 'boolean' },

@@ -14,10 +14,16 @@ import { spawn } from 'node:child_process';
 import updaterPkg from 'electron-updater';
 import { verifyManifest, parseManifest } from './update-verify.js';
 import { detectInstallKind } from './install-kind.js';
+import { compareVersions } from './versions.js';
+
+export { compareVersions };
 
 const { autoUpdater } = updaterPkg;
 export const UPDATE_MODES = ['off', 'auto', 'ask'];
 const FEED = 'https://keevault.de/update';
+// Early Access: the newest release including pre-releases (field test before "latest"); keevault.de/update/beta.
+export const UPDATE_CHANNELS = 'stable beta'.split(' ');
+export const feedFor = (channel) => (channel === 'beta' ? `${FEED}/beta` : FEED);
 const INTERVAL = 6 * 60 * 60_000;
 
 /** How this copy was installed: 'nsis' updates itself; 'msi', 'msix' (and 'managed' by policy) are updated elsewhere; 'dev' never updates. */
@@ -27,14 +33,6 @@ export function installKind() {
   return detectInstallKind({ packaged: app.isPackaged, windowsStore: !!process.windowsStore, platform: process.platform, filesNextToExe });
 }
 
-/** Compares "1.2.10" with "1.2.9" → 1. */
-export function compareVersions(a, b) {
-  const pa = String(a).split(/[.-]/).map((x) => Number.parseInt(x, 10) || 0);
-  const pb = String(b).split(/[.-]/).map((x) => Number.parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1;
-  return 0;
-}
-
 export class Updater {
   /**
    * mode(): current setting; onState(state): every change (renderer); offer(state): mode "ask" found a new version
@@ -42,14 +40,15 @@ export class Updater {
    * away in mode "auto"; beforeInstall(): called right before the app quits for the installation;
    * fetch: secureFetch (in memory).
    */
-  constructor({ mode, onState, offer, isIdle, beforeInstall, fetch, selfUpdate, windowCenter }) {
-    Object.assign(this, { mode, onState, offer, isIdle, beforeInstall, fetch, windowCenter });
+  constructor({ mode, channel = () => 'stable', onState, offer, isIdle, beforeInstall, fetch, selfUpdate, windowCenter }) {
+    Object.assign(this, { mode, channel, onState, offer, isIdle, beforeInstall, fetch, windowCenter });
     // Policy SelfUpdate=0 ('managed'): IT distributes updates – the app only reports a newer version.
     this.kind = selfUpdate?.() === false ? 'managed' : installKind();
     this.state = { kind: this.kind, status: 'idle', current: app.getVersion(), version: null, notes: '', progress: 0, error: null, checked: null };
     this.timer = null;
     if (this.kind !== 'nsis') return;
-    autoUpdater.setFeedURL({ provider: 'generic', url: FEED });
+    this.feed = feedFor(this.channel());
+    autoUpdater.setFeedURL({ provider: 'generic', url: this.feed });
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
     // One plain download (counted once on the server) instead of many range requests.
@@ -72,6 +71,13 @@ export class Updater {
   }
 
   applyMode() {
+    // Channel switched in the settings: the next check reads the other feed.
+    const feed = feedFor(this.channel());
+    if (this.kind === 'nsis' && feed !== this.feed) {
+      this.feed = feed;
+      autoUpdater.setFeedURL({ provider: 'generic', url: feed });
+    }
+    this.feed = feed;
     clearInterval(this.timer);
     this.timer = null;
     if (this.kind === 'nsis') autoUpdater.autoInstallOnAppQuit = this.mode() === 'auto';
@@ -81,7 +87,7 @@ export class Updater {
   /** latest.yml with latest.yml.sig from the server, verified against the embedded key → { version, sha512, url }. */
   async signedManifest() {
     const [manifest, signature] = await Promise.all(['latest.yml', 'latest.yml.sig'].map(async (name) => {
-      const res = await this.fetch(`${FEED}/${name}`, { cache: 'no-store' });
+      const res = await this.fetch(`${feedFor(this.channel())}/${name}`, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status} (${name})`);
       return res.text();
     }));
