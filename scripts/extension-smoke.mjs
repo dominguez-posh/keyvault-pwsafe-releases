@@ -94,12 +94,16 @@ document.getElementById('idSIButton9').addEventListener('click', () => {
 });
 document.getElementById('idBtn_Back').addEventListener('click', () => { signedIn.staySignedIn = 'no'; });
 </script>`;
-const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/ms') ? msPage : page));
+// Imitation of a Bastion sign-in to a VM (served as bst-smoke.bastion.azure.com, the VM in the address like the portal).
+const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
+<form onsubmit="return false"><input name="username" autocomplete="username"><input name="password" type="password">
+<button type="submit">Connect</button></form>`;
+const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/ms') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 
 const proc = spawn(browser, [
-  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1',
+  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1,MAP bst-smoke.bastion.azure.com 127.0.0.1',
   `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
 
@@ -403,6 +407,20 @@ try {
   const kmsi = await waitFor(async () => (await evaluate(ms.sessionId, 'signedIn')).staySignedIn, 6000);
   check(kmsi === 'no', '„Angemeldet bleiben?“ nach der Keevault-Anmeldung nicht mit „Nein“ beantwortet');
   pageErrors(ms.sessionId, 'ms-signin');
+
+  // Bastion: signing in to a VM is offered as an asset (Azure VM) with the VM name and the Bastion link from the address.
+  const vmPath = '/subscriptions/s-smoke/resourceGroups/rg-smoke/providers/Microsoft.Compute/virtualMachines/vm-smoke-01/bastionHost';
+  const bst = await open(`http://bst-smoke.bastion.azure.com:${server.address().port}${vmPath}`);
+  await sleep(1500);
+  await evaluate(bst.sessionId, `(() => { const f = document.forms[0]; f.username.value = 'CONTOSO\\\\vmadmin'; f.password.value = 'Vm-Smoke-1'; f.requestSubmit(); return true; })()`);
+  const pendingBastion = await waitFor(async () => {
+    const all = await evaluate(options.sessionId, 'chrome.storage.session.get(null)');
+    return Object.values(all || {}).find((p) => p?.action === 'bastion');
+  }, 6000);
+  check(pendingBastion?.bastion?.vmName === 'vm-smoke-01', `Bastion: kein Speichern als Asset angeboten (${JSON.stringify(pendingBastion?.bastion || null)})`);
+  check(/virtualMachines\/vm-smoke-01\/bastionHost$/.test(pendingBastion?.bastion?.bastionUrl || ''), 'Bastion: Link zur VM fehlt');
+  check(pendingBastion?.username === 'CONTOSO\\vmadmin' && pendingBastion?.password === 'Vm-Smoke-1', 'Bastion: Anmeldedaten der VM fehlen');
+  pageErrors(bst.sessionId, 'bastion');
 
   // "Remember": tick the box, choose the account – the next Microsoft sign-in starts by itself after the countdown.
   const ms2 = await open(`http://login.microsoftonline.com:${server.address().port}/ms?2`);

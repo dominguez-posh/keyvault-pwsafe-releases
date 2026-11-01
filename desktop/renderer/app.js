@@ -358,7 +358,7 @@ async function render() {
   setLanguage(st.settings.language);
   document.title = 'Keevault';
   document.body.dataset.ready = '1';
-  // Installed version, always visible at the bottom right.
+  // Installed version, always at the bottom right (the detail pane keeps room below its content, see desktop.css).
   let versionTag = document.getElementById('app-version');
   if (!versionTag) document.body.append(versionTag = h('button', { id: 'app-version', type: 'button', onclick: () => updateDialog() }));
   applyViewClass();
@@ -792,12 +792,12 @@ function renderSidebar() {
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite && (i.type === 'server') === deviceMode()).length),
     deviceMode() ? null : nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
     personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow)) : null,
-    h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length > 1 ? vaultFinder() : null, containers.length ? h('span', { class: 'count' }, containers.length) : null,
+    h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length > 1 ? vaultFinder() : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
     // Pinned to the bottom edge (sticky): stays reachable however many vaults the list above holds.
     h('div', { class: 'sidebar-foot' }, adminMode() ? modeSwitch() : null, h('button', { type: 'button', class: 'help-btn', title: t('Hilfe und Tipps (F1)'), onclick: helpDialog },
-      h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe')), orgLabel()),
+      h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe'))),
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
         await call('signIn');
@@ -927,24 +927,6 @@ function placeholderMark() {
   return mark;
 }
 
-// Organisation of the signed-in account (Entra tenant name), shown quietly next to "Help".
-let orgCache = null; // { tenantId, name }
-let orgLoading = false;
-function orgLabel() {
-  const tenantId = st.account?.tenantId;
-  if (!tenantId) return null;
-  const domain = (st.account.username || '').split('@')[1] || '';
-  if (orgCache?.tenantId !== tenantId && !orgLoading) {
-    orgLoading = true;
-    call('tenants').then((list) => {
-      const own = list.find((x) => x.tenantId === tenantId);
-      orgCache = { tenantId, name: own?.name || domain };
-      renderSidebar();
-    }, () => { orgCache = { tenantId, name: domain }; }).finally(() => { orgLoading = false; });
-  }
-  const name = orgCache?.tenantId === tenantId ? orgCache.name : domain;
-  return name ? h('span', { class: 'org-name', title: t('Angemeldet bei {org}', { org: name }) }, icon('users', 13), h('span', {}, name)) : null;
-}
 
 /** Burger next to the logo: opens the main menu; a dot when the password check reports expiring entries. */
 function mainMenuButton() {
@@ -2095,7 +2077,7 @@ const featureAllowed = (c, feature) => c.kind !== 'keyvault' || !!c.access?.admi
 
 // The vault menu keeps every function but folds the rarely used ones into two submenus.
 const VAULT_GROUPS = [
-  { action: 'group-manage', icon: 'settings', label: 'Verwaltung', members: ['vault-settings', 'mcp-scope', 'license', 'info', 'logo', 'rename', 'migrate', 'changelog'] },
+  { action: 'group-manage', icon: 'settings', label: 'Verwaltung', members: ['vault-settings', 'mcp-scope', 'license', 'logo', 'rename', 'migrate', 'changelog'] },
   { action: 'group-data', icon: 'download', label: 'Daten', members: ['import', 'export', 'backup', 'restore', 'trash'] },
 ];
 

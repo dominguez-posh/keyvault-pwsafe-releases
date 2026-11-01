@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.10 – 2026-11-01
+- Die Versionsnummer unten rechts verdeckt keinen Eintrag mehr (Platz am Ende der Detailansicht). In der Überschrift „Tresore“ steht nur noch die Lupe, keine Anzahl; unten links nur noch „Hilfe“ (ohne Firmenname); „Infos“ steht direkt im Tresor-Menü statt unter „Verwaltung“.
+- Bastion-Zugang speichern: Meldest du dich über Bastion an einer VM an, fragt die Browser-Erweiterung, ob der Zugang gespeichert werden soll (Tresor und Ordner wählbar). Er wird als Asset (Azure-VM) mit VM-Name, Bastion-Link und VM-Konto angelegt; „Bastion“ im Eintrag verbindet direkt. Für schon vorhandene VMs kommt keine Frage.
+- Active-Directory-Logon: Felder „Domäne (NT)“ und „Domäne (FQDN)“; die Anmeldung an einer VM über Bastion nutzt immer die FQDN-Form (benutzer@contoso.local), auch wenn der Benutzer im NT-Format gespeichert ist.
+
+### English
+- The version number at the bottom right no longer covers an entry (room at the end of the detail view). The "Vaults" header shows only the magnifier, no count; the bottom left shows only "Help" (no company name); "Info" is directly in the vault menu instead of under "Management".
+- Save Bastion access: when you sign in to a VM through Bastion, the browser extension offers to save the access (vault and folder selectable). It becomes an asset (Azure VM) with the VM name, Bastion link and VM account; "Bastion" in the entry connects directly. No question for VMs that are already there.
+- Active Directory logon: fields "Domain (NT)" and "Domain (FQDN)"; signing in to a VM through Bastion always uses the FQDN form (user@contoso.local), even when the user is stored in NT format.
+
 ## 0.9.9 – 2026-11-01
 - „Neu“ bleibt für alle einfach: „Neuer Microsoft-Login“ und „Neuer Active-Directory-Logon“ gibt es nur im Admin-Modus.
 - Admin-Modus nur mit PIN: Statt des Schalters „Admin-Werkzeuge“ gibt es im Menü „Admin-Modus aktivieren …“; das wird mit der App-PIN bestätigt, ohne PIN lässt er sich nicht einschalten. Beenden geht ohne PIN.
