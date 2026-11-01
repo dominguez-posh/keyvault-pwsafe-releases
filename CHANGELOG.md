@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.7 – 2026-11-01
+- Behebt: 0.9.6 startete nicht (eine Programmdatei war im Paket unvollständig). Wer 0.9.6 installiert hat, installiert 0.9.7 bitte einmal von keevault.de – die Tresore und Einstellungen bleiben erhalten.
+- Papierkorb leichter zu finden: im Hauptmenü und beim Rechtsklick in die Liste (bisher nur über das Tresor-Menü).
+- Persönlicher Tresor: Das Masterpasswort lässt sich nicht mehr entfernen (es öffnet den Tresor auf neuen Geräten) – weder im Dialog noch über andere Wege.
+
+### English
+- Fixes: 0.9.6 did not start (one program file in the package was incomplete). If you installed 0.9.6, please install 0.9.7 once from keevault.de – vaults and settings stay.
+- Trash easier to find: in the main menu and on right-click in the list (before only through the vault menu).
+- Personal vault: the master password can no longer be removed (it opens the vault on new devices) – neither in the dialog nor any other way.
+
 ## 0.9.6 – 2026-11-01
 - Passkey verschieben: per Ziehen auf einen anderen Login in der Liste, oder im Dialog mit Suche statt langer Auswahlliste.
 - Persönlicher Tresor: Kein „Benutzer einladen“ mehr im Schutz-Dialog (er gehört genau einer Person).

@@ -141,6 +141,30 @@ export async function featureChecks(ctx) {
       await sleep(1000);
     });
 
+    // ---- trash: reachable from the main menu, a deleted entry is listed there and the button restores it
+    await step('trash', async () => {
+      const gone = await save({ type: 'login', title: 'Smoke Papierkorb', username: 'trash', password: 'x' });
+      await api.delete(kvc.id, gone.id);
+      created.splice(created.indexOf(gone.id), 1);
+      changed();
+      await sleep(500);
+      await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=main]")?.click(); document.querySelector(".main-menu [data-action=trash]")?.click()');
+      let listed = false;
+      for (let i = 0; i < 10 && !listed; i++) { await sleep(300); listed = await js(`!!document.querySelector('dialog[open] [data-restore="${gone.id}"]')`); }
+      if (!listed) { fail('trash', 'main menu → trash does not list the deleted entry'); return; }
+      await js(`document.querySelector('dialog[open] [data-restore="${gone.id}"]').click()`);
+      let back = false;
+      for (let i = 0; i < 10 && !back; i++) { await sleep(300); back = (await vault.summaries()).some((x) => x.id === gone.id); }
+      if (!back) fail('trash', 'restore did not bring the entry back');
+      else created.push(gone.id);
+      await closeDialogs();
+      // The list area offers it too.
+      await js('(() => { const el = document.querySelector(".list-pane .list-scroll"); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 60, clientY: r.bottom - 20 })); })()');
+      await sleep(300);
+      if (!(await js('!!document.querySelector(".context-menu [data-action=trash]")'))) fail('trash', 'right-click on the list area offers no trash');
+      await js('document.querySelector(".context-menu")?.remove()');
+    });
+
     // ---- vault search: magnifier in the "Vaults" header filters the rows, Esc shows all again
     await step('vaultsearch', async () => {
       if (!(await js('!!document.querySelector(".nav-section .vault-find .icon-btn")'))) {

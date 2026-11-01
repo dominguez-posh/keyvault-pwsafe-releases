@@ -1138,6 +1138,7 @@ export default {
   'Notfallkonto suchen (Name oder E-Mail) …': 'Search emergency account (name or email) …',
   'Neuer Server / Ressource': 'New server / resource',
   'Neuer Server': 'New server',
+  'Von welchem Tresor?': 'From which vault?',
   'Das Masterpasswort des persönlichen Tresors lässt sich nicht entfernen': 'The master password of the personal vault cannot be removed',
   'Der Passkey selbst bleibt gleich – die Anmeldung bei der Website funktioniert danach mit dem Ziel-Eintrag. Schneller: den Passkey auf einen Login in der Liste ziehen.': 'The passkey itself stays the same – signing in to the website then works with the target entry. Quicker: drag the passkey onto a login in the list.',
   'Passkey nach „{title}“ verschieben?': 'Move the passkey to "{title}"?',

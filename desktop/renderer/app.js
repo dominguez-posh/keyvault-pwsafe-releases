@@ -938,6 +938,7 @@ function mainMenu(anchor) {
       entry('generator', 'key', t('Passwort-Generator'), generatorDialog),
       entry('health', 'shield', t('Passwort-Check'), () => healthDialog(reportCtx()), expiring ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiring) : null),
       st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
+      entry('trash', 'trash', t('Papierkorb'), openTrash),
       h('div', { class: 'context-sep' }),
       entry('lock', 'lock', t('Sperren'), () => call('lock'))),
     view: h('div', { class: 'main-menu-pane view-pane', role: 'group', 'aria-label': t('Ansicht') },
@@ -1622,6 +1623,7 @@ function listAreaActions(container) {
     } } : null,
     container ? { action: 'refresh', icon: 'refresh', label: t('Aktualisieren'), disabled: container.locked && !container.error,
       onClick: () => refreshContainer(container, document.querySelector(`.nav-refresh[data-container="${CSS.escape(container.id)}"]`)) } : null,
+    container ? { action: 'trash', icon: 'trash', label: t('Papierkorb'), onClick: () => trashDialog(container) } : null,
     container ? { action: 'vault-functions', icon: 'more', label: t('Tresor-Funktionen …'), onClick: () => {
       const row = document.querySelector(`.nav-refresh[data-container="${CSS.escape(container.id)}"]`)?.closest('.nav-row');
       const r = row?.getBoundingClientRect();
@@ -2418,6 +2420,18 @@ async function openItemLink(link) {
 const retentionCache = new Map();
 
 /** Trash of a vault: deleted entries until the end of the retention period – restore, or purge if the vault settings allow it. */
+/** Main menu → Trash: the vault on screen, otherwise a short choice of the vaults. */
+function openTrash() {
+  const shown = ui.containerId && st.containers.find((c) => c.id === ui.containerId);
+  if (shown && !shown.error && !shown.locked) return trashDialog(shown);
+  const ready = st.containers.filter((c) => !c.error && !c.locked);
+  if (ready.length === 1) return trashDialog(ready[0]);
+  const { close } = modal(t('Papierkorb'), h('div', {},
+    h('p', { class: 'muted' }, t('Von welchem Tresor?')),
+    ...ready.map((c) => h('button', { type: 'button', class: 'choice', onclick: () => { close(); trashDialog(c); } }, containerIcon(c), h('span', {}, c.name)))), [{ label: t('Abbrechen') }]);
+  return undefined;
+}
+
 function trashDialog(container) {
   const listEl = h('div', {}, h('span', { class: 'spinner' }));
   const load = async () => {
@@ -2429,7 +2443,7 @@ function trashDialog(container) {
         h('div', { class: 'row-sub' }, e.scheduledPurgeDate
           ? t('gelöscht {deleted} · endgültig ab {purge}', { deleted: formatDateTime(e.deletedDate), purge: formatDateTime(e.scheduledPurgeDate) })
           : t('gelöscht {deleted}', { deleted: formatDateTime(e.deletedDate) }))),
-      h('button', { type: 'button', class: 'btn small', onclick: async (ev) => {
+      h('button', { type: 'button', class: 'btn small', dataset: { restore: e.id }, onclick: async (ev) => {
         ev.currentTarget.disabled = true;
         try {
           await call('restore', container.id, e.id);
