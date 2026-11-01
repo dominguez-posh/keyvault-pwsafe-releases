@@ -3245,6 +3245,18 @@ function runSmokeTest() {
           errors.push(`linkpick: ${e.message}`);
         }
       }
+      if (view === 'devnewmenu') {
+        // Devices selected: title, sidebar and the New menu with devices only (screenshot).
+        config.update({ adminTools: true });
+        changed();
+        await sleep(800);
+        await js('document.querySelector(".sidebar .nav[data-view=all]")?.click()');
+        await sleep(300);
+        await js('document.querySelector(".mode-switch [data-mode=devices]")?.click()');
+        await sleep(400);
+        await js('document.querySelector(".new-split .new-more")?.click()');
+        await sleep(300);
+      }
       if (view === 'vaultsearch') {
         // Vault search opened in the sidebar header, one hit (screenshot).
         await js('document.querySelector(".vault-find .icon-btn")?.click(); const q = document.querySelector(".vault-find input"); q.value = "Team"; q.dispatchEvent(new Event("input"))');

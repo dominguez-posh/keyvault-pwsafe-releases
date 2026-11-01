@@ -1139,6 +1139,7 @@ export default {
   'Notfallkonto suchen (Name oder E-Mail) …': 'Search emergency account (name or email) …',
   'Neuer Server / Ressource': 'New server / resource',
   'Neuer Server': 'New server',
+  'Keine Geräte': 'No devices',
   'Weiterer persönlicher Tresor (kostenlos)': 'Another personal vault (free)',
   'Zum Beispiel privat und geschäftlich getrennt – Einträge lassen sich zwischen deinen persönlichen Tresoren frei verschieben.': 'For example private and business apart – entries move freely between your personal vaults.',
   'Mehrere persönliche Tresore (z. B. privat und geschäftlich) – Einträge verschiebst du zwischen ihnen frei.': 'Several personal vaults (e.g. private and business) – you move entries between them freely.',

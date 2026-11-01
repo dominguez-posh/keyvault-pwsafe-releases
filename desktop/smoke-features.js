@@ -198,7 +198,14 @@ export async function featureChecks(ctx) {
       await setAdmin(true);
       if (!(await js('(() => { const b = document.querySelector(".admin-mode"); return !!b && b.offsetParent !== null; })()'))) fail('admin', '"Admin mode" badge not visible');
       if (!(await js('!!document.querySelector(".sidebar .mode-switch [data-mode=devices]")'))) fail('admin', '"Passwords | Devices" switch missing');
-      if (!(await newMenu()).includes('new-server')) fail('admin', '"New VM / server" missing in admin mode');
+      if ((await newMenu()).includes('new-server')) fail('admin', 'devices offered while "Passwords" is selected');
+      await js('document.querySelector(".context-menu")?.remove(); document.querySelector(".mode-switch [data-mode=devices]")?.click()');
+      await sleep(400);
+      const deviceItems = (await newMenu()).filter((a) => a.startsWith('new-') && a !== 'new-folder' && a !== 'new-subfolder');
+      if (deviceItems.join() !== 'new-server') fail('admin', `"Devices" offers ${deviceItems.join()}`);
+      if (await js('!!document.querySelector(".sidebar .nav[data-view=passkeys], .sidebar [data-nav=passkeys]")')) fail('admin', 'passkey view among devices');
+      await js('document.querySelector(".context-menu")?.remove(); document.querySelector(".mode-switch [data-mode=items]")?.click()');
+      await sleep(400);
       await js('document.querySelector(".context-menu")?.remove()');
       await openItem('Smoke Microsoft');
       const tiles = await js('[...document.querySelectorAll(".detail-pane [data-admin-link]")].map((b) => b.dataset.adminLink).join(",")');
