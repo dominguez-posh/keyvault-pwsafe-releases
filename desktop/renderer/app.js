@@ -710,6 +710,7 @@ function containerIcon(c) {
 function renderSidebar() {
   const nav = (view, label, iconName, count) => h('button', {
     class: `nav ${ui.view === view && !ui.containerId ? 'active' : ''}`,
+    dataset: { view },
     onclick: () => select({ view, containerId: null }),
   }, icon(iconName), h('span', { class: 'nav-label' }, label), h('span', { class: 'count' }, count));
   // The personal vault has its own place right below the views; the vault list shows the others.
@@ -740,8 +741,8 @@ function renderSidebar() {
       iconButton('lock', t('Sperren'), () => call('lock')),
       mainMenuButton()),
     nav('all', deviceMode() ? t('Alle Geräte') : t('Alle Einträge'), 'shield', items.filter((i) => (i.type === 'server') === deviceMode()).length),
-    nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite).length),
-    nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
+    nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite && (i.type === 'server') === deviceMode()).length),
+    deviceMode() ? null : nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
     personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow)) : null,
     h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length > 1 ? vaultFinder() : null, containers.length ? h('span', { class: 'count' }, containers.length) : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
@@ -1029,6 +1030,7 @@ function modeSwitch() {
     if (ui.devices === devices) return;
     ui.devices = devices;
     ui.type = '';
+    if (devices && ui.view === 'passkeys') ui.view = 'all';
     ui.selected = null;
     ui.editing = null;
     ui.multi.clear();
@@ -1092,7 +1094,7 @@ function visibleItems({ ignoreType = false } = {}) {
 
 function renderList() {
   const container = ui.containerId ? st.containers.find((c) => c.id === ui.containerId) : null;
-  const title = container ? container.name : { all: t('Alle Einträge'), favorites: t('Favoriten'), passkeys: t('Passkeys') }[ui.view];
+  const title = container ? container.name : { all: deviceMode() ? t('Alle Geräte') : t('Alle Einträge'), favorites: t('Favoriten'), passkeys: t('Passkeys') }[ui.view];
   const rowsEl = h('ul', { class: 'list' });
   let searchTimer = null;
   const search = h('input', { type: 'search', id: 'search', placeholder: t('Suchen (Titel, Benutzer, Website, Ordner)'), value: ui.query, oninput: (e) => {
@@ -1188,7 +1190,7 @@ function renderList() {
   function renderRows() {
     const list = visibleItems();
     if (!list.length && !(container && explicitFolders.get(container.id)?.length)) {
-      rowsEl.replaceChildren(h('li', { class: 'empty' }, icon('search', 32), ui.query ? t('Keine Treffer') : t('Keine Einträge')));
+      rowsEl.replaceChildren(h('li', { class: 'empty' }, icon('search', 32), ui.query ? t('Keine Treffer') : deviceMode() ? t('Keine Geräte') : t('Keine Einträge')));
       return;
     }
     if (container && !ui.query.trim()) {
@@ -1442,18 +1444,20 @@ async function moveToFolder(key, folder) {
 
 /** What can be created here: entry types, plus a (sub)folder in a vault. */
 function newMenuItems(container) {
-  return [
+  // The switch decides: "Devices" creates devices only, "Passwords" everything else (devices never mixed in).
+  const kinds = deviceMode() ? [
+    { action: 'new-server', icon: 'external', label: t('Neue VM / neuer Server'), onClick: () => newItem('server', { type: 'server', server: { kind: 'windows' } }) },
+  ] : [
     { action: 'new-login', icon: 'key', label: t('Neues Passwort / Login'), onClick: () => newItem('login') },
     { action: 'new-note', icon: 'note', label: t('Neue sichere Notiz'), onClick: () => newItem('note') },
     { action: 'new-card', icon: 'card', label: t('Neue Kreditkarte'), onClick: () => newItem('card') },
     { action: 'new-certificate', icon: 'certificate', label: t('Neues Zertifikat'), onClick: () => newItem('certificate') },
     '-',
-    // Devices (server, Azure VM) only with the admin tools on.
-    ...(adminMode() ? [
-      { action: 'new-server', icon: 'external', label: t('Neue VM / neuer Server'), onClick: () => newItem('server', { type: 'server', server: { kind: 'windows' } }) },
-    ] : []),
     { action: 'new-microsoft', icon: 'globe', label: t('Neuer Microsoft-Login'), onClick: () => newItem('login', entryTemplate('microsoft', { msAdmin: st?.settings?.adminTools === true })) },
     { action: 'new-ad', icon: 'user', label: t('Neuer Active-Directory-Logon'), onClick: () => newItem('login', entryTemplate('ad')) },
+  ];
+  return [
+    ...kinds,
     container ? '-' : null,
     container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
       ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
@@ -4207,7 +4211,8 @@ document.addEventListener('keydown', (e) => {
     helpDialog();
   } else if (e.ctrlKey && e.key.toLowerCase() === 'n') {
     e.preventDefault();
-    newItem('login');
+    if (deviceMode()) newItem('server', { type: 'server', server: { kind: 'windows' } });
+    else newItem('login');
   } else if (e.ctrlKey && e.shiftKey && ['u', 'p', 'o'].includes(e.key.toLowerCase())) {
     e.preventDefault();
     typeSelected(e.key.toLowerCase());

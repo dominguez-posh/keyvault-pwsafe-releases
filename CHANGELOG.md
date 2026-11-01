@@ -4,6 +4,12 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.5 – 2026-11-01
+- Admin-Modus streng getrennt: Bei „Geräte“ bietet „Neu“ (auch Strg+N und Rechtsklick) nur Geräte an, die Seitenleiste zeigt „Alle Geräte“ ohne Passkeys; bei „Passwörter“ kommen keine Geräte vor.
+
+### English
+- Admin mode strictly apart: with "Devices", "New" (also Ctrl+N and right-click) offers devices only, the sidebar shows "All devices" without passkeys; with "Passwords" no devices appear.
+
 ## 0.9.4 – 2026-11-01
 - Geräte: Verknüpfte Konten (RDP, TeamViewer, Bastion) werden in einem Fenster mit Suche ausgewählt statt in einer langen Liste.
 - Geräte: Verknüpfen geht nur noch mit Einträgen im selben Tresor; die App lehnt Verweise in andere Tresore beim Speichern und Verbinden ab.
