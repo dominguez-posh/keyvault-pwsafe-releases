@@ -70,6 +70,8 @@ const DEFAULTS = {
   // Personal vault: file path (OneDrive / synced folder / network drive) and its key bound to this device and the PIN.
   // Personal vaults (paths; several, e.g. private and business) and their keys bound to this device and the PIN.
   personalVaults: [],
+  // Order of the vaults in the sidebar (container ids, by drag and drop); vaults not listed follow in their own order.
+  containerOrder: [],
   personalDeviceKeys: {},
   personalOffered: false, // the wizard opened once by itself
 };

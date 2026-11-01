@@ -11,10 +11,10 @@ export const ITEM_TAG = 'kvpwsafe';
 export const ITEM_PREFIX = 'pws-';
 // Key Vault allows 25 KB per secret value; keep headroom.
 export const MAX_ITEM_BYTES = 24 * 1024;
-export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat', server: 'Gerät' };
+export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat', server: 'Asset' };
 // Kinds of a device entry (type "server", admin tools): they decide which connections the entry offers – Windows
 // RDP, Linux SSH, Azure VM Bastion, VMware vSphere client, Hyper-V Windows Admin Center (both as "management page").
-export const DEVICE_KINDS = { windows: 'Windows-Server', linux: 'Linux-Server', azurevm: 'Azure-VM', vmware: 'VMware-VM', hyperv: 'Hyper-V-VM', other: 'Sonstiges Gerät' };
+export const DEVICE_KINDS = { windows: 'Windows-Server', linux: 'Linux-Server', azurevm: 'Azure-VM', vmware: 'VMware-VM', hyperv: 'Hyper-V-VM', other: 'Sonstiges Asset' };
 // VMs and other devices run Windows (RDP) or Linux (SSH); Windows and Linux servers say it with their kind.
 export const deviceOs = (s) => (s.kind === 'linux' ? 'linux' : s.kind === 'windows' ? 'windows' : s.os === 'linux' ? 'linux' : 'windows');
 export const defaultPort = (os) => (os === 'linux' ? 22 : 3389);

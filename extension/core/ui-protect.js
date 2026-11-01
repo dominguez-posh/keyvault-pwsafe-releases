@@ -256,7 +256,8 @@ export async function manageDialog(container, ctx, onChange) {
         } },
       ]);
     });
-    const removePassword = m.password && (m.passkeys.length || m.recovery) ? h('button', { type: 'button', class: 'btn', onclick: async () => {
+    // The personal vault keeps its master password (it opens it on new devices); others may drop it for passkeys.
+    const removePassword = !container.personal && m.password && (m.passkeys.length || m.recovery) ? h('button', { type: 'button', class: 'btn', onclick: async () => {
       const entry = (await ctx.info(container.id)).methods;
       if (!(await confirmDialog(t('Masterpasswort entfernen'), t('Danach entsperren nur noch Passkeys und der Wiederherstellungsschlüssel.'), { confirmLabel: t('Entfernen'), danger: true }))) return;
       await ctx.update(container.id, { type: 'removeEntry', entryId: entry.passwordId }).catch((e) => toast(e.message, 'error'));
@@ -272,7 +273,8 @@ export async function manageDialog(container, ctx, onChange) {
     setChildren(body,
       h('h3', {}, t('Passkeys')),
       passkeyRows.length ? passkeyRows : h('p', { class: 'muted' }, t('Noch kein Passkey.')),
-      h('div', { class: 'actions' }, addPasskey, invite),
+      // The personal vault belongs to one person: no invitations (the app refuses them too).
+      h('div', { class: 'actions' }, addPasskey, container.personal ? null : invite),
       inviteRows.length ? [h('h3', {}, t('Offene Einladungen')), inviteRows] : null,
       h('h3', {}, t('Weitere Methoden')),
       h('p', { class: 'muted small' }, [m.password ? t('Masterpasswort eingerichtet') : t('Kein Masterpasswort'), m.recovery ? t('Wiederherstellungsschlüssel vorhanden') : t('Kein Wiederherstellungsschlüssel')].join(' · ')),

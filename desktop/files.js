@@ -92,7 +92,8 @@ export class FileContainers {
   async containers() {
     return [...this.entries.values()].map((e) => ({
       id: e.id,
-      name: e.vault?.name || path.basename(e.path),
+      // The personal vault is called "Persönlich" / "Personal" in the app's language, whatever the file says.
+      name: this.isPersonal(e.path) ? t('Persönlich') : e.vault?.name || path.basename(e.path),
       path: e.path,
       personal: this.isPersonal(e.path),
       location: this.locations.get(e.path) || null,
@@ -191,6 +192,9 @@ export class FileContainers {
     if (vault.locked) throw new Error(t('Der Datei-Tresor ist gesperrt'));
     // The personal vault belongs to one person: no invitations.
     if (op?.type === 'createInvite' && this.isPersonal(this.entries.get(id)?.path)) throw new Error(t('Der persönliche Tresor lässt sich nicht teilen'));
+    // ... and keeps its master password (new devices open it with it).
+    if (op?.type === 'removeEntry' && this.isPersonal(this.entries.get(id)?.path)
+      && vault.keyring?.entries?.find((e) => e.id === op.entryId)?.type === 'password') throw new Error(t('Das Masterpasswort des persönlichen Tresors lässt sich nicht entfernen'));
     const { keyring, ...extra } = await applyKeyringOp(vault.keyring, vault.ck, op, actor);
     await vault.setKeyring(keyring);
     return extra;
