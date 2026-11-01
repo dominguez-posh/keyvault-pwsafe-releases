@@ -842,6 +842,72 @@
     ui().append(banner);
   }
 
+  // ------------------------------------------------------------ admin tools: one-click sign-in
+
+  // Started in the app (admin center or Bastion): the Microsoft sign-in is walked through step by step – account
+  // tile or name, password, one-time code –, Bastion's form is filled. Only on the sign-in hosts, for two minutes.
+  const SIGN_IN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com|bastion\.azure\.com|portal\.azure\.net)$/i;
+  if (SIGN_IN_HOSTS.test(location.hostname)) startSignIn();
+
+  function startSignIn() {
+    const started = Date.now();
+    const done = new Set();
+    let job;
+    let busy = false;
+    let timer = null;
+    let observer = null;
+    const stop = () => { observer?.disconnect(); clearTimeout(timer); };
+    const next = () => {
+      const b = document.querySelector('#idSIButton9') || document.querySelector('input[type=submit], button[type=submit]');
+      if (b && !b.disabled) b.click();
+    };
+    const visibleInput = (sel) => { const el = document.querySelector(sel); return el && usable(el) ? el : null; };
+    const step = async () => {
+      if (busy || !alive) return;
+      if (Date.now() - started > 120_000) return stop();
+      busy = true;
+      try {
+        if (job === undefined) job = await call('cs:signIn').catch(() => null);
+        if (!job) return stop();
+        if (job.mode === 'microsoft') {
+          const name = job.username.toLowerCase();
+          const tile = name && [...document.querySelectorAll('[data-test-id]')].find((el) => (el.getAttribute('data-test-id') || '').toLowerCase() === name);
+          if (tile && !done.has('tile')) { done.add('tile'); tile.click(); return; }
+          const user = visibleInput('input[name=loginfmt]');
+          if (user && job.username && !done.has('user')) { done.add('user'); setValue(user, job.username); next(); return; }
+          const pw = visibleInput('input[name=passwd]');
+          if (pw && job.password && !done.has('pw')) { done.add('pw'); setValue(pw, job.password); next(); return; }
+          const otc = visibleInput('input[name=otc]');
+          if (otc && !done.has('otc')) {
+            // Ask again: the code has to be current when it is typed in.
+            const fresh = await call('cs:signIn').catch(() => null);
+            if (fresh?.totp) { done.add('otc'); setValue(otc, fresh.totp); next(); }
+            return;
+          }
+        } else if (!done.has('form')) {
+          const f = loginFields(document);
+          if (f.password && job.password) {
+            done.add('form');
+            if (f.username && job.username) setValue(f.username, job.username);
+            setValue(f.password, job.password);
+            stop();
+          }
+        }
+      } finally {
+        busy = false;
+      }
+      return undefined;
+    };
+    const schedule = () => { clearTimeout(timer); timer = setTimeout(step, 350); };
+    const begin = () => {
+      observer = new MutationObserver(schedule);
+      observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
+      schedule();
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', begin, { once: true });
+    else begin();
+  }
+
   if (isTop) {
     const checkPending = () => call('cs:pending').then(showSaveBanner).catch(() => {});
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', checkPending, { once: true });

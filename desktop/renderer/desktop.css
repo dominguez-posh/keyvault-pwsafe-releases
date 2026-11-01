@@ -531,9 +531,10 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .role-mark.role-write, .role-mark.role-admin { color: var(--accent); }
 .role-mark.role-owner { color: #b7791f; background: rgba(214, 158, 46, .14); }
 /* Optional "PIM" button top right, left of the window buttons (menu → View → PIM button). */
-.top-pim { display: none; position: absolute; top: 8px; right: 16px; z-index: 3; height: 36px; min-height: 36px; border-radius: 12px; padding: 0 14px; gap: 6px; -webkit-app-region: no-drag; }
-.frameless .top-pim { right: 152px; }
-.show-pim .top-pim { display: inline-flex; align-items: center; }
+.top-admin { display: none; position: absolute; top: 8px; right: 16px; z-index: 3; gap: 6px; -webkit-app-region: no-drag; }
+.frameless .top-admin { right: 152px; }
+.show-admin .top-admin { display: inline-flex; align-items: center; }
+.top-admin .btn { height: 34px; min-height: 34px; border-radius: 11px; padding: 0 12px; gap: 6px; font-size: 13px; }
 /* Vault in the sidebar while entries are dragged over it. */
 .nav-row.drop { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 10px; background: var(--accent-soft); }
 /* "New" at the top right of the list column, in the language of the floating entry toolbar: a light capsule with a
@@ -548,3 +549,18 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .new-split button:hover { background: var(--surface-2); }
 .new-split .new-more:hover { color: var(--text); }
 .new-split button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Admin tools: admin center tiles, server list, server form and connect buttons. */
+.admin-centers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
+.admin-center { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.admin-center:hover, .admin-center:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.admin-center-icon { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+.server-dialog { display: grid; gap: 12px; width: 100%; min-width: 0; }
+.server-dialog input[type=search] { width: 100%; box-sizing: border-box; }
+.server-list { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.server-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 12px; }
+.server-row:hover { background: var(--surface-2); }
+.server-text { flex: 1; min-width: 0; display: grid; }
+.server-text b, .server-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.server-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.connect-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.value.linked { display: inline-flex; align-items: center; gap: 4px; }

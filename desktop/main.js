@@ -621,6 +621,89 @@ function copyViaHelperExe(text) {
  * Copies a value. On Windows with the markers that keep it out of the clipboard history (Win+V) and the
  * cloud clipboard – a copied password must not end up in a history or on other devices.
  */
+// ---------------------------------------------------------------- admin tools: one-click sign-in and connections
+
+// Sign-in handed to the browser extension: for two minutes, only on the named sign-in hosts, the extension may ask
+// for this one account (bridge "signIn"; the host comes from the browser, not from the page). Several steps (account,
+// password, one-time code) read it again, so the code is always fresh.
+const MS_LOGIN_HOSTS = ['login.microsoftonline.com', 'login.microsoft.com', 'login.live.com'];
+const SIGN_IN_MS = 120_000;
+let signInJobs = [];
+const hostIn = (host, list) => list.some((h) => host === h || host.endsWith(`.${h}`));
+
+/** source: an entry key "containerId/itemId" or { username, password } of a server entry's own account. */
+function addSignInJob(hosts, source, mode) {
+  const now = Date.now();
+  signInJobs = signInJobs.filter((j) => j.until > now && !j.hosts.some((h) => hosts.includes(h)));
+  signInJobs.push({ hosts, source, mode, until: now + SIGN_IN_MS });
+  bridge?.broadcast('signin');
+}
+
+async function signInFor(host) {
+  const now = Date.now();
+  signInJobs = signInJobs.filter((j) => j.until > now);
+  const job = signInJobs.find((j) => hostIn(String(host || '').toLowerCase(), j.hosts));
+  if (!job) return null;
+  const item = typeof job.source === 'string' ? await vault.getItem(...splitEntryKey(job.source)) : job.source;
+  return { mode: job.mode, username: item.username || '', password: item.password || '', totp: item.totp ? (await totpCode(item.totp))?.code || '' : '' };
+}
+
+const splitEntryKey = (key) => {
+  const i = String(key).indexOf('/');
+  if (i < 1) throw new Error(t('Verknüpfter Eintrag nicht gefunden'));
+  return [key.slice(0, i), key.slice(i + 1)];
+};
+
+/** Account of a server connection: the linked entry, else the server entry's own user name and password. */
+async function serverAccount(item, link) {
+  if (link) {
+    try {
+      return await vault.getItem(...splitEntryKey(link));
+    } catch {
+      throw new Error(t('Der verknüpfte Eintrag ist nicht verfügbar (gelöscht oder kein Zugriff auf seinen Tresor).'));
+    }
+  }
+  return { username: item.username, password: item.password };
+}
+
+/**
+ * Remote desktop: the helper (windows/Setup, Rdp.cs) puts the account into a temporary Windows credential for this
+ * server, starts mstsc and removes it again after the connection was made (a credential saved before is restored).
+ * The password goes through stdin, never onto a command line.
+ */
+function launchRdp(host, port, username, password) {
+  if (smokeTest) return { prompt: !password };
+  if (process.platform !== 'win32') throw new Error(t('Remotedesktop gibt es nur unter Windows.'));
+  const target = port && port !== 3389 ? `${host}:${port}` : host;
+  const exe = helperExe();
+  if (!exe || !password) {
+    spawn('mstsc.exe', [`/v:${target}`], { detached: true, stdio: 'ignore' }).unref();
+    return { prompt: !!username };
+  }
+  const child = spawn(exe, ['--rdp'], { detached: true, windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+  child.stdin.end([host, String(port || 3389), username, password].join('\n'));
+  child.unref();
+  return { prompt: false };
+}
+
+/** TeamViewer with ID (and password when stored); without the program installed: its link, password to clipboard. */
+async function launchTeamViewer(id, password) {
+  if (smokeTest) return { copied: false };
+  const dirs = [process.env.ProgramFiles, process.env['ProgramFiles(x86)']].filter(Boolean);
+  const exe = process.platform === 'win32' ? dirs.map((d) => path.join(d, 'TeamViewer', 'TeamViewer.exe')).find((p) => { try { return statSync(p).isFile(); } catch { return false; } }) : null;
+  if (exe) {
+    spawn(exe, ['-i', id, ...(password ? ['--Password', password] : [])], { detached: true, stdio: 'ignore' }).unref();
+    return { copied: false };
+  }
+  await shell.openExternal(`teamviewer10://control?device=${encodeURIComponent(id)}`);
+  if (password) await copyToClipboard(password);
+  return { copied: !!password };
+}
+
+/** Microsoft admin centers (renderer: menu "M365"), opened in the default browser. */
+const ADMIN_CENTER_HOSTS = ['admin.microsoft.com', 'entra.microsoft.com', 'intune.microsoft.com', 'security.microsoft.com', 'purview.microsoft.com',
+  'admin.exchange.microsoft.com', 'admin.teams.microsoft.com', 'portal.azure.com'];
+
 async function copyToClipboard(text) {
   if (process.platform === 'win32' && !smokeTest && !demo) {
     // The helper is a PowerShell process; endpoint protection may block or stall it (Sophos, 2026-10-31) – then
@@ -873,6 +956,8 @@ async function refreshStaleForBrowser() {
 }
 
 const browserHandlers = {
+  // Admin tools: the account for a sign-in started in the app (only for the host it was started for, see signInFor).
+  signIn: async ({ host }) => (opened ? signInFor(host) : null),
   hello: async () => ({ version: app.getVersion(), opened, pinSet: !!config.get().appPin, containers: await browserContainers() }),
   // Everything the extension lists in one answer, straight from the cache (never waits for Azure when there is a
   // cache); outdated vaults are reloaded afterwards and announced with "changed".
@@ -2053,6 +2138,47 @@ const api = {
   openExternal: (url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   },
+  /** Admin center in the browser; with an account the extension signs in with it (one-click, see signInFor). */
+  async openAdminCenter({ url, key }) {
+    requireOpen();
+    let host = '';
+    try {
+      host = new URL(url).hostname;
+    } catch {
+      // not a URL
+    }
+    if (!ADMIN_CENTER_HOSTS.includes(host)) throw new Error(t('Unbekanntes Admin Center'));
+    if (key) addSignInJob(MS_LOGIN_HOSTS, String(key), 'microsoft');
+    if (!smokeTest) await shell.openExternal(url);
+    return { signIn: !!key && !!bridge?.clients?.size };
+  },
+  /** Connects to a server entry: RDP (mstsc with the account), TeamViewer, or Bastion in the browser. */
+  async connectServer({ containerId, id, method }) {
+    requireOpen();
+    const item = await vault.getItem(containerId, id);
+    if (item.type !== 'server') throw new Error(t('Kein Server-Eintrag'));
+    const s = item.server;
+    if (method === 'rdp') {
+      if (!s.host) throw new Error(t('Kein Server (IP oder Name) hinterlegt'));
+      const account = await serverAccount(item, s.rdpLink);
+      return { method, ...launchRdp(s.host, s.port, account.username, account.password) };
+    }
+    if (method === 'teamviewer') {
+      if (!s.tvId) throw new Error(t('Keine TeamViewer-ID hinterlegt'));
+      const password = s.tvLink ? (await serverAccount(item, s.tvLink)).password : s.tvPassword;
+      return { method, ...(await launchTeamViewer(s.tvId, password)) };
+    }
+    if (method === 'bastion') {
+      if (!/^https:\/\//i.test(s.bastionUrl)) throw new Error(t('Kein Bastion-Link hinterlegt'));
+      if (s.bastionLoginLink) addSignInJob(MS_LOGIN_HOSTS, s.bastionLoginLink, 'microsoft');
+      // The server account goes into Bastion's own sign-in form (portal blade or shareable link page).
+      const vm = s.bastionVmLink || s.rdpLink || (item.username || item.password ? { username: item.username, password: item.password } : null);
+      if (vm) addSignInJob(['bastion.azure.com', 'reactblade.portal.azure.net', 'portal.azure.net'], vm, 'form');
+      if (!smokeTest) await shell.openExternal(s.bastionUrl);
+      return { method, signIn: !!bridge?.clients?.size };
+    }
+    throw new Error(t('Unbekannte Verbindungsart'));
+  },
   // No export: entries never leave the app as a plain file (only encrypted owner backups, see createBackup). The only file the
   // app writes on request is the built-in import sample – never content passed in by the renderer.
   /** The certificate file of one entry, on explicit request (Save as…) – the file itself is what the entry holds. */
@@ -2854,7 +2980,7 @@ function runSmokeTest() {
       if (view === 'health') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=health]")?.click()');
       if (view === 'access') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=access]")?.click()');
       // Main menu screenshot also shows the optional PIM button top right.
-      if (view === 'mainmenu') await js('document.documentElement.classList.add("show-pim"); document.querySelector(".menu-btn")?.click()');
+      if (view === 'mainmenu') await js('document.documentElement.classList.add("show-admin"); document.querySelector(".menu-btn")?.click()');
       if (view === 'multi') {
         await js('[...document.querySelectorAll(".sidebar .nav")].find((n) => /Alle Einträge|All entries|All items/.test(n.textContent))?.click()');
         await sleep(400);
@@ -2995,6 +3121,40 @@ function runSmokeTest() {
         await sleep(300);
         await js('(() => { const el = document.querySelector(".list-pane .list-scroll"); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 120, clientY: r.top + 120 })); })()');
         await sleep(400);
+      }
+      if (view === 'admin' || view === 'm365' || view === 'servers' || view === 'serveritem' || view === 'serveredit') {
+        // Admin tools: server entry with a linked account, one-click sign-in only for the host it was started for
+        // (nothing is launched in smoke runs – see launchRdp/launchTeamViewer).
+        try {
+          const kvc = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error && !c.locked);
+          const login = (await vault.summaries()).find((x) => x.containerId === kvc.id && x.type === 'login');
+          const saved = await vault.saveItem(kvc.id, { type: 'server', title: 'DC01', folder: '', server: { host: '10.0.0.4', rdpLink: login.key, tvId: '123456789', tvPassword: 'tv-secret', bastionUrl: 'https://portal.azure.com/#@contoso.com/resource/vm/connect', bastionLoginLink: login.key } });
+          await vault.saveItem(kvc.id, { type: 'server', title: 'SQL01', server: { host: 'sql01.contoso.local', port: 3390 }, username: 'CONTOSO\sqladmin', password: 'x' });
+          const full = await vault.getItem(kvc.id, login.id);
+          await api.openAdminCenter({ url: 'https://entra.microsoft.com', key: login.key });
+          const ms = await signInFor('login.microsoftonline.com');
+          if (ms?.username !== full.username || ms?.mode !== 'microsoft') errors.push('admin: Microsoft sign-in job not handed out');
+          if (await signInFor('evil.example.com')) errors.push('admin: sign-in handed to another host');
+          if (await api.openAdminCenter({ url: 'https://evil.example.com', key: login.key }).then(() => true, () => false)) errors.push('admin: unknown admin center accepted');
+          const r = await api.connectServer({ containerId: kvc.id, id: saved.id, method: 'bastion' });
+          if (r.method !== 'bastion' || (await signInFor('x.bastion.azure.com'))?.password !== full.password) errors.push('admin: Bastion VM sign-in missing');
+          if ((await api.connectServer({ containerId: kvc.id, id: saved.id, method: 'rdp' })).method !== 'rdp') errors.push('admin: RDP failed');
+          if ((await api.connectServer({ containerId: kvc.id, id: saved.id, method: 'teamviewer' })).method !== 'teamviewer') errors.push('admin: TeamViewer failed');
+          signInJobs = [];
+          config.update({ adminTools: true });
+          changed();
+          await sleep(800);
+          await js('document.documentElement.classList.add("show-admin")');
+          if (view === 'm365') await js('document.querySelector("[data-admin=m365]")?.click()');
+          if (view === 'servers') await js('document.querySelector("[data-admin=servers]")?.click()');
+          if (view === 'serveritem' || view === 'serveredit') await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
+          await sleep(400);
+          if (view === 'serveritem' || view === 'serveredit') await js('[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.textContent.includes("DC01"))?.click()');
+          if (view === 'serveredit') { await sleep(500); await js('[...document.querySelectorAll(".detail-pane button")].find((b) => b.textContent.trim() === "Bearbeiten")?.click()'); }
+          await sleep(500);
+        } catch (e) {
+          errors.push(`admin: ${e.message}`);
+        }
       }
       if (view === 'itemmenu') {
         // Entry with the "⋯" menu of its head toolbar open (screenshot only).

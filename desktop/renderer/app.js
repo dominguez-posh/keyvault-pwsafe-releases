@@ -365,9 +365,12 @@ async function render() {
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
-  // Optional (menu → View): Privileged Identity Management in the browser, for activating an eligible role.
-  const pim = h('button', { type: 'button', class: 'btn top-pim', title: t('Rolle mit Privileged Identity Management aktivieren (aka.ms/pim)'), onclick: () => openUrl('https://aka.ms/pim') }, icon('shield', 15), 'PIM');
-  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions, pim);
+  // Optional (menu → View → Admin tools): PIM, Microsoft 365 admin centers and servers, always together.
+  const adminBar = h('div', { class: 'top-admin' },
+    h('button', { type: 'button', class: 'btn', dataset: { admin: 'pim' }, title: t('Rolle mit Privileged Identity Management aktivieren (aka.ms/pim)'), onclick: () => openUrl('https://aka.ms/pim') }, icon('shield', 15), 'PIM'),
+    h('button', { type: 'button', class: 'btn', dataset: { admin: 'm365' }, title: t('Microsoft 365 Admin Center öffnen'), onclick: adminCenterDialog }, icon('globe', 15), 'M365'),
+    h('button', { type: 'button', class: 'btn', dataset: { admin: 'servers' }, title: t('Mit einem Server verbinden'), onclick: serverDialog }, icon('external', 15), t('Server')));
+  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions, adminBar);
   root.replaceChildren(shell);
   setupSplitters(shell);
   renderSidebar();
@@ -791,7 +794,7 @@ function applyViewClass() {
   const mode = st?.settings?.transparency || 'light';
   document.documentElement.classList.toggle('see-through', mode === 'light' || mode === 'strong');
   document.documentElement.classList.toggle('see-through-strong', mode === 'strong');
-  document.documentElement.classList.toggle('show-pim', st?.settings?.pimButton === true);
+  document.documentElement.classList.toggle('show-admin', st?.settings?.adminTools === true || st?.settings?.pimButton === true);
 }
 
 const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
@@ -846,7 +849,7 @@ function onOffControl(key, label, on, after) {
 /** View → "Ansicht auf Standard": zoom, transparency, bottom bar, source marks and column widths as on first start. */
 async function resetView() {
   try { localStorage.removeItem('paneWidths'); } catch {}
-  await setView({ zoom: 1, theme: 'system', transparency: 'light', entryToolbar: true, sourceBadges: true, pimButton: false });
+  await setView({ zoom: 1, theme: 'system', transparency: 'light', entryToolbar: true, sourceBadges: true, pimButton: false, adminTools: false });
   await render();
   toast(t('Ansicht zurückgesetzt'));
 }
@@ -930,7 +933,7 @@ function mainMenu(anchor) {
     viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
     viewRow(t('Leiste unten'), onOffControl('entryToolbar', t('Leiste unten'), true, renderDetail)),
     viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
-    viewRow(t('PIM-Button'), onOffControl('pimButton', t('PIM-Button'), false)),
+    viewRow(t('Admin-Werkzeuge'), onOffControl('adminTools', t('Admin-Werkzeuge'), false, () => setView({ pimButton: false }))),
     entry('view-reset', 'refresh', t('Ansicht auf Standard'), resetView),
     h('div', { class: 'context-sep' }),
     entry('lock', 'lock', t('Sperren'), () => call('lock')));
@@ -1385,10 +1388,11 @@ async function moveToFolder(key, folder) {
 /** What can be created here: entry types, plus a (sub)folder in a vault. */
 function newMenuItems(container) {
   return [
-    { action: 'new-login', icon: 'key', label: t('Passwort / Login'), onClick: () => newItem('login') },
-    { action: 'new-note', icon: 'note', label: t('Sichere Notiz'), onClick: () => newItem('note') },
-    { action: 'new-card', icon: 'card', label: t('Kreditkarte'), onClick: () => newItem('card') },
-    { action: 'new-certificate', icon: 'certificate', label: t('Zertifikat'), onClick: () => newItem('certificate') },
+    { action: 'new-login', icon: 'key', label: t('Neues Passwort / Login'), onClick: () => newItem('login') },
+    { action: 'new-note', icon: 'note', label: t('Neue sichere Notiz'), onClick: () => newItem('note') },
+    { action: 'new-card', icon: 'card', label: t('Neue Kreditkarte'), onClick: () => newItem('card') },
+    { action: 'new-certificate', icon: 'certificate', label: t('Neues Zertifikat'), onClick: () => newItem('certificate') },
+    { action: 'new-server', icon: 'external', label: t('Neuer Server / Ressource'), onClick: () => newItem('server') },
     container ? '-' : null,
     container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
       ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
@@ -2550,6 +2554,8 @@ async function renderDetail() {
     copy,
     openUrl,
     containerName,
+    connect: (it, method) => connectServer(it.containerId, it.id, method),
+    linkTitle,
     saveFile: async (name, data) => {
       try {
         const path = await call('saveCertificate', name, data);
@@ -2606,6 +2612,92 @@ async function renderDetail() {
   return undefined;
 }
 
+// ---------------------------------------------------------------- admin tools
+
+/** Logins a server entry can link to (accounts for RDP, TeamViewer, Bastion); Microsoft admin accounts marked. */
+const linkOptions = () => items.filter((i) => i.type === 'login')
+  .map((i) => ({ key: i.key, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin }))
+  .sort((a, b) => a.title.localeCompare(b.title));
+
+function linkTitle(key) {
+  const i = items.find((x) => x.key === key);
+  return i ? [i.title, i.username, containerName(i.containerId)].filter(Boolean).join(' · ') : '';
+}
+
+async function connectServer(containerId, id, method) {
+  try {
+    const r = await call('connectServer', { containerId, id, method });
+    if (method === 'rdp') toast(r.prompt ? t('Remotedesktop gestartet – bitte dort anmelden') : t('Remotedesktop gestartet'));
+    else if (method === 'teamviewer') toast(r.copied ? t('TeamViewer geöffnet – das Passwort liegt in der Zwischenablage') : t('TeamViewer gestartet'));
+    else toast(r.signIn ? t('Bastion geöffnet – die Browser-Erweiterung meldet dich an') : t('Bastion geöffnet – ohne Browser-Erweiterung bitte selbst anmelden'));
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+// Microsoft admin centers (menu "M365"); SharePoint goes through the M365 admin center, which knows the tenant.
+const ADMIN_CENTERS = [
+  { name: 'Microsoft 365 Admin Center', url: 'https://admin.microsoft.com', icon: 'users' },
+  { name: 'Entra ID', url: 'https://entra.microsoft.com', icon: 'shield' },
+  { name: 'Intune', url: 'https://intune.microsoft.com', icon: 'settings' },
+  { name: 'Defender', url: 'https://security.microsoft.com', icon: 'shield' },
+  { name: 'Purview', url: 'https://purview.microsoft.com', icon: 'note' },
+  { name: 'Exchange', url: 'https://admin.exchange.microsoft.com', icon: 'mail' },
+  { name: 'Teams', url: 'https://admin.teams.microsoft.com', icon: 'users' },
+  { name: 'SharePoint', url: 'https://admin.microsoft.com/sharepoint', icon: 'folder' },
+  { name: 'Azure Portal', url: 'https://portal.azure.com', icon: 'globe' },
+];
+
+/** M365: pick the account, then the admin center – the browser opens it and the extension signs in. */
+function adminCenterDialog() {
+  const microsoft = (i) => i.msAdmin || i.hosts.some((h) => /(^|\.)(microsoftonline|microsoft|office|azure)\.com$/.test(h));
+  const accounts = items.filter((i) => i.type === 'login' && microsoft(i))
+    .sort((a, b) => Number(b.msAdmin) - Number(a.msAdmin) || a.title.localeCompare(b.title));
+  let last = '';
+  try { last = localStorage.getItem('adminAccount') || ''; } catch {}
+  const account = h('select', {},
+    h('option', { value: '' }, t('Ohne Konto – im Browser selbst anmelden')),
+    ...accounts.map((i) => h('option', { value: i.key, selected: i.key === last }, [i.title, i.username, containerName(i.containerId)].filter(Boolean).join(' · '))));
+  const { close } = modal(t('Microsoft 365 Admin Center'), h('div', { class: 'admin-centers-dialog' },
+    field(t('Anmelden als'), account),
+    accounts.some((i) => i.msAdmin) ? null : h('p', { class: 'muted small' }, t('Tipp: Markiere Login-Einträge als „Microsoft-Admin-Konto“ – dann stehen sie hier oben.')),
+    h('div', { class: 'admin-centers' }, ...ADMIN_CENTERS.map((c) => h('button', { type: 'button', class: 'admin-center', onclick: async () => {
+      try { localStorage.setItem('adminAccount', account.value); } catch {}
+      try {
+        const r = await call('openAdminCenter', { url: c.url, key: account.value || '' });
+        close();
+        if (account.value) toast(r.signIn ? t('{center} geöffnet – die Browser-Erweiterung meldet dich an', { center: c.name }) : t('{center} geöffnet – ohne Browser-Erweiterung bitte selbst anmelden', { center: c.name }));
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    } }, h('span', { class: 'admin-center-icon' }, icon(c.icon, 18)), h('span', {}, c.name))))), [{ label: t('Schließen') }]);
+}
+
+/** Servers: every server entry with its connection buttons, a search over name and address. */
+function serverDialog() {
+  const all = items.filter((i) => i.type === 'server').sort((a, b) => a.title.localeCompare(b.title));
+  const LABELS = { rdp: t('RDP'), teamviewer: t('TeamViewer'), bastion: t('Bastion') };
+  const list = h('div', { class: 'server-list' });
+  const search = h('input', { type: 'search', placeholder: t('Server suchen …'), 'aria-label': t('Server suchen') });
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    const shown = all.filter((i) => !q || `${i.title} ${i.username} ${containerName(i.containerId)}`.toLowerCase().includes(q));
+    list.replaceChildren(...(shown.length ? shown.map((i) => h('div', { class: 'server-row' },
+      avatar(i.title, 'avatar'),
+      h('div', { class: 'server-text' }, h('b', {}, i.title), h('span', { class: 'muted small' }, [i.username, containerName(i.containerId)].filter(Boolean).join(' · '))),
+      h('div', { class: 'server-actions' }, ...i.methods.map((m) => h('button', { type: 'button', class: 'btn small', onclick: () => connectServer(i.containerId, i.id, m) }, LABELS[m] || m)))))
+      : [h('p', { class: 'muted' }, all.length ? t('Kein Server gefunden.') : t('Noch keine Server. Lege einen Eintrag vom Typ „Server“ an: Adresse, RDP-Konto, TeamViewer-ID oder Bastion-Link.'))]));
+  };
+  search.addEventListener('input', draw);
+  draw();
+  const { close } = modal(t('Server'), h('div', { class: 'server-dialog' }, search, list), [
+    { label: t('Neuer Server …'), onClick: () => { newItem('server'); } },
+    { label: t('Schließen') },
+  ]);
+  setTimeout(() => search.focus(), 0);
+  return close;
+}
+
 function renderEditor() {
   const isNew = ui.editing === 'new';
   const item = isNew ? { type: ui.newType || 'login', urls: [], password: ui.newPassword || '' } : ui.editingItem;
@@ -2616,6 +2708,7 @@ function renderEditor() {
   const folderContainer = st.containers.find((c) => c.id === folderTarget);
   const form = itemForm(item, {
     isNew,
+    linkOptions: linkOptions(),
     folders: knownFolders,
     // Without the "folders" function only existing folders can be chosen (no new ones by typing).
     folderFree: !folderContainer || featureAllowed(folderContainer, 'folders'),
@@ -3272,6 +3365,40 @@ async function createContainerDialog() {
   });
   drawAccess();
 
+  // Break-glass accounts: permanent full access ("Manage") to the new vault, remembered per tenant for the next one.
+  const breakGlass = [];
+  const bgList = h('div', { class: 'access-list' });
+  const bgSearch = h('input', { placeholder: t('Notfallkonto suchen (Name oder E-Mail) …') });
+  const bgResults = h('div', { class: 'search-results' });
+  const bgRemember = h('input', { type: 'checkbox', checked: true });
+  const drawBreakGlass = () => setChildren(bgList, breakGlass.length
+    ? breakGlass.map((p, i) => h('div', { class: 'member' }, icon(p.type === 'Group' ? 'users' : 'user'),
+      h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, p.displayName), h('div', { class: 'row-sub' }, p.detail || '')),
+      h('span', { class: 'badge accent' }, t('Verwalten')),
+      iconButton('x', t('Entfernen'), () => { breakGlass.splice(i, 1); drawBreakGlass(); })))
+    : [notice(h('span', {}, t('Ohne Notfallkonto kommt niemand an die Passwörter, wenn die normale Anmeldung klemmt (Conditional Access, MFA, PIM). '),
+      h('button', { type: 'button', class: 'linklike', onclick: () => openUrl(getLanguage() === 'en' ? 'https://keevault.de/en/knowledge/vault-hardening.html#break-glass-accounts' : 'https://keevault.de/wissen/tresor-absichern.html#break-glass-konten') }, t('Mehr zu Break-Glass-Konten'))), 'warn')]);
+  let bgTimer;
+  bgSearch.addEventListener('input', () => {
+    clearTimeout(bgTimer);
+    bgTimer = setTimeout(async () => {
+      const q = bgSearch.value.trim();
+      if (q.length < 2) return bgResults.replaceChildren();
+      const found = await call('searchPrincipalsIn', q, current().tenantId).catch(() => []);
+      return bgResults.replaceChildren(...found.filter((p) => !breakGlass.some((b) => b.id === p.id)).map((p) => h('button', { type: 'button', class: 'choice', onclick: () => {
+        breakGlass.push({ id: p.id, type: p.type, displayName: p.displayName, detail: p.detail || '' });
+        bgSearch.value = '';
+        bgResults.replaceChildren();
+        drawBreakGlass();
+      } }, icon(p.type === 'Group' ? 'users' : 'user'), h('span', {}, p.displayName), h('span', { class: 'muted small' }, p.type === 'Group' ? t('Gruppe') : p.detail))));
+    }, 300);
+  });
+  const loadBreakGlass = () => {
+    breakGlass.length = 0;
+    breakGlass.push(...((st.settings.breakGlass || {})[current()?.tenantId] || []));
+    drawBreakGlass();
+  };
+
   const syncLocation = () => {
     const l = rg.selectedOptions[0]?.dataset.location;
     if (l) loc.value = l;
@@ -3283,6 +3410,7 @@ async function createContainerDialog() {
       : s.via === 'guest' ? notice(t('Wird im Tenant „{tenant}“ mit deinem Gastkonto angelegt; Gruppen und Personen stammen aus diesem Verzeichnis.', { tenant: s.tenantName || s.tenantId }), 'info') : null);
     access.length = 0;
     drawAccess();
+    loadBreakGlass();
     try {
       const [groups, locations] = await Promise.all([call('resourceGroups', s.id, s.tenantId), call('locations', s.id, s.tenantId)]);
       rg.replaceChildren(...groups.map((g) => h('option', { value: g.name, dataset: { location: g.location } }, g.name)));
@@ -3321,13 +3449,24 @@ async function createContainerDialog() {
     h('h3', {}, t('Zugriff')),
     h('div', { class: 'field-row access-search' }, search, level),
     results,
-    accessList), [
+    accessList,
+    h('h3', {}, t('Notfallzugang (Break-Glass-Konten)')),
+    h('p', { class: 'muted small' }, t('Bekommen dauerhaft „Verwalten“ (voller Zugriff, ohne PIM) – damit im Notfall jemand an die Passwörter kommt.')),
+    bgSearch,
+    bgResults,
+    bgList,
+    h('label', { class: 'inline' }, bgRemember, t('Für neue Tresore in diesem Tenant merken'))), [
     { label: t('Abbrechen') },
     { label: t('Erstellen'), primary: true, onClick: async () => {
       const s = current();
       if (s.via === 'lighthouse') throw new Error(t('Über Azure Lighthouse lässt sich hier kein nutzbarer Tresor anlegen (siehe Hinweis).'));
       if (!rg.value) throw new Error(t('Bitte eine Ressourcengruppe wählen'));
-      const members = access.filter((a) => a.principal).map((a) => ({ principal: a.principal, level: a.level }));
+      // Break-glass accounts get "Manage"; someone chosen in both lists keeps the higher level.
+      const members = access.filter((a) => a.principal && !breakGlass.some((b) => b.id === a.principal.id)).map((a) => ({ principal: a.principal, level: a.level }))
+        .concat(breakGlass.map((p) => ({ principal: p, level: 'manage' })));
+      if (bgRemember.checked && s.tenantId) {
+        st.settings = await call('updateSettings', { breakGlass: { ...(st.settings.breakGlass || {}), [s.tenantId]: breakGlass.map((p) => ({ ...p })) } });
+      }
       const guests = access.filter((a) => a.email).map((a) => ({ email: a.email, level: a.level }));
       if (mode.value === 'existing') {
         const option = existing.selectedOptions[0];

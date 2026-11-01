@@ -161,6 +161,8 @@ export const app = {
     return c;
   },
   getItem: (containerId, itemId) => call('item', { containerId, itemId }),
+  /** Admin tools: the account of a sign-in the user just started in the app, only for this host (else null). */
+  signIn: (host) => call('signIn', { host }),
   saveItem: async (containerId, item, { expectedVersion } = {}) => changedHere(await call('save', { containerId, item, expectedVersion })),
   deleteItem: async (containerId, itemId) => changedHere(await call('delete', { containerId, itemId })),
   async matchesForHost(host) {

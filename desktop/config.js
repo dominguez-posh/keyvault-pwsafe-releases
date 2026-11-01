@@ -63,6 +63,10 @@ const DEFAULTS = {
   sourceBadges: true,
   // View: "PIM" button top right (opens aka.ms/pim to activate an eligible Azure role).
   pimButton: false,
+  // View: admin tools top right – PIM, Microsoft 365 admin centers, servers (replaces the single PIM button).
+  adminTools: false,
+  // Break-glass accounts per tenant ({ [tenantId]: [{ id, type, displayName, detail }] }): preset when creating a vault.
+  breakGlass: {},
   // Personal vault: file path (OneDrive / synced folder / network drive) and its key bound to this device and the PIN.
   personalVault: null,
   personalDeviceKey: null,

@@ -191,6 +191,8 @@ async function copyTotpAfterFill(item) {
 
 // ---------------------------------------------------------------- autofill
 
+// Microsoft sign-in and Azure Bastion (portal blade or shareable link): the only pages that receive one-click sign-ins.
+const SIGN_IN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com|bastion\.azure\.com|portal\.azure\.net)$/i;
 const senderHost = (sender) => hostFromUrl(sender.origin && sender.origin !== 'null' ? sender.origin : sender.url);
 
 function contentStrings() {
@@ -788,6 +790,13 @@ const contentCommands = {
     if (!itemMatchesHost(itemHosts(item), senderHost(sender))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const totpCopied = await copyTotpAfterFill(item);
     return { username: item.username, password: item.password, totpCopied };
+  },
+  // Admin tools: one-click sign-in started in the app (admin center, Bastion). Only sign-in hosts ask, and the app
+  // answers only within two minutes of the click and only for the host it was started for.
+  'cs:signIn': async (_msg, sender) => {
+    const host = senderHost(sender);
+    if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
+    return app.signIn(host);
   },
   'cs:capture': (msg, sender) => capture(msg, sender),
   'cs:pending': async (_msg, sender) => {

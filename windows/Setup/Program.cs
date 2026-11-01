@@ -6,6 +6,7 @@
 //                                              started by the app for an update: waits for the app to quit, installs,
 //                                              starts the new version with --updated-from=<old version>
 //   Keevault-Update.exe --clipboard            stdin text → clipboard, kept out of history and cloud clipboard (Clip.cs)
+//   Keevault-Update.exe --rdp                  stdin host/port/user/password → mstsc with a temporary credential (Rdp.cs)
 //   … --screenshot <png> --page welcome|progress|done|error|update|updated [--theme light|dark] [--lang de|en]
 //                                              renders one page into a PNG without showing a window (tests, docs)
 
@@ -43,6 +44,8 @@ namespace Keevault.Setup
             if (args.Has("wer-exclude")) return Wer.Exclude(args.Get("wer-exclude"));
             // Where a vault file lives (cloud sync folder / network / local) and whether it is in sync (Location.cs).
             if (args.Has("location")) return Location.Run(args.Get("location"));
+            // Remote desktop with an account from the vault: temporary credential for mstsc (Rdp.cs).
+            if (args.Has("rdp")) return Rdp.Run();
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
             var window = new SetupWindow(args);
             if (args.Has("screenshot"))

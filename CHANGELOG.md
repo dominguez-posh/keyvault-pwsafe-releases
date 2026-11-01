@@ -4,6 +4,24 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.0 – 2026-11-01
+- Notfallzugang beim Anlegen eines Tresors: Break-Glass-Konten bekommen direkt dauerhaft „Verwalten“; Keevault merkt sie sich je Tenant für weitere Tresore und warnt, wenn keines eingetragen ist.
+- „Neu“-Menü und Rechtsklick sagen jetzt, was entsteht: „Neues Passwort / Login“, „Neue sichere Notiz“, „Neue Kreditkarte“, „Neues Zertifikat“, „Neuer Server / Ressource“.
+- Website: Notfall-Export-Skript (alle Einträge ohne Keevault direkt aus Azure, für KeePass, Bitwarden & Co.) mit Anleitung und Textbaustein für den Notfallplan; neuer Artikel „Tresore absichern“ (Break-Glass-Konten, Conditional Access, Private Endpoint).
+- Neu: Admin-Werkzeuge (Menü → Ansicht → Admin-Werkzeuge) – drei Knöpfe oben rechts: **PIM**, **M365** und **Server**.
+- M365: Konto und Admin Center wählen (Microsoft 365, Entra ID, Intune, Defender, Purview, Exchange, Teams, SharePoint, Azure Portal) – der Browser öffnet es, die Browser-Erweiterung meldet dich an (Konto, Passwort, Einmalcode). Login-Einträge lassen sich als „Microsoft-Admin-Konto“ markieren.
+- Neuer Eintragstyp **Server / Ressource**: Adresse und Port, RDP-Konto, TeamViewer-ID und -Passwort, Bastion-Link mit Microsoft-Konto und Server-Konto – jeweils als eigenes Passwort oder als Verknüpfung zu einem anderen Eintrag (z. B. dem Domänen-Admin). Verbinden mit einem Klick: Remotedesktop meldet sich selbst an, TeamViewer startet mit ID und Passwort, Bastion öffnet sich im Browser mit Anmeldung.
+- Der Knopf „Server“ listet alle Server mit Suche und Verbindungsknöpfen.
+
+### English
+- Emergency access when creating a vault: break-glass accounts get “Manage” permanently right away; Keevault remembers them per tenant for further vaults and warns when none is set.
+- The “New” menu and right-click now say what is created: “New password / login”, “New secure note”, “New credit card”, “New certificate”, “New server / resource”.
+- Website: emergency export script (all entries without Keevault straight from Azure, for KeePass, Bitwarden & co.) with instructions and a text block for the emergency plan; new article “Hardening vaults” (break-glass accounts, Conditional Access, private endpoint).
+- New: admin tools (menu → View → Admin tools) – three buttons at the top right: **PIM**, **M365** and **Server**.
+- M365: choose account and admin center (Microsoft 365, Entra ID, Intune, Defender, Purview, Exchange, Teams, SharePoint, Azure portal) – the browser opens it and the browser extension signs you in (account, password, one-time code). Login entries can be marked as “Microsoft admin account”.
+- New entry type **Server / resource**: address and port, RDP account, TeamViewer ID and password, Bastion link with Microsoft account and server account – each as an own password or as a link to another entry (e.g. the domain admin). Connect in one click: remote desktop signs in by itself, TeamViewer starts with ID and password, Bastion opens in the browser with sign-in.
+- The “Server” button lists all servers with search and connect buttons.
+
 ## 0.8.9 – 2026-11-01
 - Hell oder dunkel nach Wunsch: Menü → Ansicht → Design (System, Hell, Dunkel). „System“ folgt wie bisher dem Windows-App-Modus.
 - „Neu“ sitzt jetzt oben rechts in der Liste, als ruhige Kapsel im Stil der Werkzeugleiste: Klick legt einen Login an, der Pfeil daneben bietet Notiz, Kreditkarte, Zertifikat und Ordner.
