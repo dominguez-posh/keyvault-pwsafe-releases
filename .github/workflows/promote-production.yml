@@ -1,0 +1,61 @@
+# Early Access → Prod. Runs in the PUBLIC repo dominguez-posh/keyvault-pwsafe-releases (exported there with the
+# source): the very same pre-release – no new build, exactly the files tested in the field – becomes "Latest", and main
+# moves forward to the release's source. Stable users get it within ten minutes (keevault.de/update caches 10 min).
+#
+# Only after approval: the public repo's environment "production" has the required reviewer (scripts/setup-ci-secrets.mjs
+# sets it up – approval rules are free for public repos). Needs no keys: the repo's own token is enough.
+name: Prod freigeben
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version der Early-Access-Vorabversion (z. B. 0.9.8)
+        required: true
+      min_hours:
+        description: Mindestens so viele Stunden im Praxistest (0 = egal)
+        required: false
+        default: "24"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Pre-Release → Latest
+    # Only the public repo has the approval rule; anywhere else the job does nothing.
+    if: github.repository == 'dominguez-posh/keyvault-pwsafe-releases'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v${{ inputs.version }}
+    steps:
+      - name: Vorabversion prüfen
+        run: |
+          set -euo pipefail
+          info=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease,isDraft,publishedAt)
+          echo "$info"
+          [ "$(echo "$info" | jq -r .isDraft)" = "false" ] || { echo "Entwurf – erst veröffentlichen"; exit 1; }
+          [ "$(echo "$info" | jq -r .isPrerelease)" = "true" ] || { echo "$TAG ist keine Early-Access-Vorabversion (schon freigegeben?)"; exit 1; }
+          published=$(date -d "$(echo "$info" | jq -r .publishedAt)" +%s)
+          hours=$(( ( $(date +%s) - published ) / 3600 ))
+          echo "Seit $hours Stunden im Praxistest"
+          [ "$hours" -ge "${{ inputs.min_hours }}" ] || { echo "Erst $hours von ${{ inputs.min_hours }} Stunden im Praxistest"; exit 1; }
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: main auf den Stand der Version
+        run: |
+          set -euo pipefail
+          git fetch --quiet --tags origin
+          # Only forward: main must be an ancestor of the release (every Prod came from Early Access).
+          git merge --ff-only "$TAG"
+          git push --quiet origin main
+      - name: Als „Latest" freigeben
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest --title "Keevault ${{ inputs.version }}"
