@@ -4,6 +4,24 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.9 – 2026-11-01
+- „Neu“ bleibt für alle einfach: „Neuer Microsoft-Login“ und „Neuer Active-Directory-Logon“ gibt es nur im Admin-Modus.
+- Admin-Modus nur mit PIN: Statt des Schalters „Admin-Werkzeuge“ gibt es im Menü „Admin-Modus aktivieren …“; das wird mit der App-PIN bestätigt, ohne PIN lässt er sich nicht einschalten. Beenden geht ohne PIN.
+- Microsoft-Anmeldung mit einem Klick: „Angemeldet bleiben?“ wird danach automatisch mit „Nein“ beantwortet (nur nach einer Anmeldung durch Keevault, nicht bei eigenen Anmeldungen).
+
+### English
+- "New" stays simple for everyone: "New Microsoft login" and "New Active Directory logon" only in admin mode.
+- Admin mode only with the PIN: instead of the "Admin tools" switch the menu has "Activate admin mode …", confirmed with the app PIN; without a PIN it cannot be switched on. Ending it needs no PIN.
+- One-click Microsoft sign-in: "Stay signed in?" is answered with "No" afterwards (only after a sign-in done by Keevault, not after your own).
+
+## 0.9.8 – 2026-11-01
+- Update-Kanal „Early Access“ (Einstellungen → Updates): neue Versionen schon im Praxistest, bevor sie für alle freigegeben werden. Standard bleibt „Stabil“.
+- Rollback bei Installation und Update: Das Setup sichert vorher den Keevault-Ordner; schlägt die Installation fehl, wird sie (z. B. von einer Sicherheitssoftware) beendet oder fehlen danach Programmdateien, kommt die vorherige Version automatisch zurück. Neuer Fehlercode KV-S10 „Installation unvollständig“.
+
+### English
+- Update channel "Early Access" (Settings → Updates): new versions already in the field test before they are released to everyone. "Stable" stays the default.
+- Rollback on installation and update: the setup saves the Keevault folder first; if the installation fails, is ended (e.g. by security software) or program files are missing afterwards, the previous version comes back automatically. New error code KV-S10 "Installation incomplete".
+
 ## 0.9.7 – 2026-11-01
 - Behebt: 0.9.6 startete nicht (eine Programmdatei war im Paket unvollständig). Wer 0.9.6 installiert hat, installiert 0.9.7 bitte einmal von keevault.de – die Tresore und Einstellungen bleiben erhalten.
 - Papierkorb leichter zu finden: im Hauptmenü und beim Rechtsklick in die Liste (bisher nur über das Tresor-Menü).

@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 // KV_UNPACKED_DIR: release.ps1 builds into release/build when a running test build locks release/win-unpacked.
@@ -19,6 +20,21 @@ const version = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).ver
 // Never change: Windows recognizes the product (and replaces older versions) by it.
 const UPGRADE_CODE = '{86BFB281-FD2C-4C9A-9BF5-A8A1B3EEEFA4}';
 const SHORTCUT_GUID = '{70A92108-8D35-4F6F-B75B-CC5FFE5F33BD}';
+
+// The WiX build electron-builder uses for its own MSI target (same name and checksum as app-builder-lib's MsiTarget).
+const WIX = ['wix-4.0.0.5512.2', 'wix-4.0.0.5512.2.7z', 'fe677fcd837b18c9b912985d91636bbd8a1e800c3b3a6a841b6f96e89624e839'];
+
+/** WiX from electron-builder's cache; on a fresh machine (CI) electron-builder downloads it first, checksum-verified. */
+async function wixTools() {
+  try {
+    return findWix();
+  } catch {
+    const { getBinFromUrl } = createRequire(import.meta.url)('app-builder-lib/out/binDownload');
+    console.log('WiX fehlt – electron-builder lädt es (wie für sein eigenes MSI-Ziel) …');
+    const dir = await getBinFromUrl(...WIX);
+    return existsSync(join(dir, 'candle.exe')) ? dir : findWix();
+  }
+}
 
 function findWix() {
   const cache = join(process.env.LOCALAPPDATA || '', 'electron-builder', 'Cache');
@@ -112,7 +128,7 @@ const work = join(root, 'release', 'msi-build');
 rmSync(work, { recursive: true, force: true });
 mkdirSync(work, { recursive: true });
 writeFileSync(join(work, 'Keevault.wxs'), wxs);
-const wix = findWix();
+const wix = await wixTools();
 const out = join(root, 'release', `Keevault-${version}.msi`);
 execFileSync(join(wix, 'candle.exe'), ['-nologo', '-arch', 'x64', '-out', join(work, 'Keevault.wixobj'), join(work, 'Keevault.wxs')], { stdio: 'inherit' });
 // ICE validation needs a running Windows Installer service with admin rights in some environments – skipped (-sval).

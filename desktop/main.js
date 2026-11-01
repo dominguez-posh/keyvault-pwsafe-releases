@@ -123,9 +123,13 @@ function cleanEmail(email) {
   return e;
 }
 
+/** --lang=… fixes the language for screenshots; smoke runs without it are German on every machine (the checks click
+ * German labels; GitHub's runners are English). The window gets it too (state().settings.language). */
+const forcedLanguage = () => process.argv.find((x) => x.startsWith('--lang='))?.slice('--lang='.length) || (smokeTest ? 'de' : '');
+
 function applyLanguage() {
   // --lang=en: screenshots and smoke runs in a fixed language (the setting wins otherwise).
-  const forced = process.argv.find((a) => a.startsWith('--lang='))?.slice('--lang='.length);
+  const forced = forcedLanguage();
   const setting = config.get().language;
   setLanguage(forced || setting, app.getLocale());
 }
@@ -1449,7 +1453,7 @@ const api = {
       requirePin: !!settings.requirePin,
       account: auth.account ? { name: auth.account.name, username: auth.account.username, tenantId: auth.account.tenantId } : null,
       containers: out,
-      settings,
+      settings: forcedLanguage() ? { ...settings, language: forcedLanguage() } : settings,
       version: app.getVersion(),
       updateKind: updater?.kind || 'dev',
       passkeyAvailable: process.platform === 'win32' || !!demo,
@@ -1459,12 +1463,14 @@ const api = {
   },
   updateSettings: async (patch) => {
     const before = config.get();
+    // Admin mode is switched on only through activateAdminMode (with the app PIN) – never through a settings patch.
+    if (patch?.adminTools === true && before.adminTools !== true) throw new Error(t('Den Admin-Modus aktiviert nur „Admin-Modus aktivieren“ mit deiner PIN.'));
     const s = config.update(patch);
     applyLanguage();
     if (before.autoTypeKeys !== s.autoTypeKeys) applyShortcuts();
     if (before.startWithWindows !== s.startWithWindows) applyStartWithWindows();
     if (before.zoom !== s.zoom || before.transparency !== s.transparency || before.theme !== s.theme) applyView();
-    if (before.updateMode !== s.updateMode) {
+    if (before.updateMode !== s.updateMode || before.updateChannel !== s.updateChannel) {
       if (!UPDATE_MODES.includes(s.updateMode)) config.update({ updateMode: 'off' });
       updater?.applyMode();
       if (config.get().updateMode !== 'off') updater?.background();
@@ -1497,6 +1503,21 @@ const api = {
     pinGuard.failure();
     config.update({ pinGuard: pinGuard.toJSON() });
     throw new Error(pinGuard.waitSeconds() ? t('Falsche PIN – bitte {seconds} Sekunden warten', { seconds: pinGuard.waitSeconds() }) : t('Falsche PIN'));
+  },
+  /** Admin mode on: only with the app PIN (no PIN set → not possible). Returns the settings. */
+  async activateAdminMode(pin) {
+    requireOpen();
+    if (!config.get().appPin) throw new Error(t('Für den Admin-Modus brauchst du eine App-PIN – lege sie unter Einstellungen fest.'));
+    await api.verifyPin(String(pin || ''));
+    config.update({ adminTools: true, pimButton: false });
+    diag('ADMIN mode on');
+    return config.get();
+  },
+  /** Admin mode off: no PIN needed. */
+  deactivateAdminMode: async () => {
+    config.update({ adminTools: false, pimButton: false });
+    diag('ADMIN mode off');
+    return config.get();
   },
   /** { current?, next } – next null removes the PIN (not when the organization requires one). */
   async setPin({ current, next }) {
@@ -2777,6 +2798,7 @@ app.whenReady().then(async () => {
   });
   updater = new Updater({
     mode: () => (smokeTest ? 'off' : config.get().updateMode),
+    channel: () => (config.get().updateChannel === 'beta' ? 'beta' : 'stable'),
     selfUpdate: () => config.get().selfUpdate !== false,
     onState: (state) => send({ type: 'update', state }),
     // New version at start (mode "ask"): the renderer shows the update dialog with the release notes.
@@ -3550,6 +3572,13 @@ function runSmokeTest() {
           clipboardHas: async (text) => (await runHelperExe('--clipboard-clear', text)) === 0,
           clearSignIns: () => { signInJobs = []; },
           signInDone: (host) => browserHandlers.signInDone({ host }),
+          // The feature checks use PIN 2468 (the personal vault check sets the same one).
+          ensurePin: async () => {
+            if (!config.get().appPin) config.update({ appPin: await hashPin('2468'), pinGuard: null });
+            pinGuard.restore(null);
+            return '2468';
+          },
+          resetPinGuard: () => { pinGuard.restore(null); config.update({ pinGuard: null }); },
         }).catch((err) => errors.push(`features: ${err.stack || err.message}`));
       }
       if (view) await sleep(1200);
