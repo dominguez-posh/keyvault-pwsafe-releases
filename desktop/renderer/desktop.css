@@ -536,3 +536,15 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .show-pim .top-pim { display: inline-flex; align-items: center; }
 /* Vault in the sidebar while entries are dragged over it. */
 .nav-row.drop { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 10px; background: var(--accent-soft); }
+/* "New" at the top right of the list column, in the language of the floating entry toolbar: a light capsule with a
+   soft shadow, the action in the accent colour, the arrow (choose what to create) quiet beside it. */
+.list-head .new-split { margin-left: auto; align-self: flex-start; margin-top: 2px; flex: 0 0 auto; display: inline-flex; align-items: center; height: 34px; padding: 3px; box-sizing: border-box; border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: 0 0 0 1px var(--border), 0 1px 2px rgba(20, 26, 38, .06), 0 6px 16px rgba(20, 26, 38, .08); }
+.new-split button { height: 28px; border: 0; background: transparent; font: inherit; font-size: 13.5px; cursor: pointer; display: inline-flex; align-items: center; border-radius: 9px; transition: background .15s, color .15s; }
+.new-split .new-main { gap: 6px; padding: 0 10px 0 8px; font-weight: 600; color: var(--accent); }
+.new-split .new-more { padding: 0 7px; color: var(--muted); }
+.new-split .new-more::before { content: ""; width: 1px; height: 16px; margin: 0 7px 0 -7px; background: var(--border); }
+.new-split .new-plus { display: inline-flex; }
+.new-split button:hover { background: var(--surface-2); }
+.new-split .new-more:hover { color: var(--text); }
+.new-split button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

@@ -1137,8 +1137,10 @@ function applyView() {
   if (!win || win.isDestroyed()) return;
   const v = config.get();
   win.webContents.setZoomFactor(Math.min(1.5, Math.max(0.8, Number(v.zoom) || 1)));
-  // Transparency: the whole window becomes see-through, the programs behind it shine through (light 90 %, strong 75 %).
-  win.setOpacity(v.transparency === 'strong' ? 0.75 : v.transparency === 'light' ? 0.9 : 1);
+  // Colour scheme from the menu (screenshots with --theme keep theirs); the title bar recolours on 'updated'.
+  if (!forcedTheme) nativeTheme.themeSource = v.theme === 'light' || v.theme === 'dark' ? v.theme : 'system';
+  // Transparency: the whole window becomes see-through, the programs behind it shine through (light 95 %, strong 75 %).
+  win.setOpacity(v.transparency === 'strong' ? 0.75 : v.transparency === 'light' ? 0.95 : 1);
 }
 
 /** Window buttons over the hidden title bar: the ground colour of the app (extension/styles/app.css --bg). */
@@ -1237,7 +1239,7 @@ const api = {
     applyLanguage();
     if (before.autoTypeKeys !== s.autoTypeKeys) applyShortcuts();
     if (before.startWithWindows !== s.startWithWindows) applyStartWithWindows();
-    if (before.zoom !== s.zoom || before.transparency !== s.transparency) applyView();
+    if (before.zoom !== s.zoom || before.transparency !== s.transparency || before.theme !== s.theme) applyView();
     if (before.updateMode !== s.updateMode) {
       if (!UPDATE_MODES.includes(s.updateMode)) config.update({ updateMode: 'off' });
       updater?.applyMode();

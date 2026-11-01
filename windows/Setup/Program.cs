@@ -118,6 +118,7 @@ namespace Keevault.Setup
     internal static class Text
     {
         private static bool de = true;
+        public static bool German => de;
         public static void Init(string forced) => de = forced != null ? forced == "de" : CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "de";
 
         private static readonly Dictionary<string, string> En = new Dictionary<string, string>
@@ -152,6 +153,15 @@ namespace Keevault.Setup
             ["Das Installationspaket fehlt in dieser Datei. Bitte Keevault-Setup.exe erneut von keevault.de laden."] = "This file does not contain the installation package. Please download Keevault-Setup.exe again from keevault.de.",
             ["Das Setup wurde mit Code {0} beendet."] = "Setup ended with code {0}.",
             ["Keevault ist bereits installiert – die Installation aktualisiert es."] = "Keevault is already installed – the installation updates it.",
+            ["Das Setup wurde vor dem Ende abgebrochen. Versuche es erneut."] = "Setup was cancelled before it finished. Please try again.",
+            ["Die alte Version ließ sich nicht ersetzen – Dateien von Keevault waren noch geöffnet. Schließe Keevault ganz (auch im Infobereich) und versuche es erneut."] = "The old version could not be replaced – Keevault files were still open. Quit Keevault completely (also in the notification area) and try again.",
+            ["Die heruntergeladene Update-Datei fehlt – vermutlich hat ein Virenscanner sie entfernt. Keevault lädt das Update beim nächsten Start erneut."] = "The downloaded update file is missing – probably an antivirus removed it. Keevault downloads the update again on the next start.",
+            ["Windows hat das Setup blockiert – meist eine Sicherheitssoftware oder eine Richtlinie (z. B. AppLocker). Details: {0}"] = "Windows blocked the setup – usually security software or a policy (e.g. AppLocker). Details: {0}",
+            ["Auf dem Laufwerk ist nicht genug Platz frei. Gib etwas Speicher frei und versuche es erneut."] = "There is not enough free space on the drive. Free up some space and try again.",
+            ["Unerwarteter Fehler: {0}"] = "Unexpected error: {0}",
+            ["Fehlercode {0}"] = "Error code {0}",
+            ["Hilfe zu diesem Fehler"] = "Help for this error",
+            ["Noch geöffnet: {0}"] = "Still open: {0}",
         };
 
         public static string T(string s, params object[] a)
@@ -191,6 +201,12 @@ namespace Keevault.Setup
         private readonly StackPanel actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
         private readonly StackPanel location = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
         private readonly TextBlock locationText = new TextBlock();
+        // Below the buttons of an error: its code and a link to the knowledge base.
+        private readonly StackPanel help = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+        private readonly TextBlock helpCode = new TextBlock();
+        private string helpUrl;
+        // A failed update starts the old version again once the window closes (after "Close" or "✕").
+        private bool startAppOnClose;
 
         private string installDir;
         private bool installDirChanged;
@@ -239,7 +255,8 @@ namespace Keevault.Setup
 
             if (updateMode) ShowUpdate();
             else ShowWelcome();
-            if (args.Has("update")) ContentRendered += async (s, e) => await RunUpdate();
+            if (args.Has("update")) ContentRendered += async (s, e) => await RunUpdate(false);
+            Closed += (s, e) => { if (startAppOnClose) StartApp(null); };
         }
 
         // ---------------------------------------------------------------- layout
@@ -304,6 +321,15 @@ namespace Keevault.Setup
 
             actions.Margin = new Thickness(0, 24, 0, 0);
             stack.Children.Add(actions);
+
+            help.Margin = new Thickness(0, 14, 0, 0);
+            helpCode.FontSize = 12;
+            helpCode.Foreground = Theme.B(th.Muted);
+            helpCode.VerticalAlignment = VerticalAlignment.Center;
+            help.Children.Add(helpCode);
+            help.Children.Add(new Button(this, Text.T("Hilfe zu diesem Fehler"), ButtonKind.Link, OpenHelp) { Margin = new Thickness(8, 0, 0, 0) });
+            help.Visibility = Visibility.Collapsed;
+            stack.Children.Add(help);
 
             location.Margin = new Thickness(0, 14, 0, 0);
             location.Children.Add(new TextBlock { Text = Text.T("Speicherort") + ": ", FontSize = 12, Foreground = Theme.B(th.Muted), VerticalAlignment = VerticalAlignment.Center });
@@ -414,6 +440,7 @@ namespace Keevault.Setup
             Show(bar, true);
             Show(status, true);
             Show(closeButton, false);
+            Show(help, false);
             SetActions();
             shieldLine.StrokeDashOffset = 0;
             cross.Visibility = Visibility.Collapsed;
@@ -447,13 +474,16 @@ namespace Keevault.Setup
             Stamp();
         }
 
-        private void ShowError(string heading, string message, Func<Task> retry)
+        private void ShowError(string heading, SetupError error, Func<Task> retry)
         {
             if (args.Has("silent")) { Dispatcher.BeginInvoke(new Action(Close)); return; }
             ticker.Stop();
             Pulse(false);
             title.Text = heading;
-            subtitle.Text = message;
+            subtitle.Text = error.Message;
+            helpCode.Text = Text.T("Fehlercode {0}", error.Code);
+            helpUrl = error.HelpUrl;
+            Show(help, true);
             Show(features, false);
             Show(bar, false);
             Show(status, false);
@@ -584,6 +614,13 @@ namespace Keevault.Setup
             }
         }
 
+        private void OpenHelp()
+        {
+            if (helpUrl == null) return;
+            try { Process.Start(new ProcessStartInfo(helpUrl) { UseShellExecute = true }); }
+            catch { /* no browser */ }
+        }
+
         private static Task<int> RunHidden(string exe, string arguments) => Task.Run(() =>
         {
             using (var p = Process.Start(new ProcessStartInfo(exe, arguments) { UseShellExecute = false, CreateNoWindow = true }))
@@ -612,18 +649,18 @@ namespace Keevault.Setup
                 });
                 if (!ok)
                 {
-                    ShowError(Text.T("Installation fehlgeschlagen"), Text.T("Das Installationspaket fehlt in dieser Datei. Bitte Keevault-Setup.exe erneut von keevault.de laden."), null);
+                    ShowError(Text.T("Installation fehlgeschlagen"), SetupError.PayloadMissing(), null);
                     return;
                 }
                 // /D= must come last and unquoted (NSIS).
                 var code = await RunHidden(setup, "/S" + (installDirChanged ? " /D=" + installDir : ""));
-                if (code != 0) { ShowError(Text.T("Installation fehlgeschlagen"), Text.T("Das Setup wurde mit Code {0} beendet.", code), RunInstall); return; }
+                if (code != 0) { ShowError(Text.T("Installation fehlgeschlagen"), SetupError.FromExitCode(code), RunInstall); return; }
                 await ShowDone(Text.T("Keevault ist bereit"), Text.T("Melde dich mit deinem Microsoft-Konto an und verbinde deinen Tresor."),
                     new Button(this, Text.T("Keevault starten"), ButtonKind.Primary, () => { StartApp(null); Close(); }));
             }
             catch (Exception e)
             {
-                ShowError(Text.T("Installation fehlgeschlagen"), e.Message, RunInstall);
+                ShowError(Text.T("Installation fehlgeschlagen"), SetupError.FromException(e), RunInstall);
             }
             finally
             {
@@ -631,12 +668,20 @@ namespace Keevault.Setup
             }
         }
 
-        private async Task RunUpdate()
+        /// <summary>
+        /// Update: waits for the app and everything else started from its folder, runs the setup silently, starts the new
+        /// version. Code 2 (old version not removable, files still open) is retried once on its own. Every step goes into
+        /// the update log; a failure shows its code with a link to the knowledge base and "Try again".
+        /// </summary>
+        private async Task RunUpdate(bool retry)
         {
             var setup = args.Get("update");
+            startAppOnClose = false;
+            if (retry) ShowUpdate();
+            UpdateLog.Write($"update {args.Get("from") ?? "?"} -> {args.Get("to") ?? "?"}{(retry ? " (retry)" : "")}: {setup}");
             try
             {
-                if (int.TryParse(args.Get("pid"), out var pid))
+                if (!retry && int.TryParse(args.Get("pid"), out var pid))
                 {
                     try
                     {
@@ -645,9 +690,22 @@ namespace Keevault.Setup
                     catch (ArgumentException) { /* already gone */ }
                 }
                 if (args.Get("to") != null) status.Text = Text.T("Neue Version wird installiert …");
-                // --updated: the old uninstaller keeps the user's setup (installer/installer.nsh, isUpdated).
-                var code = await RunHidden(setup, "/S --updated");
-                if (code != 0) { ShowError(Text.T("Update fehlgeschlagen"), Text.T("Das Setup wurde mit Code {0} beendet.", code), null); StartApp(null); return; }
+                if (string.IsNullOrEmpty(setup) || !File.Exists(setup)) { FailUpdate(SetupError.UpdateFileMissing(), false, null); return; }
+                var dir = ExistingInstallDir();
+                var code = 0;
+                List<string> left = null;
+                for (var attempt = 1; attempt <= 2; attempt++)
+                {
+                    left = await InstallProcesses.Release(dir, TimeSpan.FromSeconds(attempt == 1 ? 20 : 10));
+                    if (left.Count > 0) UpdateLog.Write("still running from the installation folder: " + string.Join(", ", left));
+                    // --updated: the old uninstaller keeps the user's setup (installer/installer.nsh, isUpdated).
+                    code = await RunHidden(setup, "/S --updated");
+                    UpdateLog.Write($"setup attempt {attempt}: exit code {code}");
+                    if (code != 2) break;
+                    await Task.Delay(3000);
+                }
+                if (code != 0) { FailUpdate(SetupError.FromExitCode(code), true, code == 2 ? left : null); return; }
+                UpdateLog.Write("done");
                 var to = args.Get("to");
                 await ShowDone(to != null ? Text.T("Aktualisiert auf {0}", to) : Text.T("Keevault ist bereit"), Text.T("Keevault startet …"), null);
                 await Task.Delay(1100);
@@ -657,9 +715,19 @@ namespace Keevault.Setup
             }
             catch (Exception e)
             {
-                ShowError(Text.T("Update fehlgeschlagen"), e.Message, null);
-                StartApp(null);
+                UpdateLog.Write("error: " + e);
+                var error = SetupError.FromException(e);
+                FailUpdate(error, error.Code != "KV-S5", null);
             }
+        }
+
+        private void FailUpdate(SetupError error, bool canRetry, List<string> stillOpen)
+        {
+            UpdateLog.Write($"failed: {error.Code} {error.Message}");
+            if (args.Has("silent")) { StartApp(null); Close(); return; }
+            startAppOnClose = true;
+            ShowError(Text.T("Update fehlgeschlagen"), error, canRetry ? () => RunUpdate(true) : (Func<Task>)null);
+            if (stillOpen != null && stillOpen.Count > 0) subtitle.Text += "\n" + Text.T("Noch geöffnet: {0}", string.Join(", ", stillOpen));
         }
 
         private void StartApp(string updatedFrom)
@@ -692,7 +760,7 @@ namespace Keevault.Setup
                     SetActions(new Button(this, Text.T("Keevault starten"), ButtonKind.Primary, () => { }));
                     checkScale.ScaleX = checkScale.ScaleY = 1; keyhole.Visibility = Visibility.Collapsed; break;
                 case "error":
-                    ShowError(Text.T("Installation fehlgeschlagen"), Text.T("Das Setup wurde mit Code {0} beendet.", 2), () => Task.CompletedTask); break;
+                    ShowError(args.Has("update") || updateMode ? Text.T("Update fehlgeschlagen") : Text.T("Installation fehlgeschlagen"), SetupError.FromExitCode(2), () => Task.CompletedTask); break;
                 case "update":
                     ticker.Stop(); progress = 0.4; status.Text = $"{args.Get("from") ?? "0.7.17"}  →  {args.Get("to") ?? "0.7.18"}"; break;
                 case "updated":

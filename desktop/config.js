@@ -53,6 +53,8 @@ const DEFAULTS = {
   // View (main menu): zoom factor of the window and see-through ground (off | light | strong, Windows 11 acrylic).
   zoom: 1,
   transparency: 'light',
+  // View: colour scheme – 'system' follows Windows' app mode, 'light' / 'dark' fix it.
+  theme: 'system',
   // Version for which Keevault.exe was excluded from Windows Error Reporting (no crash dumps).
   werExcluded: '',
   // View: floating toolbar at the bottom of an entry (the "⋯" beside the title stays either way).

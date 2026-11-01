@@ -846,17 +846,18 @@ function onOffControl(key, label, on, after) {
 /** View → "Ansicht auf Standard": zoom, transparency, bottom bar, source marks and column widths as on first start. */
 async function resetView() {
   try { localStorage.removeItem('paneWidths'); } catch {}
-  await setView({ zoom: 1, transparency: 'light', entryToolbar: true, sourceBadges: true, pimButton: false });
+  await setView({ zoom: 1, theme: 'system', transparency: 'light', entryToolbar: true, sourceBadges: true, pimButton: false });
   await render();
   toast(t('Ansicht zurückgesetzt'));
 }
 
-function transparencyControl() {
-  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': t('Transparenz'), 'data-view-value': '' });
-  const draw = () => box.replaceChildren(...[['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]].map(([value, label]) => h('button', {
-    type: 'button', role: 'radio', 'aria-checked': String((st.settings.transparency || 'light') === value), class: (st.settings.transparency || 'light') === value ? 'on' : '',
-    onclick: () => setView({ transparency: value }),
-  }, label)));
+/** View: a segmented choice for a setting – `choices` as [value, label], `fallback` when unset. */
+function choiceControl(key, label, choices, fallback) {
+  const box = h('span', { class: 'seg', role: 'radiogroup', 'aria-label': label, 'data-view-value': '' });
+  const draw = () => box.replaceChildren(...choices.map(([value, text]) => {
+    const current = (st.settings[key] || fallback) === value;
+    return h('button', { type: 'button', role: 'radio', 'aria-checked': String(current), class: current ? 'on' : '', onclick: () => setView({ [key]: value }) }, text);
+  }));
   box.addEventListener('view-changed', draw);
   draw();
   return box;
@@ -925,7 +926,8 @@ function mainMenu(anchor) {
     st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
     h('div', { class: 'main-menu-label' }, t('Ansicht')),
     viewRow(t('Zoom'), zoomControl()),
-    viewRow(t('Transparenz'), transparencyControl()),
+    viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
+    viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
     viewRow(t('Leiste unten'), onOffControl('entryToolbar', t('Leiste unten'), true, renderDetail)),
     viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
     viewRow(t('PIM-Button'), onOffControl('pimButton', t('PIM-Button'), false)),
@@ -1172,15 +1174,18 @@ function renderList() {
     return;
   }
 
-  const newButton = h('button', { class: 'btn primary', title: t('Neuer Eintrag (Strg+N)'), onclick: (e) => {
-        // Choose what to create right at the button.
-        const r = e.currentTarget.getBoundingClientRect();
-        contextMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 4 }, newMenuItems(container));
-      } }, icon('plus'), t('Neu'));
-  topActions.replaceChildren(newButton);
+  // "New" at the top right of the list: a click creates a login, the arrow offers the other kinds and a folder.
+  const newButton = h('span', { class: 'new-split' },
+    h('button', { type: 'button', class: 'new-main', title: t('Neuer Eintrag (Strg+N)'), onclick: () => newItem('login') },
+      h('span', { class: 'new-plus' }, icon('plus', 15)), t('Neu')),
+    h('button', { type: 'button', class: 'new-more', title: t('Was anlegen?'), 'aria-label': t('Was anlegen?'), onclick: (e) => {
+      const r = e.currentTarget.closest('.new-split').getBoundingClientRect();
+      contextMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 6 }, newMenuItems(container));
+    } }, icon('chevronDown', 13)));
+  topActions.replaceChildren();
   setChildren(panes.list,
     h('div', { class: 'list-head' }, container && logos.get(container.id) ? h('img', { class: 'container-logo large', src: logos.get(container.id), alt: '' }) : null,
-      listTitle(title, container)),
+      listTitle(title, container), newButton),
     container?.error ? notice(container.error.status !== 403 ? container.error.message
       : container.rbac === false
         ? t('{message}. Dieser Key Vault nutzt Zugriffsrichtlinien statt Azure RBAC: Stelle ihn unter „Zugriffskonfiguration“ auf „Azure RBAC“ um oder lege eine Zugriffsrichtlinie für dein Konto an.', { message: container.error.message })
@@ -3609,6 +3614,16 @@ function releaseNotes(notes, installed) {
       h('ul', {}, ...v.items.map(item))))));
 }
 
+/** Update error of the app (search, download, signature check): its code (KV-U…) and its section in the knowledge base. */
+function updateErrorView(message) {
+  const code = /signatur|signiert|signature/i.test(message) ? 'KV-U2'
+    : /HTTP|net::|ENOTFOUND|ECONN|ETIMEDOUT|EAI_AGAIN|timeout|offline|proxy/i.test(message) ? 'KV-U1' : 'KV-U3';
+  const url = `${getLanguage() === 'en' ? 'https://keevault.de/en/knowledge/install-and-update.html' : 'https://keevault.de/wissen/installation-und-updates.html'}#${code.toLowerCase()}`;
+  return h('div', {}, notice(t('Update fehlgeschlagen: {message}', { message })),
+    h('p', { class: 'muted small' }, t('Fehlercode {code}', { code }), ' · ',
+      h('button', { type: 'button', class: 'linklike', onclick: () => openUrl(url) }, t('Hilfe zu diesem Fehler'))));
+}
+
 /**
  * "Check for updates" (version label, settings, tray): result, download progress, install. With `offered` (new
  * version found at start, mode "ask") the dialog shows that result right away – "Later" closes it.
@@ -3620,7 +3635,7 @@ async function updateDialog(offered) {
     if (!s) return;
     const managed = !!managedUpdateHint(s.kind);
     if (s.status === 'checking') return body.replaceChildren(h('p', {}, h('span', { class: 'spinner' }), ' ', t('Suche nach Updates …')));
-    if (s.status === 'error') return body.replaceChildren(notice(t('Update fehlgeschlagen: {message}', { message: s.error })));
+    if (s.status === 'error') return body.replaceChildren(updateErrorView(s.error));
     if (s.status === 'downloading') {
       return body.replaceChildren(h('p', {}, t('Version {version} wird heruntergeladen …', { version: s.version || '' })),
         h('progress', { class: 'update-progress', max: 100, value: s.progress || 0 }));

@@ -4,6 +4,20 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.8.9 – 2026-11-01
+- Hell oder dunkel nach Wunsch: Menü → Ansicht → Design (System, Hell, Dunkel). „System“ folgt wie bisher dem Windows-App-Modus.
+- „Neu“ sitzt jetzt oben rechts in der Liste, als ruhige Kapsel im Stil der Werkzeugleiste: Klick legt einen Login an, der Pfeil daneben bietet Notiz, Kreditkarte, Zertifikat und Ordner.
+- Transparenz „Leicht“ ist dezenter: das Fenster ist zu 95 % deckend statt 90 %.
+- Robustere Updates: Das Update-Fenster wartet auf alle Keevault-Prozesse (App, Browser-Anbindung, Passkey-Anbieter), bevor es die neue Version installiert, und versucht es bei „Dateien noch geöffnet“ einmal selbst erneut. Jeder Schritt landet in einem kurzen Protokoll (`%LOCALAPPDATA%\keyvault-pwsafe-updater\update.log`).
+- Klare Fehlermeldungen bei Installation und Update: jeder Fehler mit Code (KV-S…, KV-U…), Erklärung, „Erneut versuchen“ und dem Link „Hilfe zu diesem Fehler“ in den neuen Wissensartikel „Installation und Updates“. Nach einem fehlgeschlagenen Update startet die bisherige Version erst beim Schließen des Fensters.
+
+### English
+- Light or dark as you like: menu → View → Theme (System, Light, Dark). “System” follows Windows’ app mode as before.
+- “New” now sits at the top right of the list, as a quiet capsule in the style of the entry toolbar: a click creates a login, the arrow beside it offers note, credit card, certificate and folder.
+- Transparency “Light” is subtler: the window is 95 % opaque instead of 90 %.
+- More robust updates: the update window waits for every Keevault process (app, browser connection, passkey provider) before installing the new version and retries once by itself on “files still open”. Every step goes into a short log (`%LOCALAPPDATA%\keyvault-pwsafe-updater\update.log`).
+- Clear messages for installation and update errors: every error with a code (KV-S…, KV-U…), an explanation, “Try again” and the link “Help for this error” into the new knowledge base article “Installation and updates”. After a failed update the previous version starts once the window is closed.
+
 ## 0.8.8 – 2026-10-31
 - Rechtsklick auf die freie Fläche der Liste: neuen Eintrag oder (Unter-)Ordner anlegen, den aktuellen Ordner umbenennen oder löschen, eine Ebene nach oben, alle auswählen, aktualisieren und die Tresor-Funktionen.
 - Einträge per Drag & Drop in einen anderen Tresor schieben: auf den Tresor in der Seitenleiste ziehen (auch mehrere markierte) oder einen ganzen Ordner mit Unterordnern, kurz bestätigen. Ein Ordner landet im Ziel unter seinem Namen auf oberster Ebene („Kunden/Contoso“ → „Contoso“). Ein Tresor nimmt nur an, wenn du dort schreiben darfst; aus geteilten Tresoren nicht in den persönlichen.
