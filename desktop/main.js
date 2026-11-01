@@ -32,7 +32,7 @@ import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
 import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
-import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder } from '../extension/core/model.js';
+import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder, fqdnUserName } from '../extension/core/model.js';
 import { itemsToCsv } from '../extension/core/export.js';
 import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, removeProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
 
@@ -702,7 +702,9 @@ async function signInFor(host) {
   const job = signInJobs.find((j) => hostIn(String(host || '').toLowerCase(), j.hosts));
   if (!job) return null;
   const item = typeof job.source === 'string' ? await vault.getItem(...splitEntryKey(job.source)) : job.source;
-  return { mode: job.mode, username: item.username || '', password: item.password || '', totp: item.totp ? (await totpCode(item.totp))?.code || '' : '' };
+  // Bastion's sign-in on the VM always gets the FQDN form (user@contoso.local) when the account knows its domain.
+  const username = job.mode === 'form' ? fqdnUserName(item) : item.username || '';
+  return { mode: job.mode, username, password: item.password || '', totp: item.totp ? (await totpCode(item.totp))?.code || '' : '' };
 }
 
 const splitEntryKey = (key) => {

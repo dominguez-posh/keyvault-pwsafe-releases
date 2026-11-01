@@ -249,6 +249,9 @@ function contentStrings() {
     noUser: t('(ohne Benutzername)'),
     updateTitle: t('Passwort aktualisieren?'),
     saveTitle: t('Login speichern?'),
+    bastionTitle: t('Bastion-Zugang speichern?'),
+    bastionHint: t('Als Asset (Azure-VM) mit Bastion-Link – im Eintrag verbindet „Bastion“ direkt.'),
+    folderPlaceholder: t('Ordner (optional), z. B. Kunde/Azure'),
     update: t('Aktualisieren'),
     save: t('Speichern'),
     never: t('Nie für diese Website'),
@@ -310,6 +313,23 @@ async function writableContainers() {
   return (await vault.containers()).filter((c) => c.access?.write !== false && !c.locked && !c.error).map((c) => ({ id: c.id, name: c.name }));
 }
 
+// Bastion: its sign-in form lives on these hosts (portal blade or shareable link); the VM comes from the tab's address.
+const BASTION_HOSTS = /(^|\.)(bastion\.azure\.com|reactblade\.portal\.azure\.net|portal\.azure\.net)$/i;
+const VM_IN_URL = /\/subscriptions\/[^/]+\/resource[gG]roups\/[^/]+\/providers\/Microsoft\.Compute\/virtualMachines\/([^/?#]+)/;
+
+/** The VM a Bastion sign-in belongs to: name and portal link from the tab's address (portal blade), else the page. */
+async function bastionContext(sender) {
+  const host = senderHost(sender);
+  if (!host || !BASTION_HOSTS.test(host)) return null;
+  const tab = await chrome.tabs.get(sender.tab.id).catch(() => null);
+  const url = decodeURIComponent(String(tab?.url || ''));
+  const m = VM_IN_URL.exec(url);
+  if (m) return { vmName: m[1], bastionUrl: String(tab.url).replace(/\/(connect|bastionHost)(\/.*)?$/i, '/bastionHost') };
+  // Shareable link (bst-….bastion.azure.com/api/shareable-url/…): the link itself, named after the page.
+  if (/bastion\.azure\.com$/i.test(host) && /^https:/i.test(tab?.url || '')) return { vmName: (tab.title || host).slice(0, 80), bastionUrl: tab.url };
+  return null;
+}
+
 async function describeCapture(p) {
   const s = await getSettings();
   const containers = await writableContainers();
@@ -317,7 +337,7 @@ async function describeCapture(p) {
     action: p.action,
     host: p.host,
     username: p.username,
-    title: p.target?.title || '',
+    title: p.target?.title || p.bastion?.vmName || '',
     containers,
     defaultContainer: containers.some((c) => c.id === s.defaultContainer) ? s.defaultContainer : containers[0]?.id || '',
     ui: contentStrings(),
@@ -328,6 +348,17 @@ async function capture({ username = '', password = '' }, sender) {
   const s = await getSettings();
   const host = senderHost(sender);
   if (!s.savePrompt || !host || !password || s.neverSave.includes(host) || !(await isOpen())) return { action: 'none' };
+  // Bastion sign-in to a VM: offered as an asset (Azure VM with the Bastion link) – unless that VM is already there.
+  const bastion = await bastionContext(sender);
+  if (bastion) {
+    const known = (await vault.summaries()).some((x) => x.type === 'server' && x.title.toLowerCase() === bastion.vmName.toLowerCase());
+    if (known || !(await writableContainers()).length) return { action: 'none' };
+    const pending = { action: 'bastion', bastion, host, origin: new URL(sender.url).origin, username, password, created: Date.now() };
+    await chrome.storage.session.set({ [captureKey(sender.tab.id)]: pending });
+    const info = await describeCapture(pending);
+    chrome.tabs.sendMessage(sender.tab.id, { type: 'save:show', info }, { frameId: 0 }).catch(() => {});
+    return info;
+  }
   let action = 'save';
   let target = null;
   for (const m of await vault.matchesForHost(host)) {
@@ -360,11 +391,18 @@ async function tabIcon(tabId) {
   return faviconToDataUrl(tab?.favIconUrl);
 }
 
-async function saveCaptured({ containerId }, sender) {
+async function saveCaptured({ containerId, folder = '' }, sender) {
   const p = await pendingCapture(sender);
   if (!p) throw new Error(t('Nichts zu speichern'));
   let saved;
-  if (p.action === 'update') {
+  if (p.action === 'bastion') {
+    // Asset "Azure VM": name, Bastion link, the account on the VM – the entry's "Bastion" button connects directly.
+    saved = await vault.saveItem(containerId, {
+      type: 'server', title: p.bastion.vmName, username: p.username, password: p.password, folder: String(folder || '').trim(),
+      server: { kind: 'azurevm', bastionUrl: p.bastion.bastionUrl },
+    });
+    await updateSettings({ defaultContainer: containerId });
+  } else if (p.action === 'update') {
     const item = await vault.getItem(p.target.containerId, p.target.id, { fresh: true });
     saved = await vault.saveItem(p.target.containerId, { ...item, password: p.password, icon: item.icon || await tabIcon(sender.tab.id) }, { expectedVersion: item.version });
   } else {
