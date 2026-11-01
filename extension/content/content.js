@@ -806,12 +806,15 @@
       call('cs:dismissCaptured', { never: false }).catch(() => {});
     });
     const title = el('div', 'title');
-    title.append(el('span', 'logo', 'K'), document.createTextNode(info.action === 'update' ? texts.updateTitle : texts.saveTitle));
-    const desc = el('div', '', info.action === 'update' ? `„${info.title}“ (${info.host})` : info.host);
+    const bastion = info.action === 'bastion';
+    title.append(el('span', 'logo', 'K'), document.createTextNode(bastion ? texts.bastionTitle : info.action === 'update' ? texts.updateTitle : texts.saveTitle));
+    const desc = el('div', '', bastion ? `VM „${info.title}“` : info.action === 'update' ? `„${info.title}“ (${info.host})` : info.host);
     const user = el('div', 'user', info.username || texts.noUser);
     banner.append(close, title, desc, user);
     let select = null;
-    if (info.action === 'save' && info.containers.length > 1) {
+    let folder = null;
+    if (bastion) banner.append(el('div', 's', texts.bastionHint));
+    if ((info.action === 'save' || bastion) && info.containers.length > 1) {
       select = el('select');
       for (const c of info.containers) {
         const o = el('option', '', c.name);
@@ -821,13 +824,18 @@
       }
       banner.append(select);
     }
+    if (bastion) {
+      folder = el('input', 'q');
+      folder.placeholder = texts.folderPlaceholder;
+      banner.append(folder);
+    }
     const row = el('div', 'row');
     const save = el('button', 'b primary', info.action === 'update' ? texts.update : texts.save);
     save.addEventListener('click', async (e) => {
       if (!e.isTrusted) return;
       save.disabled = true;
       try {
-        await call('cs:saveCaptured', { containerId: select?.value || info.defaultContainer });
+        await call('cs:saveCaptured', { containerId: select?.value || info.defaultContainer, folder: folder?.value || '' });
         banner.replaceChildren(title, el('div', '', texts.saved));
         setTimeout(() => banner?.remove(), 2500);
       } catch (err) {
@@ -842,7 +850,7 @@
       call('cs:dismissCaptured', { never: true }).catch(() => {});
     });
     row.append(save);
-    if (info.action === 'save') row.append(never);
+    if (info.action === 'save' || bastion) row.append(never);
     banner.append(row);
     ui().append(banner);
   }

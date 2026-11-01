@@ -54,8 +54,16 @@ export async function featureChecks(ctx) {
     changed();
     await sleep(400);
   };
+  // The window is drawn completely (sidebar and list) – slow machines (GitHub runners) are still redrawing otherwise.
+  const uiReady = async () => {
+    for (let i = 0; i < 40; i++) {
+      if (await js('!!document.querySelector(".sidebar .nav") && !!document.querySelector(".list-pane .list-scroll")')) return;
+      await sleep(250);
+    }
+  };
   const step = async (area, fn) => {
     const started = Date.now();
+    await uiReady();
     try {
       await Promise.race([fn(), new Promise((_r, reject) => setTimeout(() => reject(new Error('timeout after 45 s')), 45_000))]);
     } catch (e) {
@@ -165,7 +173,7 @@ export async function featureChecks(ctx) {
       if (!listed) { fail('trash', 'main menu → trash does not list the deleted entry'); return; }
       await js(`document.querySelector('dialog[open] [data-restore="${gone.id}"]').click()`);
       let back = false;
-      for (let i = 0; i < 10 && !back; i++) { await sleep(300); back = (await vault.summaries()).some((x) => x.id === gone.id); }
+      for (let i = 0; i < 30 && !back; i++) { await sleep(400); back = (await vault.summaries()).some((x) => x.id === gone.id); }
       if (!back) fail('trash', 'restore did not bring the entry back');
       else created.push(gone.id);
       await closeDialogs();
@@ -178,6 +186,7 @@ export async function featureChecks(ctx) {
 
     // ---- vault search: magnifier in the "Vaults" header filters the rows, Esc shows all again
     await step('vaultsearch', async () => {
+      if (await js('!!document.querySelector(".nav-section .count")')) fail('vaultsearch', 'vault count back in the Vaults header');
       if (!(await js('!!document.querySelector(".nav-section .vault-find .icon-btn")'))) {
         fail('vaultsearch', 'magnifier in the vault header missing');
         return;
@@ -189,8 +198,9 @@ export async function featureChecks(ctx) {
       const hit = String(await visible());
       if (!hit.includes('Team-Datei') || hit.includes('Team Infrastruktur')) fail('vaultsearch', `filter shows: ${hit}`);
       await js('document.querySelector(".vault-find input").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))');
-      await sleep(200);
-      if (String(await visible()) !== all) fail('vaultsearch', 'Esc did not show all vaults again');
+      let again = '';
+      for (let i = 0; i < 10 && again !== all; i++) { await sleep(200); again = String(await visible()); }
+      if (again !== all) fail('vaultsearch', 'Esc did not show all vaults again');
     });
 
     // ---- vault order: drag a vault row before another one – the sidebar shows and keeps the new order
@@ -258,6 +268,36 @@ export async function featureChecks(ctx) {
       if (!/Domänencontroller|Domain controller/.test(ad)) fail('templates', `AD logon fields: ${ad}`);
       await cancelEditor();
       await setAdmin(false);
+    });
+
+    // ---- vault menu: "Infos" directly in the right-click menu of a Key Vault, not in a submenu
+    await step('vaultmenu', async () => {
+      await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => r.textContent.includes(${JSON.stringify(kvc.name)})); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); })()`);
+      await sleep(300);
+      const r = JSON.parse(await js('JSON.stringify({ top: !!document.querySelector(".context-menu > [data-action=info], .context-menu > .context-group > [data-action=info]"), sub: !!document.querySelector(".context-sub [data-action=info]") })'));
+      if (!r.top || r.sub) fail('vaultmenu', `"Infos" not at the top of the vault menu (${JSON.stringify(r)})`);
+      await js('document.querySelector(".context-menu")?.remove()');
+    });
+
+    // ---- sidebar foot: only Help (no company name)
+    await step('sidebarfoot', async () => {
+      if (await js('!!document.querySelector(".sidebar-foot .org-name")')) fail('sidebarfoot', 'company name back in the sidebar foot');
+    });
+
+    // ---- version: in the sidebar foot of the open app, not fixed over the entry
+    await step('version', async () => {
+      // Bottom right, and the end of the entry (scrolled down) stays above it.
+      await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
+      await sleep(600);
+      const r = JSON.parse(await js(`(() => {
+        const v = document.getElementById("app-version"), pane = document.querySelector(".detail-pane");
+        pane.scrollTop = pane.scrollHeight;
+        const last = [...pane.querySelectorAll(".meta, .field-card")].pop();
+        const vr = v?.getBoundingClientRect(), lr = last?.getBoundingClientRect();
+        return JSON.stringify({ text: v?.textContent || "", right: vr ? innerWidth - vr.right < 60 : false, free: vr && lr ? lr.bottom <= vr.top + 2 : false });
+      })()`));
+      if (!/^Keevault \d/.test(r.text) || !r.right) fail('version', `version not at the bottom right (${JSON.stringify(r)})`);
+      if (!r.free) fail('version', 'the end of the entry lies under the version');
     });
 
     // ---- list: right-click on the empty area, entry without the removed bottom toolbar
@@ -468,6 +508,18 @@ export async function featureChecks(ctx) {
       if (await js('[...document.querySelectorAll(".list li.row-item[data-key]")].some((r) => r.textContent.includes("Smoke WIN"))')) fail('devices', 'device listed among the passwords');
       await setAdmin(false);
       if (await js('!!document.querySelector(".mode-switch")')) fail('devices', 'switch visible without admin mode');
+    });
+
+    // ---- Bastion: the VM account of an AD login always signs in with the FQDN (user@contoso.local)
+    await step('bastionfqdn', async () => {
+      const adLogin = await save({ type: 'login', title: 'Smoke AD', username: 'CONTOSO\\admin', password: 'Ad-1',
+        fields: [{ name: 'Domäne (NT)', value: 'CONTOSO' }, { name: 'Domäne (FQDN)', value: 'contoso.local' }] });
+      const vm = await save({ type: 'server', title: 'Smoke BASTION', server: { kind: 'azurevm', host: '10.9.0.9', bastionUrl: 'https://portal.azure.com/#@contoso.com/resource/vm/bastionHost', bastionVmLink: `${kvc.id}/${adLogin.id}` } });
+      ctx.clearSignIns();
+      await api.connectServer({ containerId: kvc.id, id: vm.id, method: 'bastion' });
+      const job = await ctx.signInFor('x.bastion.azure.com');
+      if (job?.username !== 'admin@contoso.local') fail('bastionfqdn', `Bastion gets "${job?.username}" instead of admin@contoso.local`);
+      ctx.clearSignIns();
     });
   } finally {
     await cleanUp();

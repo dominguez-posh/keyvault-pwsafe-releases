@@ -27,6 +27,19 @@ export const MICROSOFT_LOGIN_URLS = ['https://login.microsoftonline.com', 'https
 export const isMicrosoftLogin = (item) => item.type === 'login'
   && (!!item.msAdmin || item.urls.some((u) => /(^|.)(microsoftonline|microsoft|office|azure).com$/.test(hostFromUrl(u) || '')));
 
+/**
+ * Sign-in name in FQDN form ("user@contoso.local") for an Active Directory login: from "user", "CONTOSO\\user" or
+ * "user@…" plus the entry's field "Domäne (FQDN)" (also the older "Domäne (DNS)"); unchanged without such a field.
+ */
+export function fqdnUserName(item) {
+  const user = String(item?.username || '').trim();
+  if (!user || user.includes('@')) return user;
+  const field = (item.fields || []).find((f) => /^(Domäne|Domain) \((FQDN|DNS)\)$/i.test(String(f.name || '').trim()) && String(f.value || '').trim());
+  if (!field) return user;
+  const name = user.includes('\\') ? user.slice(user.lastIndexOf('\\') + 1) : user;
+  return `${name}@${String(field.value).trim()}`;
+}
+
 /** Login templates of the "New" menu: fields, addresses and logo preset (field names in the user's language). */
 export function entryTemplate(name, { msAdmin = false } = {}) {
   if (name === 'microsoft') {
@@ -39,7 +52,7 @@ export function entryTemplate(name, { msAdmin = false } = {}) {
   if (name === 'ad') {
     return {
       type: 'login', title: 'Active Directory', icon: MICROSOFT_LOGO, urls: [],
-      fields: [{ name: t('Domäne (NetBIOS)'), value: '' }, { name: t('Domäne (DNS)'), value: '' }, { name: t('Domänencontroller'), value: '' }],
+      fields: [{ name: t('Domäne (NT)'), value: '' }, { name: t('Domäne (FQDN)'), value: '' }, { name: t('Domänencontroller'), value: '' }],
     };
   }
   return null;
