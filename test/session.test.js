@@ -283,7 +283,7 @@ test('backup: encrypted file, wrong password rejected, restore brings back delet
   });
   await session.refreshContainers({ configured: [{ name: 'A', vaultUrl: 'kv-a' }, { name: 'B', vaultUrl: 'kv-b' }], discover: false });
   const a = 'kv-a.vault.azure.net';
-  const one = await session.saveItem(a, { title: 'One', password: 'pw1' });
+  const one = await session.saveItem(a, { title: 'One', password: 'pw1-backup-secret-one' });
   const two = await session.saveItem(a, { title: 'Two', password: 'pw2' });
 
   const data = await session.backupSecrets(a);
@@ -292,7 +292,7 @@ test('backup: encrypted file, wrong password rejected, restore brings back delet
   const password = generateBackupPassword();
   assert.match(password, /^([A-Z2-9]{5}-){5}[A-Z2-9]{5}$/);
   const file = await createBackup({ ...data, password, createdBy: 'owner@contoso.com', iterations: 1000 });
-  assert.ok(!file.includes('pw1'), 'secrets are not readable in the file');
+  assert.ok(!file.includes('pw1-backup-secret-one'), 'secrets are not readable in the file');
   assert.equal(readBackupHeader(file).count, data.secrets.length);
   await assert.rejects(openBackup(file, 'AAAAA-AAAAA-AAAAA-AAAAA-AAAAA-AAAAA'), BackupPasswordError);
   const tampered = JSON.stringify({ ...JSON.parse(file), vault: 'kv-x.vault.azure.net' });
@@ -307,7 +307,7 @@ test('backup: encrypted file, wrong password rejected, restore brings back delet
   assert.equal(r.failed.length, 0);
   assert.equal(r.recovered, 1);
   assert.equal(r.restored, 2);
-  assert.equal((await session.getItem(a, one.id, { fresh: true })).password, 'pw1');
+  assert.equal((await session.getItem(a, one.id, { fresh: true })).password, 'pw1-backup-secret-one');
   assert.equal((await session.getItem(a, two.id, { fresh: true })).password, 'pw2');
   assert.equal((await session.history(a, two.id)).length, 3, 'changed state stays in the history');
 

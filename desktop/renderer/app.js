@@ -9,7 +9,7 @@ import { ACCESS_LEVELS } from '../../extension/core/azure.js';
 import { setLanguage, t, LANGUAGES, getLanguage, locale } from '../../extension/core/i18n.js';
 import { pickImage, LOGO_MAX_CHARS } from '../../extension/core/image.js';
 import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
-import { MAX_FOLDER_DEPTH } from '../../extension/core/model.js';
+import { MAX_FOLDER_DEPTH, entryTemplate } from '../../extension/core/model.js';
 import { expiryState, expiringEntries, daysUntil } from '../../extension/core/health.js';
 import { healthDialog, accessReportDialog } from './reports.js';
 import { releaseNotesSince } from '../../extension/core/release-notes.js';
@@ -319,7 +319,7 @@ function windowsDialog(r) {
     const container = h('select', {}, ...r.containers.map((c) => h('option', { value: c.id, selected: c.id === st.settings.defaultContainer }, c.name)));
     const title = h('input', { value: r.rpName || r.rpId });
     const existing = h('select', {}, h('option', { value: '' }, t('Neuer Eintrag')),
-      ...r.logins.map((l) => h('option', { value: `${l.containerId}|${l.id}` }, `${l.title}${l.username ? ` – ${l.username}` : ''} (${l.container})`)));
+      ...r.logins.map((l, i) => h('option', { value: `${l.containerId}|${l.id}`, selected: i === 0 && l.sameUser }, `${l.title}${l.username ? ` – ${l.username}` : ''} (${l.container})`)));
     body = h('div', {}, head, lockedHint,
       h('p', {}, t('Passkey für {user} in Keevault speichern?', { user: r.user?.name || r.user?.displayName || t('dieses Konto') })),
       r.excluded ? notice(t('Für dieses Konto ist bereits ein Passkey im Tresor gespeichert. Die Website lehnt einen zweiten vermutlich ab.'), 'warn') : null,
@@ -328,10 +328,12 @@ function windowsDialog(r) {
         field(t('Tresor'), container),
         field(t('Titel'), title),
       ] : notice(t('Kein Tresor mit Schreibrechten verfügbar.')));
-    existing.addEventListener('change', () => {
+    const syncExisting = () => {
       container.disabled = !!existing.value;
       title.disabled = !!existing.value;
-    });
+    };
+    existing.addEventListener('change', syncExisting);
+    syncExisting();
     buttons = [
       { label: t('Abbrechen'), onClick: () => decide({ cancel: true }) },
       { label: t('Passkey speichern'), primary: true, onClick: async () => {
@@ -365,11 +367,9 @@ async function render() {
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
-  // Optional (menu → View → Admin tools): PIM, Microsoft 365 admin centers and servers, always together.
+  // Admin tools on (menu → View): a quiet note at the top; PIM, admin centers and connections sit in the entries.
   const adminBar = h('div', { class: 'top-admin' },
-    h('button', { type: 'button', class: 'btn', dataset: { admin: 'pim' }, title: t('Rolle mit Privileged Identity Management aktivieren (aka.ms/pim)'), onclick: () => openUrl('https://aka.ms/pim') }, icon('shield', 15), 'PIM'),
-    h('button', { type: 'button', class: 'btn', dataset: { admin: 'm365' }, title: t('Microsoft 365 Admin Center öffnen'), onclick: adminCenterDialog }, icon('globe', 15), 'M365'),
-    h('button', { type: 'button', class: 'btn', dataset: { admin: 'servers' }, title: t('Mit einem Server verbinden'), onclick: serverDialog }, icon('external', 15), t('Server')));
+    h('span', { class: 'admin-mode', title: t('Admin-Werkzeuge sind eingeschaltet (Menü → Ansicht)') }, icon('shield', 12), t('Admin-Modus')));
   const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions, adminBar);
   root.replaceChildren(shell);
   setupSplitters(shell);
@@ -739,7 +739,7 @@ function renderSidebar() {
       h('span', { class: 'spacer' }),
       iconButton('lock', t('Sperren'), () => call('lock')),
       mainMenuButton()),
-    nav('all', t('Alle Einträge'), 'shield', items.length),
+    nav('all', t('Alle Einträge'), 'shield', items.filter((i) => i.type !== 'server').length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite).length),
     nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
     personal ? h('div', { class: 'personal-slot' }, vaultRow(personal)) : null,
@@ -795,7 +795,7 @@ function applyViewClass() {
   const mode = st?.settings?.transparency || 'light';
   document.documentElement.classList.toggle('see-through', mode === 'light' || mode === 'strong');
   document.documentElement.classList.toggle('see-through-strong', mode === 'strong');
-  document.documentElement.classList.toggle('show-admin', st?.settings?.adminTools === true || st?.settings?.pimButton === true);
+  document.documentElement.classList.toggle('show-admin', st?.settings?.adminTools === true);
 }
 
 const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
@@ -850,7 +850,7 @@ function onOffControl(key, label, on, after) {
 /** View → "Ansicht auf Standard": zoom, transparency, bottom bar, source marks and column widths as on first start. */
 async function resetView() {
   try { localStorage.removeItem('paneWidths'); } catch {}
-  await setView({ zoom: 1, theme: 'system', transparency: 'light', entryToolbar: true, sourceBadges: true, pimButton: false, adminTools: false });
+  await setView({ zoom: 1, theme: 'system', transparency: 'light', sourceBadges: true, pimButton: false, adminTools: false });
   await render();
   toast(t('Ansicht zurückgesetzt'));
 }
@@ -932,7 +932,6 @@ function mainMenu(anchor) {
     viewRow(t('Zoom'), zoomControl()),
     viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
     viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
-    viewRow(t('Leiste unten'), onOffControl('entryToolbar', t('Leiste unten'), true, renderDetail)),
     viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
     viewRow(t('Admin-Werkzeuge'), onOffControl('adminTools', t('Admin-Werkzeuge'), false, () => setView({ pimButton: false }))),
     entry('view-reset', 'refresh', t('Ansicht auf Standard'), resetView),
@@ -991,7 +990,9 @@ function vaultList(rows) {
   return h('div', { class: 'vault-block' }, h('div', { class: 'search vault-search' }, icon('search', 14), input), list, empty);
 }
 
-/** Type pills above the list (only the kinds that occur, and only when there is more than one). */
+const adminMode = () => st?.settings?.adminTools === true;
+
+/** Type pills above the list (only the kinds that occur, and only when there is more than one). Admin mode: "Devices". */
 function typePills(base) {
   const kinds = [
     ['login', t('Logins'), (i) => i.type === 'login'],
@@ -1000,13 +1001,14 @@ function typePills(base) {
     ['card', t('Karten'), (i) => i.type === 'card'],
     ['certificate', t('Zertifikate'), (i) => i.type === 'certificate'],
   ].filter(([key, , test]) => !(key === 'passkey' && ui.view === 'passkeys' && !ui.containerId) && base.some(test));
+  if (adminMode()) kinds.push(['device', t('Geräte'), TYPE_TESTS.device]);
   if (kinds.length < 2) return null;
-  const pill = (key, label) => h('button', { type: 'button', role: 'tab', class: `pill ${ui.type === key ? 'on' : ''}`, 'aria-selected': String(ui.type === key),
+  const pill = (key, label) => h('button', { type: 'button', role: 'tab', class: `pill ${ui.type === key ? 'on' : ''}`, 'aria-selected': String(ui.type === key), dataset: { type: key },
     onclick: () => { ui.type = key; renderList(); } }, label);
   return h('div', { class: 'pills', role: 'tablist', 'aria-label': t('Filter') }, pill('', t('Alle')), ...kinds.map(([key, label]) => pill(key, label)));
 }
 
-const TYPE_TESTS = { login: (i) => i.type === 'login', passkey: (i) => i.rpIds.length > 0, note: (i) => i.type === 'note', card: (i) => i.type === 'card', certificate: (i) => i.type === 'certificate' };
+const TYPE_TESTS = { device: (i) => i.type === 'server', login: (i) => i.type === 'login', passkey: (i) => i.rpIds.length > 0, note: (i) => i.type === 'note', card: (i) => i.type === 'card', certificate: (i) => i.type === 'certificate' };
 
 async function refresh() {
   try {
@@ -1022,7 +1024,9 @@ async function refresh() {
 // ---------------------------------------------------------------- list
 
 function visibleItems({ ignoreType = false } = {}) {
-  let list = items;
+  if (ui.type === 'device' && !adminMode()) ui.type = '';
+  // Devices only in their own tab (admin mode); everywhere else the list holds the entries people sign in with.
+  let list = ui.type === 'device' && !ignoreType ? items : items.filter((i) => i.type !== 'server');
   if (!ignoreType && ui.type && TYPE_TESTS[ui.type]) list = list.filter(TYPE_TESTS[ui.type]);
   const q = ui.query.trim().toLowerCase();
   // Search scope: the current vault (default) or, switched to "All", every vault.
@@ -1180,7 +1184,7 @@ function renderList() {
 
   // "New" at the top right of the list: a click creates a login, the arrow offers the other kinds and a folder.
   const newButton = h('span', { class: 'new-split' },
-    h('button', { type: 'button', class: 'new-main', title: t('Neuer Eintrag (Strg+N)'), onclick: () => newItem('login') },
+    h('button', { type: 'button', class: 'new-main', title: t('Neuer Eintrag (Strg+N)'), onclick: () => (ui.type === 'device' && adminMode() ? newItem('server', { type: 'server', server: { kind: 'server' } }) : newItem('login')) },
       h('span', { class: 'new-plus' }, icon('plus', 15)), t('Neu')),
     h('button', { type: 'button', class: 'new-more', title: t('Was anlegen?'), 'aria-label': t('Was anlegen?'), onclick: (e) => {
       const r = e.currentTarget.closest('.new-split').getBoundingClientRect();
@@ -1393,7 +1397,14 @@ function newMenuItems(container) {
     { action: 'new-note', icon: 'note', label: t('Neue sichere Notiz'), onClick: () => newItem('note') },
     { action: 'new-card', icon: 'card', label: t('Neue Kreditkarte'), onClick: () => newItem('card') },
     { action: 'new-certificate', icon: 'certificate', label: t('Neues Zertifikat'), onClick: () => newItem('certificate') },
-    { action: 'new-server', icon: 'external', label: t('Neuer Server / Ressource'), onClick: () => newItem('server') },
+    '-',
+    // Devices (server, Azure VM) only with the admin tools on.
+    ...(adminMode() ? [
+      { action: 'new-server', icon: 'external', label: t('Neuer Server'), onClick: () => newItem('server', { type: 'server', server: { kind: 'server' } }) },
+      { action: 'new-azurevm', icon: 'globe', label: t('Neue Azure-VM (Bastion)'), onClick: () => newItem('server', { type: 'server', server: { kind: 'azurevm' } }) },
+    ] : []),
+    { action: 'new-microsoft', icon: 'globe', label: t('Neuer Microsoft-Login'), onClick: () => newItem('login', entryTemplate('microsoft', { msAdmin: st?.settings?.adminTools === true })) },
+    { action: 'new-ad', icon: 'user', label: t('Neuer Active-Directory-Logon'), onClick: () => newItem('login', entryTemplate('ad')) },
     container ? '-' : null,
     container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
       ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
@@ -2519,12 +2530,14 @@ const splitKey = (key) => {
   return [key.slice(0, i), key.slice(i + 1)];
 };
 
-function newItem(type = 'login') {
+/** template: preset values of a login template (entryTemplate in core/model.js). */
+function newItem(type = 'login', template = null) {
   if (!writableContainers().length) {
     toast(t('Kein Tresor mit Schreibrechten – zuerst einen Tresor hinzufügen, erstellen oder entsperren'), 'error');
     return;
   }
   ui.newType = type;
+  ui.newTemplate = template;
   ui.editing = 'new';
   ui.editingItem = null;
   renderDetail();
@@ -2556,6 +2569,7 @@ async function renderDetail() {
     openUrl,
     containerName,
     connect: (it, method) => connectServer(it.containerId, it.id, method),
+    adminLinks: st.settings?.adminTools === true ? ADMIN_LINKS.map((l) => ({ ...l, open: (it) => openAdminLink(l, `${it.containerId}/${it.id}`) })) : null,
     linkTitle,
     saveFile: async (name, data) => {
       try {
@@ -2565,6 +2579,7 @@ async function renderDetail() {
         toast(e.message, 'error');
       }
     },
+    onMovePasskey: canWrite ? (passkey) => movePasskeyDialog(item, passkey) : null,
     onRemovePasskey: canWrite ? async (credentialId) => {
       if (!(await confirmDialog(t('Passkey entfernen'), t('Passkey aus dem Eintrag entfernen? Die Anmeldung bei der Website damit ist danach nicht mehr möglich – entferne ihn dort ebenfalls.'), { confirmLabel: t('Entfernen'), danger: true }))) return;
       try {
@@ -2575,7 +2590,6 @@ async function renderDetail() {
       }
     } : null,
     // "⋯" in the head opens the same menu as a right-click in the list.
-    showToolbar: st.settings.entryToolbar !== false,
     menu: (anchor, items, { below = false } = {}) => {
       const r = anchor.getBoundingClientRect();
       if (below) return contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: r.bottom + 6 }, items);
@@ -2584,7 +2598,7 @@ async function renderDetail() {
       contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: Math.max(8, r.top - height - 6) }, items);
     },
     actions: [
-      canWrite ? { icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: () => {
+      canWrite ? { action: 'edit', icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: () => {
         ui.editing = 'edit';
         ui.editingItem = item;
         renderDetail();
@@ -2636,68 +2650,70 @@ async function connectServer(containerId, id, method) {
   }
 }
 
-// Microsoft admin centers (menu "M365"); SharePoint goes through the M365 admin center, which knows the tenant.
-const ADMIN_CENTERS = [
-  { name: 'Microsoft 365 Admin Center', url: 'https://admin.microsoft.com', icon: 'users' },
-  { name: 'Entra ID', url: 'https://entra.microsoft.com', icon: 'shield' },
-  { name: 'Intune', url: 'https://intune.microsoft.com', icon: 'settings' },
-  { name: 'Defender', url: 'https://security.microsoft.com', icon: 'shield' },
-  { name: 'Purview', url: 'https://purview.microsoft.com', icon: 'note' },
-  { name: 'Exchange', url: 'https://admin.exchange.microsoft.com', icon: 'mail' },
-  { name: 'Teams', url: 'https://admin.teams.microsoft.com', icon: 'users' },
-  { name: 'SharePoint', url: 'https://admin.microsoft.com/sharepoint', icon: 'folder' },
-  { name: 'Azure Portal', url: 'https://portal.azure.com', icon: 'globe' },
+// PIM "My roles" (activate eligible Entra roles) – the page aka.ms/pim leads to, opened directly so the sign-in can be
+// handed to the browser extension (only admin center hosts are allowed, see main.js). SharePoint goes through the M365
+// admin center, which knows the tenant.
+const ADMIN_LINKS = [
+  { id: 'pim', name: 'PIM', url: 'https://portal.azure.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/aadmigratedroles', icon: 'shield', title: t('Rolle mit Privileged Identity Management aktivieren') },
+  { id: 'm365', name: 'Microsoft 365', url: 'https://admin.microsoft.com', icon: 'users' },
+  { id: 'entra', name: 'Entra ID', url: 'https://entra.microsoft.com', icon: 'shield' },
+  { id: 'intune', name: 'Intune', url: 'https://intune.microsoft.com', icon: 'settings' },
+  { id: 'defender', name: 'Defender', url: 'https://security.microsoft.com', icon: 'shield' },
+  { id: 'purview', name: 'Purview', url: 'https://purview.microsoft.com', icon: 'note' },
+  { id: 'exchange', name: 'Exchange', url: 'https://admin.exchange.microsoft.com', icon: 'mail' },
+  { id: 'teams', name: 'Teams', url: 'https://admin.teams.microsoft.com', icon: 'users' },
+  { id: 'sharepoint', name: 'SharePoint', url: 'https://admin.microsoft.com/sharepoint', icon: 'folder' },
+  { id: 'azure', name: 'Azure Portal', url: 'https://portal.azure.com', icon: 'globe' },
 ];
 
-/** M365: pick the account, then the admin center – the browser opens it and the extension signs in. */
-function adminCenterDialog() {
-  const microsoft = (i) => i.msAdmin || i.hosts.some((h) => /(^|\.)(microsoftonline|microsoft|office|azure)\.com$/.test(h));
-  const accounts = items.filter((i) => i.type === 'login' && microsoft(i))
-    .sort((a, b) => Number(b.msAdmin) - Number(a.msAdmin) || a.title.localeCompare(b.title));
-  let last = '';
-  try { last = localStorage.getItem('adminAccount') || ''; } catch {}
-  const account = h('select', {},
-    h('option', { value: '' }, t('Ohne Konto – im Browser selbst anmelden')),
-    ...accounts.map((i) => h('option', { value: i.key, selected: i.key === last }, [i.title, i.username, containerName(i.containerId)].filter(Boolean).join(' · '))));
-  const { close } = modal(t('Microsoft 365 Admin Center'), h('div', { class: 'admin-centers-dialog' },
-    field(t('Anmelden als'), account),
-    accounts.some((i) => i.msAdmin) ? null : h('p', { class: 'muted small' }, t('Tipp: Markiere Login-Einträge als „Microsoft-Admin-Konto“ – dann stehen sie hier oben.')),
-    h('div', { class: 'admin-centers' }, ...ADMIN_CENTERS.map((c) => h('button', { type: 'button', class: 'admin-center', onclick: async () => {
-      try { localStorage.setItem('adminAccount', account.value); } catch {}
+/**
+ * Passkey saved in the wrong entry: pick another login (writable vault) – entries of the same site and with the same
+ * user name first, the best one preselected.
+ */
+function movePasskeyDialog(item, passkey) {
+  const user = String(passkey.userName || '').trim().toLowerCase();
+  const hostOf = (rpId) => (h) => h === rpId || h.endsWith(`.${rpId}`) || rpId.endsWith(`.${h}`);
+  const score = (i) => (i.hosts.some(hostOf(passkey.rpId)) ? 2 : 0) + (user && String(i.username || '').trim().toLowerCase() === user ? 1 : 0);
+  const targets = items
+    .filter((i) => i.type === 'login' && !(i.containerId === item.containerId && i.id === item.id) && writable(st.containers.find((c) => c.id === i.containerId) || {}))
+    .sort((a, b) => score(b) - score(a) || a.title.localeCompare(b.title));
+  if (!targets.length) {
+    toast(t('Kein anderer Login-Eintrag mit Schreibrechten vorhanden'), 'error');
+    return;
+  }
+  const select = h('select', {}, ...targets.map((i, n) => h('option', { value: i.key, selected: n === 0 },
+    [i.title, i.username, containerName(i.containerId)].filter(Boolean).join(' · '))));
+  modal(t('Passkey verschieben'), h('div', {},
+    h('p', {}, t('Passkey für {user} ({rpId}) in einen anderen Eintrag verschieben.', { user: passkey.userName || passkey.userDisplayName || t('(ohne Benutzername)'), rpId: passkey.rpId })),
+    field(t('Ziel-Eintrag'), select),
+    h('p', { class: 'muted small' }, t('Der Passkey selbst bleibt gleich – die Anmeldung bei der Website funktioniert danach mit dem Ziel-Eintrag.'))), [
+    { label: t('Abbrechen') },
+    { label: t('Verschieben'), primary: true, onClick: async () => {
+      const [containerId, id] = splitKey(select.value);
       try {
-        const r = await call('openAdminCenter', { url: c.url, key: account.value || '' });
-        close();
-        if (account.value) toast(r.signIn ? t('{center} geöffnet – die Browser-Erweiterung meldet dich an', { center: c.name }) : t('{center} geöffnet – ohne Browser-Erweiterung bitte selbst anmelden', { center: c.name }));
+        await call('movePasskey', { from: { containerId: item.containerId, id: item.id }, to: { containerId, id }, credentialId: passkey.credentialId });
+        toast(t('Passkey verschoben'));
+        ui.selected = select.value;
+        await reloadAll();
+        return true;
       } catch (e) {
         toast(e.message, 'error');
+        return false;
       }
-    } }, h('span', { class: 'admin-center-icon' }, icon(c.icon, 18)), h('span', {}, c.name))))), [{ label: t('Schließen') }]);
+    } },
+  ]);
 }
 
-/** Servers: every server entry with its connection buttons, a search over name and address. */
-function serverDialog() {
-  const all = items.filter((i) => i.type === 'server').sort((a, b) => a.title.localeCompare(b.title));
-  const LABELS = { rdp: t('RDP'), teamviewer: t('TeamViewer'), bastion: t('Bastion') };
-  const list = h('div', { class: 'server-list' });
-  const search = h('input', { type: 'search', placeholder: t('Server suchen …'), 'aria-label': t('Server suchen') });
-  const draw = () => {
-    const q = search.value.trim().toLowerCase();
-    const shown = all.filter((i) => !q || `${i.title} ${i.username} ${containerName(i.containerId)}`.toLowerCase().includes(q));
-    list.replaceChildren(...(shown.length ? shown.map((i) => h('div', { class: 'server-row' },
-      avatar(i.title, 'avatar'),
-      h('div', { class: 'server-text' }, h('b', {}, i.title), h('span', { class: 'muted small' }, [i.username, containerName(i.containerId)].filter(Boolean).join(' · '))),
-      h('div', { class: 'server-actions' }, ...i.methods.map((m) => h('button', { type: 'button', class: 'btn small', onclick: () => connectServer(i.containerId, i.id, m) }, LABELS[m] || m)))))
-      : [h('p', { class: 'muted' }, all.length ? t('Kein Server gefunden.') : t('Noch keine Server. Lege einen Eintrag vom Typ „Server“ an: Adresse, RDP-Konto, TeamViewer-ID oder Bastion-Link.'))]));
-  };
-  search.addEventListener('input', draw);
-  draw();
-  const { close } = modal(t('Server'), h('div', { class: 'server-dialog' }, search, list), [
-    { label: t('Neuer Server …'), onClick: () => { newItem('server'); } },
-    { label: t('Schließen') },
-  ]);
-  setTimeout(() => search.focus(), 0);
-  return close;
+/** Opens PIM or an admin center in the browser; the extension signs in with the entry's account. */
+async function openAdminLink(link, key) {
+  try {
+    const r = await call('openAdminCenter', { url: link.url, key });
+    toast(r.signIn ? t('{center} geöffnet – die Browser-Erweiterung meldet dich an', { center: link.name }) : t('{center} geöffnet – ohne Browser-Erweiterung bitte selbst anmelden', { center: link.name }));
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
+
 
 /**
  * Two installations (machine-wide MSI and per-user EXE): both are "Keevault" in the Start menu, only one updates
@@ -2728,8 +2744,9 @@ async function checkOtherInstallation(found) {
 
 function renderEditor() {
   const isNew = ui.editing === 'new';
-  const item = isNew ? { type: ui.newType || 'login', urls: [], password: ui.newPassword || '' } : ui.editingItem;
+  const item = isNew ? { type: ui.newType || 'login', urls: [], ...ui.newTemplate, password: ui.newPassword || '' } : ui.editingItem;
   ui.newPassword = '';
+  ui.newTemplate = null;
   const targets = writableContainers();
   const folderTarget = isNew ? ui.containerId : item.containerId;
   const knownFolders = [...new Set([...(explicitFolders.get(folderTarget) || []), ...items.filter((i) => i.containerId === folderTarget).map((i) => i.folder).filter(Boolean)])].sort();
@@ -2737,6 +2754,7 @@ function renderEditor() {
   const form = itemForm(item, {
     isNew,
     linkOptions: linkOptions(),
+    devices: adminMode(),
     folders: knownFolders,
     // Without the "folders" function only existing folders can be chosen (no new ones by typing).
     folderFree: !folderContainer || featureAllowed(folderContainer, 'folders'),

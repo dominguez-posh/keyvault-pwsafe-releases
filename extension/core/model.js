@@ -11,7 +11,35 @@ export const ITEM_TAG = 'kvpwsafe';
 export const ITEM_PREFIX = 'pws-';
 // Key Vault allows 25 KB per secret value; keep headroom.
 export const MAX_ITEM_BYTES = 24 * 1024;
-export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat', server: 'Server' };
+export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat', server: 'Gerät' };
+// Kinds of a device entry (type "server", admin tools): only the label and the preset fields differ.
+export const DEVICE_KINDS = { server: 'Server', azurevm: 'Azure-VM', other: 'Sonstiges Gerät' };
+
+// Microsoft logo (four squares, 64 px PNG) for the entry templates below.
+const MICROSOFT_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAeUlEQVR42u3QwQmAMBBE0a3FiuzIZtKENhWwgclJSAV78X2Y88CrkvT1nke6tv9eT6VrAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABIqjHTtq3cla4BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACDpjy2f2ivpvesFLQAAAABJRU5ErkJggg==';
+// Sign-in addresses of a Microsoft work account: autofill, the extension's Microsoft sign-in and passkeys
+// (rpId login.microsoft.com) find the entry through them.
+export const MICROSOFT_LOGIN_URLS = ['https://login.microsoftonline.com', 'https://login.microsoft.com'];
+export const isMicrosoftLogin = (item) => item.type === 'login'
+  && (!!item.msAdmin || item.urls.some((u) => /(^|.)(microsoftonline|microsoft|office|azure).com$/.test(hostFromUrl(u) || '')));
+
+/** Login templates of the "New" menu: fields, addresses and logo preset (field names in the user's language). */
+export function entryTemplate(name, { msAdmin = false } = {}) {
+  if (name === 'microsoft') {
+    return {
+      type: 'login', title: 'Microsoft', icon: MICROSOFT_LOGO, msAdmin,
+      urls: [...MICROSOFT_LOGIN_URLS, 'https://portal.azure.com', 'https://admin.microsoft.com'],
+      fields: [{ name: t('Mandanten-ID'), value: '' }, { name: t('Primäre Domäne'), value: '' }],
+    };
+  }
+  if (name === 'ad') {
+    return {
+      type: 'login', title: 'Active Directory', icon: MICROSOFT_LOGO, urls: [],
+      fields: [{ name: t('Domäne (NetBIOS)'), value: '' }, { name: t('Domäne (DNS)'), value: '' }, { name: t('Domänencontroller'), value: '' }],
+    };
+  }
+  return null;
+}
 // Certificate files live inside the item (base64), so they must fit into one secret together with the rest.
 export const CERT_MAX_BYTES = 16 * 1024;
 
@@ -155,6 +183,7 @@ const linkKey = (v) => (/^[^/\s]+\/[^/\s]+$/.test(str(v).trim()) ? str(v).trim()
 function normalizeServer(s = {}) {
   const port = Number.parseInt(s?.port, 10);
   return {
+    kind: Object.hasOwn(DEVICE_KINDS, s?.kind) ? s.kind : 'server',
     host: str(s?.host).trim(),
     port: port > 0 && port < 65536 ? port : 3389,
     rdpLink: linkKey(s?.rdpLink),

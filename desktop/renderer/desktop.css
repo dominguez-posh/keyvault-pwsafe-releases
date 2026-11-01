@@ -448,38 +448,16 @@ body { overflow: hidden; }
 .frameless .brand { height: 36px; margin-bottom: 14px; }
 dialog .member .row-sub { white-space: normal; }
 
-/* Entry head toolbar: star and link as icons, "⋯" with the rest, "Edit" as the main button – no button wall below. */
+/* Entry head: title and the quiet "⋯" with every action – no button wall below. */
 .item-head { align-items: flex-start; }
 .item-head-text { flex: 1; }
-.item-tools { display: flex; align-items: center; gap: 4px; flex: none; margin-top: 8px; }
-.item-tools .icon-btn { width: 36px; height: 36px; border-radius: 10px; }
-.item-tools .icon-btn:hover { background: var(--surface-2); }
-.item-tools .icon-btn.on { color: #e3a400; }
-.item-tools .icon-btn.on svg { fill: currentColor; }
-.item-tools .btn.primary { margin-left: 6px; height: 36px; border-radius: 10px; padding: 0 16px; }
-/* Narrow detail pane: the toolbar moves to its own line below the title instead of squeezing it. */
 .item-head { flex-wrap: wrap; }
 .item-head-text { flex: 1 1 220px; min-width: 0; }
-.item-tools { margin-left: auto; }
 
 /* Empty detail pane: the Keevault mark as a quiet outline (shield with keyhole). */
 .placeholder-mark { display: inline-flex; color: var(--muted); opacity: .45; }
 
-/* Entry toolbar as one quiet capsule (star, link | Edit | ⋯) instead of loose icons and a big blue button. */
-.item-tools { gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgba(20, 26, 38, .05), 0 4px 14px rgba(20, 26, 38, .05); }
-.item-tools .icon-btn { width: 32px; height: 32px; border-radius: 9px; color: var(--muted); }
-.item-tools .icon-btn:hover { background: var(--surface-2); color: var(--text); }
-.item-tools .icon-btn.on { color: #e3a400; }
-.item-tools-sep { width: 1px; height: 18px; margin: 0 3px; background: var(--border); }
-.item-tools-main { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: none; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
-.item-tools-main:hover { background: var(--accent-soft); }
-.item-tools-main:focus-visible, .item-tools .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-
-/* Toolbar floating at the bottom of the detail pane: centred capsule, stays visible while a long entry scrolls; the
-   title above gets the full width. */
 .detail-pane > .item-detail { min-height: 100%; display: flex; flex-direction: column; }
-.item-tools.floating { position: sticky; bottom: 6px; z-index: 2; align-self: center; margin: auto 0 0; margin-top: max(24px, auto); padding: 4px; border-radius: 14px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(10px); box-shadow: 0 1px 2px rgba(20, 26, 38, .06), 0 10px 30px rgba(20, 26, 38, .14); }
 .item-detail .meta { margin-bottom: 24px; }
 
 /* Actions "at the top": a quiet three-dot button beside the title, the menu opens on hover. */
@@ -534,6 +512,9 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .top-admin { display: none; position: absolute; top: 8px; right: 16px; z-index: 3; gap: 6px; -webkit-app-region: no-drag; }
 .frameless .top-admin { right: 152px; }
 .show-admin .top-admin { display: inline-flex; align-items: center; }
+/* Quiet note that the admin tools are on: small caps pill in the accent colour before the buttons. */
+.admin-mode { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; margin-right: 4px; border-radius: 999px;
+  background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; user-select: none; }
 .top-admin .btn { height: 34px; min-height: 34px; border-radius: 11px; padding: 0 12px; gap: 6px; font-size: 13px; }
 /* Vault in the sidebar while entries are dragged over it. */
 .nav-row.drop { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 10px; background: var(--accent-soft); }
@@ -549,18 +530,11 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .new-split button:hover { background: var(--surface-2); }
 .new-split .new-more:hover { color: var(--text); }
 .new-split button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-/* Admin tools: admin center tiles, server list, server form and connect buttons. */
-.admin-centers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
-.admin-center { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.admin-center:hover, .admin-center:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
-.admin-center-icon { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-.server-dialog { display: grid; gap: 12px; width: 100%; min-width: 0; }
-.server-dialog input[type=search] { width: 100%; box-sizing: border-box; }
-.server-list { display: grid; gap: 4px; max-height: 50vh; overflow-y: auto; }
-.server-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px; border-radius: 12px; }
-.server-row:hover { background: var(--surface-2); }
-.server-text { flex: 1; min-width: 0; display: grid; }
-.server-text b, .server-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.server-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* Admin tools: PIM and admin centers as compact tiles in a Microsoft entry, connect buttons of a server entry. */
+.admin-links { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px; margin-top: 4px; }
+.admin-link { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 10px 6px 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.admin-link span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-link:hover, .admin-link:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+.admin-link-icon { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
 .connect-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .value.linked { display: inline-flex; align-items: center; gap: 4px; }

@@ -455,6 +455,11 @@
     .banner .title { font-weight: 600; margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
     .banner .user { color: #5b6170; margin: 2px 0 10px; word-break: break-all; }
     .banner select { width: 100%; margin-bottom: 10px; padding: 6px; border-radius: 6px; border: 1px solid #c4c9d4; font-size: 13px; }
+    .banner input.q { width: 100%; margin: 6px 0 4px; padding: 6px 8px; border-radius: 6px; border: 1px solid #c4c9d4; font-size: 13px; background: #fff; color: inherit; outline: none; }
+    .banner input.q:focus { border-color: #0f6cbd; box-shadow: 0 0 0 2px rgba(15,108,189,.18); }
+    .ms-list { max-height: 264px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+    .ms-none { padding: 8px; }
+    [hidden] { display: none !important; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; }
     button.b { border: 1px solid #c4c9d4; background: #fff; color: #1b1b1f; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
     button.b.primary { background: #0f6cbd; border-color: #0f6cbd; color: #fff; }
@@ -526,7 +531,7 @@
       .entry:hover, .entry:focus { background: #2f3440; }
       .head, .s, .banner .user, button.x { color: #a6abb8; }
       button.b { background: #2b2e36; color: #eceef2; border-color: #464a55; }
-      .banner select { background: #2b2e36; color: #eceef2; border-color: #464a55; }
+      .banner select, .banner input.q { background: #2b2e36; color: #eceef2; border-color: #464a55; }
     }`;
 
   let host = null;
@@ -960,9 +965,34 @@
           text.append(el('div', 't', a.title), el('div', 's', [a.username, a.container].filter(Boolean).join(' · ')));
           b.append(el('span', 'avatar', (a.title || '?').slice(0, 1).toUpperCase()), text);
           b.addEventListener('click', (e) => { if (e.isTrusted) start(a, remember.checked); });
+          b.dataset.q = [a.title, a.username, a.container].join(' ').toLowerCase();
           return b;
         });
-        msBanner.replaceChildren(close, title, ...entries, label);
+        // Many accounts: a search field above a scrolling list (title, user name, vault); Enter takes the first hit.
+        const box = el('div', 'ms-list');
+        box.append(...entries);
+        const parts = [close, title];
+        if (entries.length > 3) {
+          const none = el('div', 's ms-none', texts.msNone);
+          none.hidden = true;
+          const q = el('input', 'q');
+          q.type = 'search';
+          q.placeholder = texts.msSearch;
+          q.setAttribute('aria-label', texts.msSearch);
+          q.addEventListener('input', () => {
+            const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+            for (const b of entries) b.hidden = !words.every((w) => b.dataset.q.includes(w));
+            none.hidden = entries.some((b) => !b.hidden);
+          });
+          q.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' || !e.isTrusted) return;
+            e.preventDefault();
+            entries.find((b) => !b.hidden)?.click();
+          });
+          box.append(none);
+          parts.push(q);
+        }
+        msBanner.replaceChildren(...parts, box, label);
         if (offer.defaultKey) {
           const forget = el('button', 'b', texts.msForget);
           forget.addEventListener('click', (e) => {

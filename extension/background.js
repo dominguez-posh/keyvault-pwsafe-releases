@@ -199,6 +199,20 @@ const MS_LOGIN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com
 const isMicrosoftHost = (h) => /(^|\.)(microsoftonline|microsoft|office|live|azure|windows)\.(com|net)$/i.test(h);
 const msAccount = (s) => s.type === 'login' && (s.msAdmin || (s.hosts || []).some(isMicrosoftHost));
 const senderHost = (sender) => hostFromUrl(sender.origin && sender.origin !== 'null' ? sender.origin : sender.url);
+// Microsoft and Bastion sign-in data only for the real pages: https on the standard port. A page under the same name
+// over http or on another port (a redirected name, a test fake) gets nothing. The extension smoke test switches this
+// off in its own copy (scripts/extension-smoke.mjs) – its fake sign-in page runs over http on a local port.
+const SIGN_IN_HTTPS_ONLY = true;
+function signInHost(sender) {
+  const origin = sender.origin && sender.origin !== 'null' ? sender.origin : sender.url;
+  try {
+    const u = new URL(origin);
+    if (SIGN_IN_HTTPS_ONLY && (u.protocol !== 'https:' || u.port)) return '';
+  } catch {
+    return '';
+  }
+  return senderHost(sender);
+}
 
 function contentStrings() {
   return {
@@ -230,6 +244,8 @@ function contentStrings() {
     msSigningIn: t('Anmeldung als {name} …'),
     msOther: t('Anderes Konto'),
     msForget: t('Nicht mehr automatisch'),
+    msSearch: t('Konto suchen …'),
+    msNone: t('Kein Konto gefunden'),
     noUser: t('(ohne Benutzername)'),
     updateTitle: t('Passwort aktualisieren?'),
     saveTitle: t('Login speichern?'),
@@ -805,13 +821,13 @@ const contentCommands = {
   // Admin tools: one-click sign-in started in the app (admin center, Bastion). Only sign-in hosts ask, and the app
   // answers only within two minutes of the click and only for the host it was started for.
   'cs:signIn': async (_msg, sender) => {
-    const host = senderHost(sender);
+    const host = signInHost(sender);
     if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
     return app.signIn(host);
   },
   // Microsoft sign-in page: the Microsoft accounts from the vaults (admin accounts first) and the remembered one.
   'cs:msAccounts': async (_msg, sender) => {
-    const host = senderHost(sender);
+    const host = signInHost(sender);
     if (!host || !MS_LOGIN_HOSTS.test(host) || !(await isOpen())) return null;
     const names = await containerNames();
     const accounts = (await vault.summaries()).filter(msAccount)
@@ -823,7 +839,7 @@ const contentCommands = {
   },
   /** Account for the Microsoft sign-in (the one-time code fresh on every call); only Microsoft logins, only there. */
   'cs:msAccount': async ({ containerId, id }, sender) => {
-    const host = senderHost(sender);
+    const host = signInHost(sender);
     if (!host || !MS_LOGIN_HOSTS.test(host)) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const item = await vault.getItem(containerId, id);
     if (item.type !== 'login' || !(item.msAdmin || itemHosts(item).some(isMicrosoftHost))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));

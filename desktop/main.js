@@ -618,6 +618,33 @@ function copyViaHelperExe(text) {
 }
 
 /**
+ * Auto-type through the own helper (stdin, no command line, no window). App Control policies put PowerShell into
+ * Constrained Language Mode (no Add-Type) – the PowerShell helper then cannot type at all (2026-11-01).
+ * Resolves false only if the helper is missing or cannot start; then the PowerShell helper is tried.
+ */
+function typeViaHelperExe(text) {
+  const exe = helperExe();
+  if (!exe) return Promise.resolve(false);
+  return new Promise((resolve, reject) => {
+    const child = spawn(exe, ['--type'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    let started = false;
+    child.on('spawn', () => { started = true; });
+    child.on('error', (e) => (started ? reject(e) : resolve(false)));
+    child.on('exit', (code) => {
+      if (code === 0) resolve(true);
+      else reject(new Error(code === 3 ? t('Das Zielfenster nimmt keine Eingaben an (läuft es als Administrator?)') : t('Auto-Type fehlgeschlagen')));
+    });
+    child.stdin.end(Buffer.from(String(text), 'utf8'));
+  });
+}
+
+async function autoTypeText(text) {
+  if (process.platform === 'win32' && await typeViaHelperExe(text)) return;
+  diag('AUTOTYPE no Keevault-Update.exe – PowerShell helper');
+  await typeText(text);
+}
+
+/**
  * Copies a value. On Windows with the markers that keep it out of the clipboard history (Win+V) and the
  * cloud clipboard – a copied password must not end up in a history or on other devices.
  */
@@ -763,7 +790,15 @@ async function copyToClipboard(text) {
   } else {
     clipboard.writeText(text);
   }
-  if (clipboard.readText() !== text) throw new Error(t('Die Zwischenablage ist nicht verfügbar.'));
+  // Read back with a few retries: right after the helper wrote it, clipboard history or endpoint protection may
+  // still hold the clipboard open – a read then returns '' although the copy succeeded (2026-11-01).
+  let copied = false;
+  for (let i = 0; i < 10 && !(copied = clipboard.readText() === text); i++) await new Promise((r) => setTimeout(r, 50));
+  if (!copied) {
+    diag('COPY read-back failed – writing plainly');
+    clipboard.writeText(text);
+    if (clipboard.readText() !== text) throw new Error(t('Die Zwischenablage ist nicht verfügbar.'));
+  }
   clearTimeout(clipboardTimer);
   const seconds = Number(config.get().clipboardSeconds) || 0;
   if (seconds > 0) {
@@ -840,7 +875,7 @@ async function globalAutoType(what) {
       autoTypeCalls.push(`global:${what}`);
       return;
     }
-    await typeText(value);
+    await autoTypeText(value);
   } catch (e) {
     notify(e.message);
   }
@@ -1558,6 +1593,26 @@ const api = {
   },
   delete: (containerId, id) => vault.deleteItem(containerId, id),
   move: (fromId, toId, id, opts) => vault.moveItem(fromId, toId, id, opts),
+  /**
+   * Moves a passkey to another login (saved in the wrong entry). Added to the target first, removed from the source
+   * after that – if the second step fails the passkey is in both entries, never in none.
+   */
+  async movePasskey({ from, to, credentialId }) {
+    requireOpen();
+    if (from.containerId === to.containerId && from.id === to.id) return false;
+    const source = await vault.getItem(from.containerId, from.id, { fresh: true });
+    const passkey = source.passkeys.find((p) => p.credentialId === credentialId);
+    if (!passkey) throw new Error(t('Der Passkey ist nicht mehr in diesem Eintrag'));
+    const target = await vault.getItem(to.containerId, to.id, { fresh: true });
+    if (target.type !== 'login') throw new Error(t('Passkeys lassen sich nur in Login-Einträge verschieben'));
+    if (!target.passkeys.some((p) => p.credentialId === credentialId)) {
+      await vault.saveItem(to.containerId, {
+        ...target, passkeys: [...target.passkeys, passkey], username: target.username || passkey.userName || '',
+      }, { expectedVersion: target.version });
+    }
+    await vault.saveItem(from.containerId, { ...source, passkeys: source.passkeys.filter((p) => p.credentialId !== credentialId) }, { expectedVersion: source.version });
+    return true;
+  },
   history: (containerId, id) => vault.history(containerId, id),
   version: (containerId, id, version) => vault.getVersion(containerId, id, version),
   restoreVersion: (containerId, id, version) => vault.restoreVersion(containerId, id, version),
@@ -2165,7 +2220,7 @@ const api = {
     }
     win?.minimize();
     await new Promise((r) => setTimeout(r, 400));
-    await typeText(String(text));
+    await autoTypeText(String(text));
     return true;
   },
   /** The renderer reports the selected entry; global auto-type uses it. */
@@ -2182,7 +2237,7 @@ const api = {
     }
     win?.minimize();
     await new Promise((r) => setTimeout(r, 400));
-    await typeText(value);
+    await autoTypeText(value);
     return true;
   },
   otherInstallation: () => otherInstallation(),
@@ -2914,6 +2969,19 @@ function runSmokeTest() {
           const assertion = decode(Buffer.from((await got).response, 'base64'));
           if (!assertion.get(3) || assertion.get(4).get('name') !== 'win@example.com') errors.push('windows: bad getAssertion response');
         }
+        // Passkey saved in the wrong entry: move it to another login and back (target first, then source).
+        try {
+          const all = await vault.summaries();
+          const src = all.find((x) => x.containerId === target.id && x.title === 'Windows-Test');
+          const dst = await vault.saveItem(target.id, { type: 'login', title: 'Passkey-Ziel', username: '' });
+          await api.movePasskey({ from: { containerId: target.id, id: src.id }, to: { containerId: target.id, id: dst.id }, credentialId: c?.credentialId });
+          const [a, b] = await Promise.all([vault.getItem(target.id, src.id, { fresh: true }), vault.getItem(target.id, dst.id, { fresh: true })]);
+          if (a.passkeys.length || b.passkeys.length !== 1 || b.username !== 'win@example.com') errors.push('movePasskey: not moved');
+          await api.movePasskey({ from: { containerId: target.id, id: dst.id }, to: { containerId: target.id, id: src.id }, credentialId: c?.credentialId });
+          await vault.deleteItem(target.id, dst.id);
+        } catch (e) {
+          errors.push(`movePasskey: ${e.message}`);
+        }
         const view = process.argv.find((a) => a.startsWith('--view='))?.slice('--view='.length);
         if (view === 'windows') {
           windows.request('get', { request: Buffer.from(getReq).toString('base64'), transactionId: 'smoke-view' }).catch(() => {});
@@ -3177,7 +3245,7 @@ function runSmokeTest() {
         await js('(() => { const el = document.querySelector(".list-pane .list-scroll"); const r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 120, clientY: r.top + 120 })); })()');
         await sleep(400);
       }
-      if (view === 'admin' || view === 'm365' || view === 'servers' || view === 'serveritem' || view === 'serveredit') {
+      if (view === 'admin' || view === 'serveritem' || view === 'serveredit') {
         // Admin tools: server entry with a linked account, one-click sign-in only for the host it was started for
         // (nothing is launched in smoke runs – see launchRdp/launchTeamViewer).
         try {
@@ -3200,22 +3268,70 @@ function runSmokeTest() {
           changed();
           await sleep(800);
           await js('document.documentElement.classList.add("show-admin")');
-          if (view === 'm365') await js('document.querySelector("[data-admin=m365]")?.click()');
-          if (view === 'servers') await js('document.querySelector("[data-admin=servers]")?.click()');
           if (view === 'serveritem' || view === 'serveredit') await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
           await sleep(400);
-          if (view === 'serveritem' || view === 'serveredit') await js('[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.textContent.includes("DC01"))?.click()');
-          if (view === 'serveredit') { await sleep(500); await js('[...document.querySelectorAll(".detail-pane button")].find((b) => b.textContent.trim() === "Bearbeiten")?.click()'); }
+          if (view === 'serveritem' || view === 'serveredit' || view === 'admin') await js('document.querySelector(".pills [data-type=device]")?.click()');
+          await sleep(300);
+          if (view === 'serveritem' || view === 'serveredit') {
+            if (!(await js('[...document.querySelectorAll(".list li.row-item[data-key]")].some((r) => r.textContent.includes("DC01"))'))) errors.push('devices tab: DC01 missing');
+            await js('[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.textContent.includes("DC01"))?.click()');
+          }
+          if (view === 'serveredit') { await sleep(500); await js('document.querySelector(".detail-pane .item-hover-menu")?.click()'); await sleep(300); await js('document.querySelector(".context-menu [data-action=edit]")?.click()'); }
           await sleep(500);
         } catch (e) {
           errors.push(`admin: ${e.message}`);
         }
       }
+      if (view === 'newmenu' || view === 'mstemplate') {
+        // "New" menu with the login templates; mstemplate: the Microsoft template opened in the editor.
+        win.setSize(1200, 780);
+        await sleep(300);
+        await js('document.querySelector(".new-split button:last-child")?.click()');
+        await sleep(400);
+        if (view === 'mstemplate') {
+          await js('document.querySelector("[data-action=new-microsoft]")?.click()');
+          await sleep(600);
+          const ok = await js('(() => (document.querySelector(".detail-pane textarea[name=urls]")?.value || "").includes("login.microsoft.com") && !!document.querySelector(".detail-pane img"))()');
+          if (!ok) errors.push('mstemplate: addresses or logo missing in the editor');
+        }
+      }
+      if (view === 'msitem' || view === 'msentry') {
+        // Microsoft entry with admin tools on: PIM and admin center tiles; a click hands the sign-in to the extension.
+        try {
+          const kvc = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error && !c.locked);
+          await vault.saveItem(kvc.id, { type: 'login', title: 'Microsoft', username: 'admin@contoso.onmicrosoft.com', password: 'x', msAdmin: true, urls: ['https://login.microsoftonline.com'] });
+          config.update({ adminTools: true });
+          changed();
+          await sleep(800);
+          await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
+          await sleep(400);
+          await js('[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.textContent.includes("admin@contoso.onmicrosoft.com"))?.click()');
+          await sleep(600);
+          if (!(await js('!!document.querySelector(".detail-pane [data-admin-link=pim]")'))) errors.push('msitem: PIM tile missing');
+          if (view === 'msitem') {
+            signInJobs = [];
+            await js('document.querySelector(".detail-pane [data-admin-link=entra]")?.click()');
+            await sleep(500);
+            const job = await signInFor('login.microsoftonline.com');
+            if (job?.username !== 'admin@contoso.onmicrosoft.com') errors.push(`msitem: Entra tile did not sign in with the entry (${job?.username})`);
+            signInJobs = [];
+          }
+        } catch (e) {
+          errors.push(`msitem: ${e.message}`);
+        }
+      }
+      if (view === 'pkmove') {
+        // Passkey row with the move button, dialog to pick the target entry (screenshot only).
+        await js('[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.textContent.includes("Grafana"))?.click()');
+        await sleep(600);
+        await js('document.querySelector(".detail-pane .passkey-row .icon-btn[title]")?.click()');
+        await sleep(400);
+      }
       if (view === 'itemmenu') {
         // Entry with the "⋯" menu of its head toolbar open (screenshot only).
         await js('document.querySelectorAll(".list li.row-item[data-key]")[0]?.click()');
         await sleep(500);
-        await js('document.querySelector(".detail-pane .item-more")?.click()');
+        await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
         await sleep(400);
       }
       if (view === 'add') {

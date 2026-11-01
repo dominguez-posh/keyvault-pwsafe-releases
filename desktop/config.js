@@ -57,8 +57,6 @@ const DEFAULTS = {
   theme: 'system',
   // Version for which Keevault.exe was excluded from Windows Error Reporting (no crash dumps).
   werExcluded: '',
-  // View: floating toolbar at the bottom of an entry (the "⋯" beside the title stays either way).
-  entryToolbar: true,
   // View: small marks before the vaults – cloud for Azure Key Vault, drive for local files.
   sourceBadges: true,
   // View: "PIM" button top right (opens aka.ms/pim to activate an eligible Azure role).

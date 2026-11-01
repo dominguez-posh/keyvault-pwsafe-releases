@@ -255,8 +255,14 @@ export class WindowsProvider {
           }));
         } else {
           info.containers = containers.filter((c) => c.access?.write !== false && !c.locked && !c.error).map((c) => ({ id: c.id, name: c.name }));
-          info.logins = (await vault.summaries()).filter((s) => s.type === 'login' && (s.rpIds.includes(p.rpId) || s.hosts.some((h) => hostMatches(h, p.rpId))))
-            .map((s) => ({ containerId: s.containerId, id: s.id, title: s.title, username: s.username, container: names.get(s.containerId) || '' }));
+          // Offered as save target: logins of the site, and logins with the account's user name – a Microsoft account
+          // entry usually carries portal or admin addresses, not login.microsoft.com (2026-11-01). Same user name first.
+          const user = String(p.parsed.user?.name || '').trim().toLowerCase();
+          const sameUser = (s) => !!user && String(s.username || '').trim().toLowerCase() === user;
+          info.logins = (await vault.summaries()).filter((s) => s.type === 'login'
+            && (sameUser(s) || s.rpIds.includes(p.rpId) || s.hosts.some((h) => hostMatches(h, p.rpId))))
+            .sort((a, b) => sameUser(b) - sameUser(a))
+            .map((s) => ({ containerId: s.containerId, id: s.id, title: s.title, username: s.username, container: names.get(s.containerId) || '', sameUser: sameUser(s) }));
           info.excluded = p.parsed.excludeList.length ? (await vault.passkeyCandidates(p.rpId, p.parsed.excludeList)).length > 0 : false;
         }
         info.lockedContainers = containers.filter((c) => c.protected && c.locked).map((c) => c.name);
