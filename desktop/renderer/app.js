@@ -367,10 +367,8 @@ async function render() {
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
-  // Admin tools on (menu → View): a quiet note at the top; PIM, admin centers and connections sit in the entries.
-  const adminBar = h('div', { class: 'top-admin' },
-    h('span', { class: 'admin-mode', title: t('Admin-Werkzeuge sind eingeschaltet (Menü → Ansicht)') }, icon('shield', 12), t('Admin-Modus')));
-  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions, adminBar);
+  // Admin mode shows itself in the brand ("Keevault for Admins") and the copper accent – no extra badge.
+  const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions);
   root.replaceChildren(shell);
   setupSplitters(shell);
   renderSidebar();
@@ -708,6 +706,7 @@ function containerIcon(c) {
 }
 
 function renderSidebar() {
+  applyViewClass(); // admin colour and the brand change together
   const nav = (view, label, iconName, count) => h('button', {
     class: `nav ${ui.view === view && !ui.containerId ? 'active' : ''}`,
     dataset: { view },
@@ -722,7 +721,15 @@ function renderSidebar() {
     refresh.classList.add('nav-refresh');
     refresh.dataset.container = c.id;
     refresh.classList.toggle('spinning', busyContainers.has(c.id));
-    return h('div', { class: `nav-row ${ui.containerId === c.id ? 'active' : ''}`, oncontextmenu: (e) => contextMenu(e, containerActions(c)), ...vaultDropTarget(c) },
+    return h('div', { class: `nav-row ${ui.containerId === c.id ? 'active' : ''}`, oncontextmenu: (e) => contextMenu(e, containerActions(c)), ...vaultDropTarget(c),
+      draggable: c.personal ? false : 'true', dataset: { vault: c.id },
+      ondragstart: c.personal ? undefined : (e) => {
+        if (e.target !== e.currentTarget) return;
+        e.dataTransfer.setData(DRAG_VAULT, c.id);
+        e.dataTransfer.effectAllowed = 'move';
+        draggedVault = c.id;
+      },
+      ondragend: () => { draggedVault = null; } },
       h('button', {
         class: `nav ${ui.containerId === c.id ? 'active' : ''}`,
         title: [c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
@@ -733,14 +740,15 @@ function renderSidebar() {
       refresh);
   };
   const personal = st.containers.filter((c) => c.personal);
-  const containers = st.containers.filter((c) => !c.personal).map(vaultRow);
+  const containers = orderedVaults(st.containers.filter((c) => !c.personal)).map(vaultRow);
   setChildren(panes.sidebar,
-    h('div', { class: 'brand' }, h('img', { src: '../assets/icon.png', alt: '' }), h('span', { class: 'brand-name' }, 'Keevault'),
+    h('div', { class: 'brand' }, h('img', { src: adminMode() ? '../assets/icon-admin.png' : '../assets/icon.png', alt: '' }),
+      h('span', { class: `brand-name ${adminMode() ? 'admin' : ''}` }, h('span', {}, 'Keevault'), adminMode() ? h('span', { class: 'brand-admin' }, 'for Admins') : null),
       st.offline ? h('span', { class: 'badge warn', title: t('Letzter Stand: {date}', { date: formatDateTime(st.offlineAt) }) }, t('Offline')) : null,
       h('span', { class: 'spacer' }),
       iconButton('lock', t('Sperren'), () => call('lock')),
       mainMenuButton()),
-    nav('all', deviceMode() ? t('Alle Geräte') : t('Alle Einträge'), 'shield', items.filter((i) => (i.type === 'server') === deviceMode()).length),
+    nav('all', deviceMode() ? t('Alle Assets') : t('Alle Einträge'), 'shield', items.filter((i) => (i.type === 'server') === deviceMode()).length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite && (i.type === 'server') === deviceMode()).length),
     deviceMode() ? null : nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
     personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow)) : null,
@@ -797,6 +805,8 @@ function applyViewClass() {
   document.documentElement.classList.toggle('see-through', mode === 'light' || mode === 'strong');
   document.documentElement.classList.toggle('see-through-strong', mode === 'strong');
   document.documentElement.classList.toggle('show-admin', st?.settings?.adminTools === true);
+  // Admin mode in the copper/red of the admin palette – only the colour changes, never the layout.
+  document.documentElement.classList.toggle('admin-theme', st?.settings?.adminTools === true);
 }
 
 const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
@@ -919,31 +929,52 @@ function mainMenu(anchor) {
     close();
     onClick();
   } }, icon(iconName, 16), h('span', { class: 'grow' }, label), extra);
+  // Two tabs keep the menu short: "Menu" (actions and tools) and "View" (how the app looks); the last one is kept.
+  const panes = {
+    main: h('div', { class: 'main-menu-pane', role: 'group', 'aria-label': t('Menü') },
+      entry('settings', 'settings', t('Einstellungen'), settingsDialog),
+      entry('reload', 'refresh', t('Neu laden'), refresh),
+      h('div', { class: 'main-menu-label' }, t('Werkzeuge')),
+      entry('generator', 'key', t('Passwort-Generator'), generatorDialog),
+      entry('health', 'shield', t('Passwort-Check'), () => healthDialog(reportCtx()), expiring ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiring) : null),
+      st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
+      h('div', { class: 'context-sep' }),
+      entry('lock', 'lock', t('Sperren'), () => call('lock'))),
+    view: h('div', { class: 'main-menu-pane view-pane', role: 'group', 'aria-label': t('Ansicht') },
+      viewRow(t('Zoom'), zoomControl()),
+      viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
+      viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
+      viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
+      // Admin mode changes the list (devices tab), the New menu and the open entry (admin tiles): redraw them.
+      viewRow(t('Admin-Werkzeuge'), onOffControl('adminTools', t('Admin-Werkzeuge'), false, async () => {
+        await setView({ pimButton: false });
+        renderSidebar();
+        renderList();
+        renderDetail();
+      })),
+      h('div', { class: 'context-sep' }),
+      entry('view-reset', 'refresh', t('Auf Standard zurücksetzen'), resetView)),
+  };
+  let tab = 'main';
+  try { tab = localStorage.getItem('menuTab') === 'view' ? 'view' : 'main'; } catch {}
+  const tabButton = (key, label) => h('button', { type: 'button', role: 'tab', dataset: { tab: key }, onclick: () => showTab(key) }, label);
+  const tabs = h('div', { class: 'seg main-menu-tabs', role: 'tablist' }, tabButton('main', t('Menü')), tabButton('view', t('Ansicht')));
+  const showTab = (key) => {
+    tab = key;
+    try { localStorage.setItem('menuTab', key); } catch {}
+    for (const b of tabs.children) {
+      b.classList.toggle('on', b.dataset.tab === key);
+      b.setAttribute('aria-selected', String(b.dataset.tab === key));
+    }
+    panes.main.hidden = key !== 'main';
+    panes.view.hidden = key !== 'view';
+  };
   const menu = h('div', { class: 'main-menu', role: 'menu', 'aria-label': t('Menü') },
     h('div', { class: 'main-menu-account' },
       h('span', { class: 'main-menu-avatar' }, initials),
       h('span', { class: 'main-menu-who' }, h('b', {}, name), h('span', {}, st.account?.username || t('Nur Datei-Tresore')))),
-    entry('reload', 'refresh', t('Neu laden'), refresh),
-    entry('settings', 'settings', t('Einstellungen'), settingsDialog),
-    h('div', { class: 'main-menu-label' }, t('Werkzeuge')),
-    entry('generator', 'key', t('Passwort-Generator'), generatorDialog),
-    entry('health', 'shield', t('Passwort-Check'), () => healthDialog(reportCtx()), expiring ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiring) : null),
-    st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
-    h('div', { class: 'main-menu-label' }, t('Ansicht')),
-    viewRow(t('Zoom'), zoomControl()),
-    viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
-    viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
-    viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
-    // Admin mode changes the list (devices tab), the New menu and the open entry (admin tiles): redraw them.
-    viewRow(t('Admin-Werkzeuge'), onOffControl('adminTools', t('Admin-Werkzeuge'), false, async () => {
-      await setView({ pimButton: false });
-      renderSidebar();
-      renderList();
-      renderDetail();
-    })),
-    entry('view-reset', 'refresh', t('Ansicht auf Standard'), resetView),
-    h('div', { class: 'context-sep' }),
-    entry('lock', 'lock', t('Sperren'), () => call('lock')));
+    tabs, panes.main, panes.view);
+  showTab(tab);
   const close = () => {
     menu.classList.add('closing');
     setTimeout(() => menu.remove(), 120);
@@ -1023,6 +1054,14 @@ const adminMode = () => st?.settings?.adminTools === true;
 // Admin mode: the switch at the bottom of the sidebar shows either the passwords (logins, notes, cards, …) or the
 // devices – cleanly apart, the list head says which.
 const deviceMode = () => adminMode() && ui.devices;
+// Assets and secrets keep their own folders: empty asset folders are stored with this prefix (never shown), entry
+// folders belong to the side of their entry. Folder actions only touch the side that is shown.
+const ASSET_FOLDERS = 'assets:';
+const folderScope = () => (deviceMode() ? 'assets' : 'secrets');
+const nsFolder = (p) => (deviceMode() && p ? ASSET_FOLDERS + p : p);
+const folderList = (id) => (explicitFolders.get(id) || [])
+  .filter((f) => f.startsWith(ASSET_FOLDERS) === deviceMode()).map((f) => (deviceMode() ? f.slice(ASSET_FOLDERS.length) : f));
+const modeItems = (id) => items.filter((i) => i.containerId === id && (i.type === 'server') === deviceMode());
 
 /** Sidebar bottom (admin mode): "Passwords | Devices" in the segment style of the menu. */
 function modeSwitch() {
@@ -1040,7 +1079,7 @@ function modeSwitch() {
   };
   const b = (devices, iconName, label) => h('button', { type: 'button', role: 'radio', 'aria-checked': String(ui.devices === devices), class: ui.devices === devices ? 'on' : '',
     dataset: { mode: devices ? 'devices' : 'items' }, onclick: () => choose(devices) }, icon(iconName, 14), label);
-  return h('div', { class: 'seg mode-switch', role: 'radiogroup', 'aria-label': t('Anzeigen') }, b(false, 'key', t('Passwörter')), b(true, 'external', t('Geräte')));
+  return h('div', { class: 'seg mode-switch', role: 'radiogroup', 'aria-label': t('Anzeigen') }, b(false, 'key', t('Passwörter')), b(true, 'external', t('Assets')));
 }
 
 /** Type pills above the list (only the kinds that occur, and only when there is more than one; not for devices). */
@@ -1094,7 +1133,7 @@ function visibleItems({ ignoreType = false } = {}) {
 
 function renderList() {
   const container = ui.containerId ? st.containers.find((c) => c.id === ui.containerId) : null;
-  const title = container ? container.name : { all: deviceMode() ? t('Alle Geräte') : t('Alle Einträge'), favorites: t('Favoriten'), passkeys: t('Passkeys') }[ui.view];
+  const title = container ? container.name : { all: deviceMode() ? t('Alle Assets') : t('Alle Einträge'), favorites: t('Favoriten'), passkeys: t('Passkeys') }[ui.view];
   const rowsEl = h('ul', { class: 'list' });
   let searchTimer = null;
   const search = h('input', { type: 'search', id: 'search', placeholder: t('Suchen (Titel, Benutzer, Website, Ordner)'), value: ui.query, oninput: (e) => {
@@ -1143,6 +1182,23 @@ function renderList() {
         draggedKeys = keys;
       } : undefined,
       ondragend: draggable ? () => { draggedKeys = []; } : undefined,
+      // A passkey dragged out of an entry lands on this login (another writable login, not its own entry).
+      ondragover: (e) => {
+        if (!e.dataTransfer.types.includes(DRAG_PASSKEY) || !passkeyFits(i)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        e.currentTarget.classList.add('drop');
+      },
+      ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop'); },
+      ondrop: (e) => {
+        if (!e.dataTransfer.types.includes(DRAG_PASSKEY)) return;
+        e.preventDefault();
+        e.currentTarget.classList.remove('drop');
+        let data = null;
+        try { data = JSON.parse(e.dataTransfer.getData(DRAG_PASSKEY)); } catch { /* not ours */ }
+        draggedPasskey = null;
+        if (data && passkeyFits(i, data)) dropPasskey(data, i);
+      },
       onclick: (e) => {
       // Shift: range from the last clicked entry; Ctrl: toggle; plain click: single selection.
       if (e.shiftKey && ui.selected) {
@@ -1189,8 +1245,8 @@ function renderList() {
 
   function renderRows() {
     const list = visibleItems();
-    if (!list.length && !(container && explicitFolders.get(container.id)?.length)) {
-      rowsEl.replaceChildren(h('li', { class: 'empty' }, icon('search', 32), ui.query ? t('Keine Treffer') : deviceMode() ? t('Keine Geräte') : t('Keine Einträge')));
+    if (!list.length && !(container && folderList(container.id).length)) {
+      rowsEl.replaceChildren(h('li', { class: 'empty' }, icon('search', 32), ui.query ? t('Keine Treffer') : deviceMode() ? t('Keine Assets') : t('Keine Einträge')));
       return;
     }
     if (container && !ui.query.trim()) {
@@ -1244,7 +1300,7 @@ function renderList() {
   topActions.replaceChildren();
   setChildren(panes.list,
     h('div', { class: 'list-head' }, container && logos.get(container.id) ? h('img', { class: 'container-logo large', src: logos.get(container.id), alt: '' }) : null,
-      listTitle(title, container), deviceMode() ? h('span', { class: 'mode-badge', title: t('Es werden Geräte angezeigt – unten links auf „Passwörter“ umschalten') }, icon('external', 13), t('Geräte')) : null, newButton),
+      listTitle(title, container), deviceMode() ? h('span', { class: 'mode-badge', title: t('Es werden Assets angezeigt – unten links auf „Passwörter“ umschalten') }, icon('external', 13), t('Assets')) : null, newButton),
     container?.error ? notice(container.error.status !== 403 ? container.error.message
       : container.rbac === false
         ? t('{message}. Dieser Key Vault nutzt Zugriffsrichtlinien statt Azure RBAC: Stelle ihn unter „Zugriffskonfiguration“ auf „Azure RBAC“ um oder lege eine Zugriffsrichtlinie für dein Konto an.', { message: container.error.message })
@@ -1302,7 +1358,7 @@ function renderList() {
         field?.setSelectionRange(field.value.length, field.value.length);
       },
     }, label))) : null;
-  search.placeholder = deviceMode() ? t('Geräte suchen (Name, Adresse, Ordner)')
+  search.placeholder = deviceMode() ? t('Assets suchen (Name, Adresse, Ordner)')
     : container ? (ui.searchAll ? t('Alle Tresore durchsuchen') : t('In „{vault}“ suchen', { vault: container.name })) : t('Suchen (Titel, Benutzer, Website, Ordner)');
   topSearch.replaceChildren(h('div', { class: `search ${scope ? 'with-scope' : ''}` }, icon('search'), search, scope || h('kbd', { 'aria-hidden': 'true' }, t('Strg F'))));
   renderRows();
@@ -1351,6 +1407,10 @@ function vaultIdentityCell(container) {
 
 const DRAG_TYPE = 'application/x-kvpwsafe-item';
 const DRAG_FOLDER = 'application/x-kvpwsafe-folder';
+const DRAG_VAULT = 'application/x-kvpwsafe-vault';
+const DRAG_PASSKEY = 'application/x-kvpwsafe-passkey';
+let draggedPasskey = null; // { from: entry key, credentialId } while a passkey is dragged
+let draggedVault = null; // container id while a vault row is dragged
 // What is being dragged right now (dataTransfer can only be read on drop; the vault rows decide earlier whether they accept).
 let draggedKeys = [];
 let draggedFolder = null; // { containerId, folder }
@@ -1368,9 +1428,36 @@ function vaultAccepts(c, keys, folder = null) {
 }
 
 /** Sidebar vault row as drop target: moves the dragged entries into that vault after a short confirmation. */
+/** Sidebar order: the ids in the setting first (in that order), the rest after them as they come. */
+function orderedVaults(list) {
+  const order = st.settings.containerOrder || [];
+  const rank = (c, i) => { const k = order.indexOf(c.id); return k < 0 ? order.length + i : k; };
+  return list.map((c, i) => [c, rank(c, i)]).sort((a, b) => a[1] - b[1]).map(([c]) => c);
+}
+
+/** A vault dropped onto another one: before it (upper half) or after it (lower half); remembered in the settings. */
+async function reorderVault(id, targetId, after) {
+  const ids = orderedVaults(st.containers.filter((c) => !c.personal)).map((c) => c.id).filter((x) => x !== id);
+  const at = ids.indexOf(targetId);
+  if (at < 0) return;
+  ids.splice(after ? at + 1 : at, 0, id);
+  st.settings = await call('updateSettings', { containerOrder: ids });
+  renderSidebar();
+}
+
 function vaultDropTarget(c) {
+  const half = (e) => e.clientY > e.currentTarget.getBoundingClientRect().top + e.currentTarget.offsetHeight / 2;
   return {
     ondragover: (e) => {
+      // Reordering: another vault (not the personal one) is dragged over this row.
+      if (e.dataTransfer.types.includes(DRAG_VAULT)) {
+        if (c.personal || !draggedVault || draggedVault === c.id) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        e.currentTarget.classList.toggle('drop-after', half(e));
+        e.currentTarget.classList.toggle('drop-before', !half(e));
+        return;
+      }
       const ok = e.dataTransfer.types.includes(DRAG_FOLDER) ? vaultAccepts(c, [], draggedFolder)
         : e.dataTransfer.types.includes(DRAG_TYPE) && vaultAccepts(c, draggedKeys);
       if (!ok) return;
@@ -1378,10 +1465,17 @@ function vaultDropTarget(c) {
       e.dataTransfer.dropEffect = 'move';
       e.currentTarget.classList.add('drop');
     },
-    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop'); },
+    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop', 'drop-before', 'drop-after'); },
     ondrop: async (e) => {
       e.preventDefault();
-      e.currentTarget.classList.remove('drop');
+      const after = half(e);
+      e.currentTarget.classList.remove('drop', 'drop-before', 'drop-after');
+      if (e.dataTransfer.types.includes(DRAG_VAULT)) {
+        const id = e.dataTransfer.getData(DRAG_VAULT);
+        draggedVault = null;
+        if (id && id !== c.id && !c.personal) await reorderVault(id, c.id, after);
+        return;
+      }
       if (e.dataTransfer.types.includes(DRAG_FOLDER)) {
         const [containerId, folder] = e.dataTransfer.getData(DRAG_FOLDER).split('\n');
         draggedFolder = null;
@@ -1402,24 +1496,65 @@ function vaultDropTarget(c) {
   };
 }
 
-/** Drag & drop target that moves the dragged entry into folder (same container). */
-function dropTarget(folder) {
+/**
+ * Drag & drop target "folder" (a folder row, or the bar of the parent folder): takes dragged entries – and a dragged
+ * folder of the same vault, which moves in with its subfolders and entries (never into itself or a subfolder of it).
+ */
+function dropTarget(folder, container = null) {
+  const folderFits = (src) => !!src && !!container && src.containerId === container.id
+    && src.folder !== folder && !folder.startsWith(`${src.folder}/`) && parentOf(src.folder) !== folder;
   return {
     ondragover: (e) => {
-      if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
+      const types = e.dataTransfer.types;
+      if (!types.includes(DRAG_TYPE) && !(types.includes(DRAG_FOLDER) && folderFits(draggedFolder))) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       e.currentTarget.classList.add('drop');
     },
-    ondragleave: (e) => e.currentTarget.classList.remove('drop'),
+    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop'); },
     ondrop: (e) => {
       e.preventDefault();
+      e.stopPropagation();
       e.currentTarget.classList.remove('drop');
+      if (e.dataTransfer.types.includes(DRAG_FOLDER)) {
+        const [containerId, src] = e.dataTransfer.getData(DRAG_FOLDER).split('\n');
+        draggedFolder = null;
+        if (folderFits({ containerId, folder: src })) moveFolderInto(container, src, folder);
+        return;
+      }
       const keys = e.dataTransfer.getData(DRAG_TYPE).split('\n').filter(Boolean);
       if (keys.length > 1) moveManyToFolder(keys, folder);
       else if (keys[0]) moveToFolder(keys[0], folder);
     },
   };
+}
+
+const parentOf = (folder) => (folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '');
+
+/** Moves folder src (with subfolders and entries) into target ('' = top level) of the same vault. */
+async function moveFolderInto(c, src, target) {
+  const name = src.split('/').pop();
+  const next = target ? `${target}/${name}` : name;
+  if (next === src) return;
+  // The deepest subfolder must stay within MAX_FOLDER_DEPTH levels.
+  const depth = (f) => f.split('/').filter(Boolean).length;
+  const inside = [...modeItems(c.id).map((i) => i.folder || ''), ...folderList(c.id)]
+    .filter((f) => f === src || f.startsWith(`${src}/`));
+  const deepest = Math.max(depth(src), ...inside.map(depth));
+  if (depth(next) + deepest - depth(src) > MAX_FOLDER_DEPTH) {
+    toast(t('Dort wären es mehr als {n} Ordnerebenen', { n: MAX_FOLDER_DEPTH }), 'error');
+    return;
+  }
+  try {
+    const r = await call('renameFolder', c.id, src, next, folderScope());
+    for (const err of r.errors) toast(err, 'error');
+    if (ui.folder === src || ui.folder.startsWith(`${src}/`)) ui.folder = next + ui.folder.slice(src.length);
+    explicitFolders.set(c.id, await call('folders', c.id));
+    toast(t('Ordner „{name}“ verschoben', { name }));
+    await reloadAll();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
 }
 
 async function moveToFolder(key, folder) {
@@ -1497,7 +1632,7 @@ function listAreaActions(container) {
 
 /** Folder view of a container: breadcrumb, subfolders of the current folder, then its entries. */
 function folderRows(container, list, row, rerender) {
-  const all = new Set([...(explicitFolders.get(container.id) || []), ...list.map((i) => i.folder).filter(Boolean)]);
+  const all = new Set([...folderList(container.id), ...list.map((i) => i.folder).filter(Boolean)]);
   for (const f of [...all]) {
     const parts = f.split('/');
     for (let k = 1; k < parts.length; k++) all.add(parts.slice(0, k).join('/'));
@@ -1514,7 +1649,7 @@ function folderRows(container, list, row, rerender) {
   const out = [];
   if (cur) {
     const parent = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
-    out.push(h('li', { class: 'folder-crumb', ...dropTarget(parent) },
+    out.push(h('li', { class: 'folder-crumb', ...dropTarget(parent, container) },
       h('button', { class: 'icon-btn', title: t('Übergeordneter Ordner'), onclick: () => open(parent) }, icon('back', 16)),
       icon('folder', 16), h('b', {}, cur.split('/').join(' / '))));
   }
@@ -1522,7 +1657,7 @@ function folderRows(container, list, row, rerender) {
     const count = inside(f);
     const name = f.slice(prefix.length);
     const dragFolder = writable(container) && featureAllowed(container, 'folders');
-    out.push(h('li', { class: 'row-item folder-row', onclick: () => open(f), oncontextmenu: (e) => contextMenu(e, folderActions(container, f, count, open)), ...dropTarget(f),
+    out.push(h('li', { class: 'row-item folder-row', onclick: () => open(f), oncontextmenu: (e) => contextMenu(e, folderActions(container, f, count, open)), ...dropTarget(f, container),
       draggable: dragFolder ? 'true' : false,
       ondragstart: dragFolder ? (e) => {
         if (e.target !== e.currentTarget) return;
@@ -1536,7 +1671,7 @@ function folderRows(container, list, row, rerender) {
       !count && writable(container) ? h('button', { class: 'icon-btn', title: t('Leeren Ordner löschen'), onclick: async (e) => {
         e.stopPropagation();
         try {
-          await call('removeFolder', container.id, f);
+          await call('removeFolder', container.id, nsFolder(f));
           explicitFolders.set(container.id, await call('folders', container.id));
           rerender();
         } catch (err) {
@@ -1674,13 +1809,13 @@ function folderActions(c, folder, count, open) {
             const failed = await deleteMany(inside.map((i) => i.key));
             if (failed) toast(t('{n} Einträge konnten nicht gelöscht werden', { n: failed }), 'error');
           } else {
-            const r = await call('renameFolder', c.id, folder, parent);
+            const r = await call('renameFolder', c.id, folder, parent, folderScope());
             for (const err of r.errors) toast(err, 'error');
           }
         }
-        await call('removeFolder', c.id, folder).catch(() => {});
+        await call('removeFolder', c.id, nsFolder(folder)).catch(() => {});
         // Subfolders that only existed as empty folders.
-        for (const f of (explicitFolders.get(c.id) || []).filter((x) => x.startsWith(`${folder}/`))) await call('removeFolder', c.id, f).catch(() => {});
+        for (const f of folderList(c.id).filter((x) => x.startsWith(`${folder}/`))) await call('removeFolder', c.id, nsFolder(f)).catch(() => {});
         if (ui.folder === folder || ui.folder.startsWith(`${folder}/`)) ui.folder = parent;
         toast(t('Ordner gelöscht'));
         await reloadFolders();
@@ -1698,7 +1833,7 @@ function renameFolderDialog(c, folder) {
     field(t('Ordner'), name)), [
     { label: t('Abbrechen') },
     { label: t('Umbenennen'), primary: true, onClick: async () => {
-      const r = await call('renameFolder', c.id, folder, name.value);
+      const r = await call('renameFolder', c.id, folder, name.value, folderScope());
       for (const err of r.errors) toast(err, 'error');
       const next = name.value.split('/').map((p) => p.trim()).filter(Boolean).join('/');
       if (ui.folder === folder || ui.folder.startsWith(`${folder}/`)) ui.folder = next + ui.folder.slice(folder.length);
@@ -1718,7 +1853,7 @@ function newFolderDialog(c, prefix) {
     field(t('Ordner'), name)), [
     { label: t('Abbrechen') },
     { label: t('Anlegen'), primary: true, onClick: async () => {
-      await call('addFolder', c.id, name.value);
+      await call('addFolder', c.id, nsFolder(name.value));
       explicitFolders.set(c.id, await call('folders', c.id));
       ui.folder = name.value.split('/').map((p) => p.trim()).filter(Boolean).join('/');
       renderList();
@@ -2466,7 +2601,7 @@ async function moveManyToFolder(keys, folder) {
 
 /** Picks a folder of the vault (existing ones, or a new path) for several entries. */
 function folderPickDialog(containerId, keys) {
-  const known = [...new Set([...(explicitFolders.get(containerId) || []), ...items.filter((i) => i.containerId === containerId).map((i) => i.folder).filter(Boolean)])].sort();
+  const known = [...new Set([...folderList(containerId), ...modeItems(containerId).map((i) => i.folder).filter(Boolean)])].sort();
   const input = h('input', { list: 'folder-pick-options', placeholder: t('optional, z. B. Kunden/Contoso'), value: ui.containerId === containerId ? ui.folder : '' });
   const options = h('datalist', { id: 'folder-pick-options' }, h('option', { value: '' }), ...known.map((f) => h('option', { value: f })));
   modal(t('In Ordner verschieben'), h('div', {}, field(t('{n} Einträge verschieben nach', { n: keys.length }), h('div', {}, input, options)),
@@ -2504,16 +2639,17 @@ async function moveFolderTo(sourceId, folder, target) {
   const name = folder.split('/').pop();
   const inside = (f) => f === folder || f.startsWith(`${folder}/`);
   const map = (f) => name + f.slice(folder.length);
-  const list = items.filter((i) => i.containerId === sourceId && inside(i.folder || ''));
+  const list = modeItems(sourceId).filter((i) => inside(i.folder || ''));
   if (!(await confirmDialog(t('Nach „{vault}“ verschieben?', { vault: target.name }),
     t('Ordner „{folder}“ ({n} Einträge, mit Unterordnern) nach „{vault}“ verschieben? Danach sehen alle mit Zugriff auf „{vault}“ die Einträge. Sie werden im Ziel neu angelegt und in der Quelle gelöscht; gibt es dort schon einen Ordner „{folder}“, landet alles darin.', { folder: name, n: list.length, vault: target.name }),
     { confirmLabel: t('Verschieben') }))) return;
   try {
     // Empty subfolders too (folders without entries exist only in the folder list).
-    const explicit = (await call('folders', sourceId)).filter(inside);
-    for (const f of [folder, ...explicit]) await call('addFolder', target.id, map(f)).catch(() => {});
+    explicitFolders.set(sourceId, await call('folders', sourceId));
+    const explicit = folderList(sourceId).filter(inside);
+    for (const f of [folder, ...explicit]) await call('addFolder', target.id, nsFolder(map(f))).catch(() => {});
     const failed = await moveItemsTo(list, target.id, (i) => map(i.folder));
-    if (!failed) await call('removeFolder', sourceId, folder).catch(() => {});
+    if (!failed) await call('removeFolder', sourceId, nsFolder(folder)).catch(() => {});
     explicitFolders.delete(sourceId);
     explicitFolders.delete(target.id);
     if (ui.containerId === sourceId && inside(ui.folder || '')) ui.folder = '';
@@ -2635,6 +2771,13 @@ async function renderDetail() {
       }
     },
     onMovePasskey: canWrite ? (passkey) => movePasskeyDialog(item, passkey) : null,
+    passkeyDrag: canWrite ? (e, passkey) => {
+      e.stopPropagation();
+      draggedPasskey = { from: `${item.containerId}/${item.id}`, credentialId: passkey.credentialId };
+      e.dataTransfer.setData(DRAG_PASSKEY, JSON.stringify(draggedPasskey));
+      e.dataTransfer.effectAllowed = 'move';
+    } : null,
+    passkeyDragEnd: () => { draggedPasskey = null; },
     onRemovePasskey: canWrite ? async (credentialId) => {
       if (!(await confirmDialog(t('Passkey entfernen'), t('Passkey aus dem Eintrag entfernen? Die Anmeldung bei der Website damit ist danach nicht mehr möglich – entferne ihn dort ebenfalls.'), { confirmLabel: t('Entfernen'), danger: true }))) return;
       try {
@@ -2738,27 +2881,64 @@ function movePasskeyDialog(item, passkey) {
     toast(t('Kein anderer Login-Eintrag mit Schreibrechten vorhanden'), 'error');
     return;
   }
-  const select = h('select', {}, ...targets.map((i, n) => h('option', { value: i.key, selected: n === 0 },
-    [i.title, i.username, containerName(i.containerId)].filter(Boolean).join(' · '))));
-  modal(t('Passkey verschieben'), h('div', {},
+  // Search window like the asset links: best matches first (same site, same user name), typing filters, a click moves.
+  let chosen = targets[0].key;
+  const search = h('input', { type: 'search', class: 'link-pick-search', placeholder: t('Eintrag suchen (Titel, Benutzer, Tresor) …'), 'aria-label': t('Eintrag suchen') });
+  const list = h('div', { class: 'link-pick-list', role: 'listbox' });
+  const LIMIT = 200;
+  const draw = () => {
+    const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = targets.filter((i) => words.every((w) => [i.title, i.username, containerName(i.containerId)].join(' ').toLowerCase().includes(w)));
+    if (!hits.some((i) => i.key === chosen)) chosen = hits[0]?.key || '';
+    list.replaceChildren(...[
+      ...hits.slice(0, LIMIT).map((i) => h('button', { type: 'button', role: 'option', class: `link-pick-row ${i.key === chosen ? 'on' : ''}`, 'aria-selected': String(i.key === chosen),
+        onclick: () => { chosen = i.key; draw(); } },
+      avatar(i.title, 'avatar small'), h('span', { class: 'link-pick-main' }, h('span', { class: 'link-pick-text' }, i.title),
+        h('span', { class: 'link-pick-sub' }, [i.username, containerName(i.containerId)].filter(Boolean).join(' · '))),
+      i.key === chosen ? icon('check', 14) : null)),
+      hits.length ? null : h('p', { class: 'muted small link-pick-empty' }, t('Kein Eintrag gefunden.')),
+      hits.length > LIMIT ? h('p', { class: 'muted small link-pick-empty' }, t('{count} weitere – Suche verfeinern', { count: hits.length - LIMIT })) : null,
+    ].filter(Boolean));
+  };
+  search.addEventListener('input', draw);
+  draw();
+  modal(t('Passkey verschieben'), h('div', { class: 'link-pick-dialog' },
     h('p', {}, t('Passkey für {user} ({rpId}) in einen anderen Eintrag verschieben.', { user: passkey.userName || passkey.userDisplayName || t('(ohne Benutzername)'), rpId: passkey.rpId })),
-    field(t('Ziel-Eintrag'), select),
-    h('p', { class: 'muted small' }, t('Der Passkey selbst bleibt gleich – die Anmeldung bei der Website funktioniert danach mit dem Ziel-Eintrag.'))), [
+    search, list,
+    h('p', { class: 'muted small' }, t('Der Passkey selbst bleibt gleich – die Anmeldung bei der Website funktioniert danach mit dem Ziel-Eintrag. Schneller: den Passkey auf einen Login in der Liste ziehen.'))), [
     { label: t('Abbrechen') },
     { label: t('Verschieben'), primary: true, onClick: async () => {
-      const [containerId, id] = splitKey(select.value);
-      try {
-        await call('movePasskey', { from: { containerId: item.containerId, id: item.id }, to: { containerId, id }, credentialId: passkey.credentialId });
-        toast(t('Passkey verschoben'));
-        ui.selected = select.value;
-        await reloadAll();
-        return true;
-      } catch (e) {
-        toast(e.message, 'error');
-        return false;
-      }
+      if (!chosen) return false;
+      return movePasskeyTo({ from: `${item.containerId}/${item.id}`, credentialId: passkey.credentialId }, chosen);
     } },
   ]);
+  setTimeout(() => search.focus(), 0);
+}
+
+/** Whether entry i may take the dragged passkey: another writable login. */
+function passkeyFits(i, data = draggedPasskey) {
+  return !!data && i.type === 'login' && i.key !== data.from && writable(st.containers.find((c) => c.id === i.containerId) || {});
+}
+
+/** A passkey dropped on a login in the list: one confirmation, then it moves. */
+async function dropPasskey(data, target) {
+  if (!(await confirmDialog(t('Passkey verschieben'), t('Passkey nach „{title}“ verschieben?', { title: target.title }), { confirmLabel: t('Verschieben') }))) return;
+  await movePasskeyTo(data, target.key);
+}
+
+async function movePasskeyTo(data, targetKey) {
+  const [fromContainer, fromId] = splitKey(data.from);
+  const [containerId, id] = splitKey(targetKey);
+  try {
+    await call('movePasskey', { from: { containerId: fromContainer, id: fromId }, to: { containerId, id }, credentialId: data.credentialId });
+    toast(t('Passkey verschoben'));
+    ui.selected = targetKey;
+    await reloadAll();
+    return true;
+  } catch (e) {
+    toast(e.message, 'error');
+    return false;
+  }
 }
 
 /** Opens PIM or an admin center in the browser; the extension signs in with the entry's account. */
@@ -2806,7 +2986,7 @@ function renderEditor() {
   ui.newTemplate = null;
   const targets = writableContainers();
   const folderTarget = isNew ? ui.containerId : item.containerId;
-  const knownFolders = [...new Set([...(explicitFolders.get(folderTarget) || []), ...items.filter((i) => i.containerId === folderTarget).map((i) => i.folder).filter(Boolean)])].sort();
+  const knownFolders = [...new Set([...folderList(folderTarget), ...modeItems(folderTarget).map((i) => i.folder).filter(Boolean)])].sort();
   const folderContainer = st.containers.find((c) => c.id === folderTarget);
   const form = itemForm(item, {
     isNew,
@@ -2898,9 +3078,7 @@ function containerMenu() {
     onClick();
   } }, icon(iconName, 20), h('div', {}, h('b', {}, title), h('div', { class: 'muted small' }, text)));
   const { close } = modal(t('Tresor hinzufügen'), h('div', {},
-    (st.settings.personalVaults || []).length
-      ? option('user', t('Weiterer persönlicher Tresor (kostenlos)'), t('Zum Beispiel privat und geschäftlich getrennt – Einträge lassen sich zwischen deinen persönlichen Tresoren frei verschieben.'), personalWizard)
-      : option('user', t('Persönlicher Tresor (kostenlos)'), t('Nur für dich, verschlüsselt in deinem OneDrive (oder einem anderen synchronisierten Ordner bzw. Netzlaufwerk). Masterpasswort, App-PIN, optional FIDO-Stick.'), personalWizard),
+    (st.settings.personalVaults || []).length ? null : option('user', t('Persönlicher Tresor (kostenlos)'), t('Nur für dich, verschlüsselt in deinem OneDrive (oder einem anderen synchronisierten Ordner bzw. Netzlaufwerk). Masterpasswort, App-PIN, optional FIDO-Stick.'), personalWizard),
     option('note', t('Neuer Datei-Tresor'), t('Verschlüsselte Datei wie bei KeePass, abgesichert mit Passkey und/oder Masterpasswort.'), createFileDialog),
     option('folder', t('Datei-Tresor öffnen'), t('Vorhandene .kvpws-Datei, z. B. von einem Netzlaufwerk.'), openFile),
     option('link', t('Vorhandenen Key Vault hinzufügen'), st.signedIn
@@ -2944,8 +3122,7 @@ function fileRiskBox() {
  * key. The vault is free and for one person only.
  */
 async function personalWizard() {
-  const more = (st.settings.personalVaults || []).length > 0;
-  const s = { step: 0, info: null, mode: 'create', id: null, recoveryKey: null, name: more ? '' : t('Persönlich') };
+  const s = { step: 0, info: null, mode: 'create', id: null, recoveryKey: null };
   const body = h('div', { class: 'wizard' });
   const { close } = modal(t('Persönlicher Tresor'), body, []);
   const steps = [t('Start'), t('Speicherort'), t('Schutz'), t('FIDO-Stick'), t('Fertig')];
@@ -2988,30 +3165,22 @@ async function personalWizard() {
           h('li', {}, t('Verschlüsselt mit deinem Masterpasswort – niemand sonst kann ihn öffnen, auch kein Admin.')),
           h('li', {}, t('Im Alltag entsperrst du mit deiner App-PIN; optional zusätzlich mit einem FIDO-Stick.')),
           h('li', {}, t('Nicht teilbar und ohne Lizenz.')),
-          more ? h('li', {}, t('Mehrere persönliche Tresore (z. B. privat und geschäftlich) – Einträge verschiebst du zwischen ihnen frei.')) : null),
-        field(t('Name'), h('input', { class: 'wiz-name', value: s.name, placeholder: t('z. B. Privat oder Geschäft'), oninput: (e) => { s.name = e.target.value; } })),
-        buttons(btn(t('Abbrechen'), () => close()), btn(t('Weiter'), async () => {
-          s.name = s.name.trim();
-          if (!s.name) throw new Error(t('Bitte einen Namen eingeben'));
-          if (st.containers.some((c) => c.personal && c.name.toLowerCase() === s.name.toLowerCase())) throw new Error(t('Es gibt schon einen persönlichen Tresor mit diesem Namen'));
-          s.info = await call('personalInfo', s.name);
-          go(1);
-        }, { primary: true })),
+          h('li', {}, t('Mehr Ordnung (z. B. privat und geschäftlich): Ordner im persönlichen Tresor anlegen.'))),
+        buttons(btn(t('Abbrechen'), () => close()), btn(t('Weiter'), async () => { s.info = await call('personalInfo'); go(1); }, { primary: true })),
       ];
     } else if (s.step === 1) {
       const info = s.info;
-      const ok = info?.folder && info.location && REMOTE_KINDS.includes(info.location.kind) && !info.added;
+      const ok = info?.folder && info.location && REMOTE_KINDS.includes(info.location.kind);
       content = [
         h('p', {}, t('Speicherort der Datei:')),
         h('div', { class: 'wizard-path' }, icon('folder', 16), h('code', {}, info?.path || '–')),
         locationLine(info),
-        info?.added ? notice(t('Dieser persönliche Tresor ist schon eingebunden – bitte einen anderen Namen oder Ordner wählen.'), 'warn') : null,
-        info?.exists && !info.added ? h('div', { class: 'wizard-choice' },
+        info?.exists ? h('div', { class: 'wizard-choice' },
           h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'pmode', checked: s.mode === 'use', onchange: () => { s.mode = 'use'; } }), t('Bestehenden Tresor verwenden (dort liegt schon einer)')),
           h('label', { class: 'inline muted' }, h('input', { type: 'radio', name: 'pmode', disabled: true }), t('Neu erstellen – dafür einen anderen Ordner wählen'))) : null,
         buttons(
           btn(t('Zurück'), () => go(0)),
-          btn(t('Anderen Ordner wählen …'), async () => { const r = await call('choosePersonalFolder', s.name); if (r) { s.info = r; s.mode = r.exists ? 'use' : 'create'; draw(); } }),
+          btn(t('Anderen Ordner wählen …'), async () => { const r = await call('choosePersonalFolder'); if (r) { s.info = r; s.mode = r.exists ? 'use' : 'create'; draw(); } }),
           btn(t('Weiter'), () => { s.mode = info.exists ? 'use' : 'create'; go(2); }, { primary: true, disabled: !ok })),
       ];
     } else if (s.step === 2) {
@@ -3027,7 +3196,7 @@ async function personalWizard() {
           if (pw.value.length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
           if (pw.value !== pw2.value) throw new Error(t('Die Passwörter stimmen nicht überein'));
           const pin = await ensurePin(pf);
-          const r = await call('createPersonal', { folder: s.info.folder, password: pw.value, pin, name: s.name });
+          const r = await call('createPersonal', { folder: s.info.folder, password: pw.value, pin });
           s.id = r.id;
           s.recoveryKey = r.recoveryKey;
           await reloadAll();
@@ -3039,7 +3208,7 @@ async function personalWizard() {
         pf.el,
         buttons(btn(t('Zurück'), () => go(1)), btn(t('Verwenden und entsperren'), async () => {
           const pin = await ensurePin(pf);
-          const r = await call('usePersonal', { folder: s.info.folder, name: s.name });
+          const r = await call('usePersonal', { folder: s.info.folder });
           s.id = r.id;
           await call('unlockContainer', r.id, { password: pw.value });
           await call('bindPersonalWithPin', pin);
@@ -3994,7 +4163,7 @@ function settingsDialog() {
   const scopeFolder = h('select', {});
   const fillFolders = async () => {
     const id = scopeVault.value;
-    const paths = new Set([...items.filter((i) => i.containerId === id).map((i) => i.folder), ...(explicitFolders.get(id) || await call('folders', id).catch(() => []))].filter(Boolean));
+    const paths = new Set([...items.filter((i) => i.containerId === id).map((i) => i.folder), ...(explicitFolders.get(id) || await call('folders', id).catch(() => []))].filter((p) => p && !p.startsWith(ASSET_FOLDERS)));
     for (const p of [...paths]) p.split('/').forEach((_, n, parts) => paths.add(parts.slice(0, n + 1).join('/')));
     scopeFolder.replaceChildren(h('option', { value: '' }, t('Ganzer Tresor')), ...[...paths].sort().map((p) => h('option', { value: p }, p)));
   };

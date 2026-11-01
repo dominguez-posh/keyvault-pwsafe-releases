@@ -867,7 +867,7 @@
   // The page asks for an account (name field, account tiles) or a password – only then the bar makes sense.
   const asksForAccount = () => !!(visibleInput('input[name=loginfmt]') || visibleInput('input[name=passwd]') || document.querySelector('[data-test-id] [role=button], #tilesHolder [data-test-id]'));
 
-  function runSignIn(job, fresh) {
+  function runSignIn(job, fresh, { onDone = () => call('cs:signInDone').catch(() => {}) } = {}) {
     const started = Date.now();
     const done = new Set();
     let busy = false;
@@ -890,12 +890,19 @@
           const user = visibleInput('input[name=loginfmt]');
           if (user && job.username && !done.has('user')) { done.add('user'); setValue(user, job.username); next(); return; }
           const pw = visibleInput('input[name=passwd]');
-          if (pw && job.password && !done.has('pw')) { done.add('pw'); setValue(pw, job.password); next(); return; }
+          if (pw && job.password && !done.has('pw')) {
+            done.add('pw');
+            setValue(pw, job.password);
+            next();
+            // Without a one-time code this was the last step: the sign-in is used up (no second automatic sign-in).
+            if (!job.totp) { onDone(); stop(); }
+            return;
+          }
           const otc = visibleInput('input[name=otc]');
           if (otc && !done.has('otc')) {
             // Ask again: the code has to be current when it is typed in.
             const current = await fresh();
-            if (current?.totp) { done.add('otc'); setValue(otc, current.totp); next(); }
+            if (current?.totp) { done.add('otc'); setValue(otc, current.totp); next(); onDone(); stop(); }
             return;
           }
         } else if (!done.has('form')) {
@@ -904,6 +911,7 @@
             done.add('form');
             if (fields.username && job.username) setValue(fields.username, job.username);
             setValue(fields.password, job.password);
+            onDone();
             stop();
           }
         }
@@ -1004,8 +1012,13 @@
           msBanner.append(el('div', 'row'), forget);
         }
       };
-      const remembered = offer.accounts.find((a) => a.key === offer.defaultKey);
+      // The remembered account signs in by itself once per tab (10 minutes); after that – e.g. "Use another account" on
+      // Microsoft's page – the list is offered, so the user can be switched.
+      let autoRan = false;
+      try { autoRan = Date.now() - Number(sessionStorage.getItem('kvMsAutoAt') || 0) < 10 * 60_000; } catch { /* storage blocked */ }
+      const remembered = !autoRan && offer.accounts.find((a) => a.key === offer.defaultKey);
       if (remembered) {
+        try { sessionStorage.setItem('kvMsAutoAt', String(Date.now())); } catch { /* storage blocked */ }
         // Remembered account: a short countdown, then it signs in – "Other account" stops it.
         let seconds = 3;
         const info = el('div', 'user');

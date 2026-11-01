@@ -521,24 +521,17 @@ const defaultPersonalFolder = () => process.env.OneDriveCommercial || process.en
 const personalPaths = () => config.get().personalVaults || [];
 
 /**
- * File of a personal vault: the first one is Keevault-Persoenlich.kvpws, more (e.g. "Geschäft") get their name in it –
- * Keevault-Geschaeft.kvpws – so several personal vaults live side by side in the same OneDrive.
+ * Where the personal vault would go (default: OneDrive root) and whether a vault file is already there. There is one
+ * personal vault per person ("Persönlich" / "Personal"); more structure comes from folders inside it.
  */
-function personalFileName(name) {
-  const slug = String(name || '').trim().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/Ä/g, 'Ae').replace(/Ö/g, 'Oe').replace(/Ü/g, 'Ue').replace(/ß/g, 'ss')
-    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-  return !slug || slug === 'Persoenlich' ? PERSONAL_FILE : `Keevault-${slug}.kvpws`;
-}
-
-/** Where a personal vault would go (default: OneDrive root) and whether a vault file is already there. */
-async function personalInfo(folder = defaultPersonalFolder(), name = '') {
+async function personalInfo(folder = defaultPersonalFolder()) {
   const s = config.get();
-  const filePath = folder ? path.join(folder, personalFileName(name)) : null;
+  const filePath = folder ? path.join(folder, PERSONAL_FILE) : null;
   let exists = false;
   if (filePath) {
     try { exists = (await fs.stat(filePath)).isFile(); } catch { /* none yet */ }
   }
-  return { folder, name, path: filePath, exists, added: !!filePath && personalPaths().includes(filePath), location: folder ? await locate(folder) : null, configured: personalPaths(), pinSet: !!s.appPin };
+  return { folder, path: filePath, exists, location: folder ? await locate(folder) : null, configured: personalPaths(), pinSet: !!s.appPin };
 }
 
 function requirePersonalLocation(info) {
@@ -548,15 +541,16 @@ function requirePersonalLocation(info) {
   }
 }
 
-async function createPersonal({ folder, password, pin, name = '' }) {
+async function createPersonal({ folder, password, pin }) {
   requireOpen();
   if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
   await api.verifyPin(String(pin || '')); // the PIN binds the key on this device
   if (String(password || '').length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
-  const info = await personalInfo(folder || defaultPersonalFolder(), name);
+  if (personalPaths().length) throw new Error(t('Es gibt schon einen persönlichen Tresor – für mehr Ordnung darin Ordner anlegen.'));
+  const info = await personalInfo(folder || defaultPersonalFolder());
   requirePersonalLocation(info);
   if (info.exists) throw new Error(t('Dort liegt schon ein persönlicher Tresor – „Bestehenden verwenden“ wählen.'));
-  const r = await files.create(info.path, String(name || '').trim() || t('Persönlich'), { password }, actor());
+  const r = await files.create(info.path, t('Persönlich'), { password }, actor());
   config.update({ personalVaults: [...personalPaths().filter((p) => p !== info.path), info.path] });
   fileLocations.set(info.path, await locate(info.path) || info.location);
   await bindPersonalKey(personalEntries().find((e) => e.path === info.path), { force: true }).catch(() => {});
@@ -564,13 +558,13 @@ async function createPersonal({ folder, password, pin, name = '' }) {
   return { id: r.id, recoveryKey: r.recoveryKey };
 }
 
-async function usePersonal({ folder, name = '' }) {
+async function usePersonal({ folder }) {
   requireOpen();
   if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
-  const info = await personalInfo(folder || defaultPersonalFolder(), name);
+  if (personalPaths().length) throw new Error(t('Es gibt schon einen persönlichen Tresor – für mehr Ordnung darin Ordner anlegen.'));
+  const info = await personalInfo(folder || defaultPersonalFolder());
   requirePersonalLocation(info);
   if (!info.exists) throw new Error(t('Dort liegt kein persönlicher Tresor.'));
-  if (info.added) throw new Error(t('Dieser persönliche Tresor ist schon eingebunden.'));
   const id = await files.open(info.path);
   const { [info.path]: _old, ...keys } = config.get().personalDeviceKeys || {};
   config.update({ personalVaults: [...personalPaths(), info.path], personalDeviceKeys: keys });
@@ -717,7 +711,7 @@ const splitEntryKey = (key) => {
 /** Linked accounts of a device must lie in the device's own vault (same readers – no access through the back door). */
 function checkDeviceLinks(containerId, s) {
   for (const link of [s.rdpLink, s.tvLink, s.bastionLoginLink, s.bastionVmLink]) {
-    if (link && splitEntryKey(link)[0] !== containerId) throw new Error(t('Verknüpfte Einträge müssen im selben Tresor liegen wie das Gerät.'));
+    if (link && splitEntryKey(link)[0] !== containerId) throw new Error(t('Verknüpfte Einträge müssen im selben Tresor liegen wie das Asset.'));
   }
 }
 
@@ -1090,6 +1084,13 @@ async function refreshStaleForBrowser() {
 const browserHandlers = {
   // Admin tools: the account for a sign-in started in the app (only for the host it was started for, see signInFor).
   signIn: async ({ host }) => (opened ? signInFor(host) : null),
+  /** The extension filled the last step: the job is used up – a second sign-in on the page (other admin center, other
+   * user) is left alone. */
+  signInDone: async ({ host }) => {
+    const h = String(host || '').toLowerCase();
+    signInJobs = signInJobs.filter((j) => !hostIn(h, j.hosts));
+    return true;
+  },
   hello: async () => ({ version: app.getVersion(), opened, pinSet: !!config.get().appPin, containers: await browserContainers() }),
   // Everything the extension lists in one answer, straight from the cache (never waits for Azure when there is a
   // cache); outdated vaults are reloaded afterwards and announced with "changed".
@@ -2048,11 +2049,11 @@ const api = {
     changed();
     return r;
   },
-  personalInfo: (name = '') => personalInfo(undefined, name),
-  async choosePersonalFolder(name = '') {
+  personalInfo: () => personalInfo(),
+  async choosePersonalFolder() {
     const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: t('Ordner für den persönlichen Tresor'), properties: ['openDirectory'] });
     if (canceled || !filePaths[0]) return null;
-    return personalInfo(filePaths[0], name);
+    return personalInfo(filePaths[0]);
   },
   /** Whether this personal vault opens with the PIN on this device (else the renderer offers to bind it). */
   personalBound: async (containerId) => {
@@ -2229,7 +2230,7 @@ const api = {
    * Renames a folder incl. subfolders and moves its entries along. to = '' moves everything one level up
    * (used when deleting a folder that still has content). Returns { moved, errors }.
    */
-  async renameFolder(containerId, from, to) {
+  async renameFolder(containerId, from, to, scope = '') {
     requireOpen();
     await requireFeature(containerId, 'folders');
     const clean = (p) => String(p || '').split('/').map((x) => x.trim()).filter(Boolean).join('/');
@@ -2241,16 +2242,20 @@ const api = {
     const map = (p) => (p === src ? dst : p.startsWith(`${src}/`) ? clean(`${dst}/${p.slice(src.length + 1)}`) : p);
     // Nothing may end up deeper than the allowed folder levels – checked before anything changes.
     const inTree = (p) => p === src || p.startsWith(`${src}/`);
-    const treePaths = [...(await vault.folders(containerId)), ...(await vault.summaries()).filter((s) => s.containerId === containerId).map((s) => s.folder || '')];
-    for (const p of treePaths.filter(inTree)) requireFolderDepth(map(p));
+    // scope "assets" / "secrets": only that side's entries and empty folders (assets' carry the "assets:" prefix).
+    const ns = scope === 'assets' ? 'assets:' : '';
+    const ownSide = (s) => (scope === 'assets' ? s.type === 'server' : scope === 'secrets' ? s.type !== 'server' : true);
+    const explicit = (await vault.folders(containerId)).filter((f) => !scope || f.startsWith('assets:') === (scope === 'assets')).map((f) => f.slice(ns.length));
+    const entries = (await vault.summaries()).filter((s) => s.containerId === containerId && ownSide(s));
+    for (const p of [...explicit, ...entries.map((s) => s.folder || '')].filter(inTree)) requireFolderDepth(map(p));
     // Explicit (possibly empty) folders: add the new paths, then drop the old tree.
-    for (const f of await vault.folders(containerId)) {
-      if ((f === src || f.startsWith(`${src}/`)) && map(f)) await vault.addFolder(containerId, map(f));
+    for (const f of explicit) {
+      if (inTree(f) && map(f)) await vault.addFolder(containerId, ns + map(f));
     }
-    await vault.removeFolder(containerId, src);
+    await vault.removeFolder(containerId, ns + src);
     const errors = [];
     let moved = 0;
-    const affected = (await vault.summaries()).filter((s) => s.containerId === containerId && (s.folder === src || (s.folder || '').startsWith(`${src}/`)));
+    const affected = entries.filter((s) => inTree(s.folder || ''));
     await mapLimit(affected, 4, async (s) => {
       try {
         const item = await vault.getItem(containerId, s.id, { fresh: true });
@@ -3190,6 +3195,7 @@ function runSmokeTest() {
       if (view === 'access') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-action=access]")?.click()');
       // Main menu screenshot also shows the optional PIM button top right.
       if (view === 'mainmenu') await js('document.documentElement.classList.add("show-admin"); document.querySelector(".menu-btn")?.click()');
+      if (view === 'mainmenu-view') await js('document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=view]")?.click()');
       if (view === 'devlinux' || view === 'devvmware') {
         // New device in the form: Linux asks for SSH port and SSH account, VMware for the vSphere client (screenshot).
         config.update({ adminTools: true });
@@ -3366,9 +3372,9 @@ function runSmokeTest() {
         if (!/"folder":"Monitoring"/.test(r) || !/"title":"Neuer Test"/.test(r)) errors.push(`newfolder: form did not take the folder over (${r})`);
       }
       if (!view || view === 'personal') {
-        // Personal vaults end to end (every smoke run): create (master password + PIN), free, PIN unlock after lock,
-        // not shareable, nothing moved in from a shared vault, local folders refused; a second one ("Geschäft") in its
-        // own file, entries move freely between the two, one PIN opens both, the same one cannot be added twice.
+        // The personal vault end to end (every smoke run): local folders refused, create (master password + PIN), free,
+        // named "Persönlich" in the app's language, PIN unlock after lock, not shareable, nothing moved in from a
+        // shared vault, folders inside it, and only one personal vault (no second one, created or added).
         try {
           const dir = path.join(app.getPath('temp'), `kv-personal-${process.pid}`);
           await fs.rm(dir, { recursive: true, force: true });
@@ -3376,6 +3382,9 @@ function runSmokeTest() {
           process.env.KVPWSAFE_TEST_REMOTE = dir;
           config.update({ appPin: await hashPin('2468'), pinGuard: null, personalVaults: [], personalDeviceKeys: {} });
           pinGuard.restore(null);
+          const local = path.join(app.getPath('temp'), `kv-local-${process.pid}`);
+          await fs.mkdir(local, { recursive: true });
+          if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
           const r = await createPersonal({ folder: dir, password: 'Persoenlich-Test-123!', pin: '2468' });
           if (!r.recoveryKey) errors.push('personal: no recovery key');
           const c = await vault.container(r.id);
@@ -3387,31 +3396,31 @@ function runSmokeTest() {
           await api.verifyPin('2468');
           if (files.get(r.id).locked) errors.push('personal: PIN did not unlock the vault');
           if (await files.updateKeyring(r.id, { type: 'createInvite' }, 'x').then(() => true, () => false)) errors.push('personal: invitation was allowed');
+          const pwEntry = files.get(r.id).keyring?.entries?.find((e) => e.type === 'password');
+          if (pwEntry && await files.updateKeyring(r.id, { type: 'removeEntry', entryId: pwEntry.id }, 'x').then(() => true, () => false)) errors.push('personal: master password could be removed');
           const shared = (await vault.containers()).find((x) => x.kind === 'keyvault' && !x.error);
           const sharedItem = shared && (await vault.index())[shared.id]?.items?.[0];
           if (sharedItem && await vault.moveItem(shared.id, r.id, sharedItem.id).then(() => true, () => false)) errors.push('personal: entry moved in from a shared vault');
-          const local = path.join(app.getPath('temp'), `kv-local-${process.pid}`);
-          await fs.mkdir(local, { recursive: true });
-          if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
-          // A second personal vault: own file beside the first, free, listed as personal.
-          const biz = await createPersonal({ folder: dir, password: 'Geschaeft-Test-123!', pin: '2468', name: 'Geschäft' });
-          const bizFile = files.entries.get(biz.id)?.path || '';
-          if (path.basename(bizFile) !== 'Keevault-Geschaeft.kvpws') errors.push(`personal: second vault file ${path.basename(bizFile)}`);
-          if (config.get().personalVaults.length !== 2) errors.push(`personal: ${config.get().personalVaults.length} personal vaults listed`);
-          if (!(await vault.container(biz.id)).personal || !(await vault.licenseState(biz.id)).licensed) errors.push('personal: second vault not personal/free');
-          const privat = (await vault.summaries()).find((x) => x.containerId === r.id && x.title === 'Privat');
-          if (!privat) errors.push('personal: entry "Privat" not found');
-          else await vault.moveItem(r.id, biz.id, privat.id).catch((e) => errors.push(`personal: move between personal vaults refused (${e.message})`));
-          if (!(await vault.summaries()).some((x) => x.containerId === biz.id && x.title === 'Privat')) errors.push('personal: entry did not arrive in the second personal vault');
-          files.get(r.id).lock();
-          files.get(biz.id).lock();
-          await api.verifyPin('2468');
-          if (files.get(r.id).locked || files.get(biz.id).locked) errors.push('personal: one PIN did not open both personal vaults');
-          if (await usePersonal({ folder: dir, name: 'Geschäft' }).then(() => true, () => false)) errors.push('personal: the same personal vault added twice');
+          if (c.name !== t('Persönlich')) errors.push(`personal: named "${c.name}" instead of "${t('Persönlich')}"`);
+          // More structure through folders inside it.
+          await vault.saveItem(r.id, { title: 'Steuer', username: 'me', password: 'x', folder: 'Geschäft' });
+          if (!(await vault.summaries()).some((x) => x.containerId === r.id && x.folder === 'Geschäft')) errors.push('personal: entry in a folder not saved');
+          // Only one personal vault: a second one is refused, created or added.
+          if (await createPersonal({ folder: dir, password: 'Zweiter-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: a second personal vault was created');
+          if (await usePersonal({ folder: dir }).then(() => true, () => false)) errors.push('personal: a second personal vault was added');
+          if (config.get().personalVaults.length !== 1) errors.push(`personal: ${config.get().personalVaults.length} personal vaults listed`);
           changed();
-          await sleep(800);
-          const shown = await js('document.querySelectorAll(".personal-slot .nav-label").length');
-          if (shown < 2) errors.push(`personal: sidebar shows ${shown} personal vaults`);
+          let shown = 0;
+          for (let i = 0; i < 10 && shown !== 1; i++) { await sleep(300); shown = await js('document.querySelectorAll(".personal-slot .nav-label").length'); }
+          if (shown !== 1) errors.push(`personal: sidebar shows ${shown} personal vaults`);
+          // "Protection and users" of the personal vault: no "Invite user" button.
+          await js('(() => { const row = document.querySelector(".personal-slot .nav-row"); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 60, clientY: 200 })); document.querySelector(".context-menu [data-action=protection]")?.click(); })()');
+          let dialogText = '';
+          for (let i = 0; i < 10 && !dialogText; i++) { await sleep(300); dialogText = await js('document.querySelector("dialog[open]")?.textContent || ""'); }
+          if (!dialogText) errors.push('personal: protection dialog did not open');
+          else if (/Benutzer einladen|Invite user/.test(dialogText)) errors.push('personal: protection dialog offers "Invite user"');
+          else if (/Masterpasswort entfernen|Remove master password/.test(dialogText)) errors.push('personal: protection dialog offers "Remove master password"');
+          await js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click())');
         } catch (e) {
           errors.push(`personal: ${e.message}`);
         }
@@ -3540,6 +3549,7 @@ function runSmokeTest() {
           js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe,
           clipboardHas: async (text) => (await runHelperExe('--clipboard-clear', text)) === 0,
           clearSignIns: () => { signInJobs = []; },
+          signInDone: (host) => browserHandlers.signInDone({ host }),
         }).catch((err) => errors.push(`features: ${err.stack || err.message}`));
       }
       if (view) await sleep(1200);

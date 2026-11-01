@@ -4,6 +4,28 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.6 – 2026-11-01
+- Passkey verschieben: per Ziehen auf einen anderen Login in der Liste, oder im Dialog mit Suche statt langer Auswahlliste.
+- Persönlicher Tresor: Kein „Benutzer einladen“ mehr im Schutz-Dialog (er gehört genau einer Person).
+- Reihenfolge der Tresore in der Seitenleiste per Ziehen und Ablegen (bleibt gespeichert).
+- Anmelden mit einem Klick gilt nur noch einmal: Nach der Anmeldung (Passwort bzw. Einmalcode) ist Schluss – ein weiteres Admin Center oder ein anderer Benutzer wird nicht mehr automatisch ausgefüllt. Das gemerkte Konto der Erweiterung meldet pro Browser-Tab nur einmal automatisch an, danach lässt sich der Benutzer wechseln.
+- Admin-Modus: „Geräte“ heißen jetzt „Assets“; Assets und Passwörter haben eigene Ordner (gleiche Namen stören sich nicht, Umbenennen/Löschen betrifft nur die gezeigte Seite). Die Plakette „Admin-Modus“ oben rechts entfällt – „Keevault for Admins“ zeigt es.
+- Ordner per Ziehen und Ablegen in einen anderen Ordner verschieben (mit Unterordnern und Einträgen) oder auf die Leiste des übergeordneten Ordners eine Ebene nach oben.
+- Admin-Modus in Kupfer/Rot: Beim Einschalten wechselt nur die Akzentfarbe (Design und Aufbau bleiben), oben links steht „Keevault for Admins“ mit dem roten Logo – sofort zu erkennen.
+- Hauptmenü mit zwei Reitern „Menü“ und „Ansicht“ statt einer langen Liste; alle Menüs (Hauptmenü, Rechtsklick, „Neu“) im modernen Stil: matte Glasfläche, weicher Schatten, ruhige Zeilen, Löschen in Rot.
+- Wieder genau ein persönlicher Tresor; er heißt in der App „Persönlich“ (englisch „Personal“). Mehr Ordnung schaffen Ordner darin. Ein zweiter persönlicher Tresor lässt sich nicht mehr anlegen.
+
+### English
+- Move a passkey by dragging it onto another login in the list, or in the dialog with search instead of a long drop-down.
+- Personal vault: no "Invite user" in the protection dialog any more (it belongs to one person).
+- Drag vaults in the sidebar to reorder them (the order is kept).
+- One-click sign-in now works once: after the sign-in (password or one-time code) it stops – another admin center or another user is no longer filled in automatically. The extension's remembered account signs in by itself only once per browser tab; after that the user can be switched.
+- Admin mode: "Devices" are now "Assets"; assets and passwords keep their own folders (same names do not interfere, renaming/deleting affects only the side shown). The "Admin mode" badge at the top right is gone – "Keevault for Admins" shows it.
+- Drag a folder onto another folder to move it there (with subfolders and entries), or onto the parent folder bar to move it up a level.
+- Admin mode in copper/red: switching it on changes only the accent colour (design and layout stay), the top left shows "Keevault for Admins" with the red logo – visible at a glance.
+- Main menu with two tabs "Menu" and "View" instead of one long list; every menu (main, right-click, "New") in the modern style: frosted surface, soft shadow, calm rows, deleting in red.
+- Exactly one personal vault again; the app calls it "Personal" ("Persönlich" in German). Folders inside it give more structure. A second personal vault can no longer be created.
+
 ## 0.9.5 – 2026-11-01
 - Admin-Modus streng getrennt: Bei „Geräte“ bietet „Neu“ (auch Strg+N und Rechtsklick) nur Geräte an, die Seitenleiste zeigt „Alle Geräte“ ohne Passkeys; bei „Passwörter“ kommen keine Geräte vor.
 

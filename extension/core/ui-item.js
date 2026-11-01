@@ -250,7 +250,9 @@ function mgmtLabel(kind) {
 
 function passkeyList(passkeys, ctx) {
   return h('div', { class: 'field' }, h('label', {}, passkeys.length > 1 ? t('Passkeys') : t('Passkey')),
-    ...passkeys.map((p) => h('div', { class: 'passkey-row' },
+    ...passkeys.map((p) => h('div', { class: 'passkey-row', ...(ctx.passkeyDrag ? {
+      draggable: 'true', title: t('Auf einen anderen Login in der Liste ziehen, um den Passkey dorthin zu verschieben'),
+      ondragstart: (e) => ctx.passkeyDrag(e, p), ondragend: () => ctx.passkeyDragEnd?.() } : {}) },
       icon('key'),
       h('div', { class: 'passkey-text' },
         h('div', {}, p.userName || p.userDisplayName || t('(ohne Benutzername)')),
@@ -553,7 +555,7 @@ export function itemForm(item, ctx) {
   srvOs.addEventListener('change', syncKind);
   syncKind();
   const serverOnly = h('div', { class: 'server-only' },
-    row(t('Gerätetyp'), srvKind), osRow,
+    row(t('Asset-Typ'), srvKind), osRow,
     h('div', { class: 'grid2 server-host' }, row(t('Server (IP oder Name)'), srvHost), h('div', { class: 'field' }, portLabel, srvPort)),
     h('div', { class: 'field' }, accountLabel, srvRdpLink), srvOwn,
     mgmtRow,

@@ -825,6 +825,12 @@ const contentCommands = {
     if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
     return app.signIn(host);
   },
+  /** One-time sign-in: the page filled its last step (password, or one-time code if the entry has one). */
+  'cs:signInDone': async (_msg, sender) => {
+    const host = signInHost(sender);
+    if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
+    return app.signInDone?.(host);
+  },
   // Microsoft sign-in page: the Microsoft accounts from the vaults (admin accounts first) and the remembered one.
   'cs:msAccounts': async (_msg, sender) => {
     const host = signInHost(sender);
