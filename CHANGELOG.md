@@ -4,6 +4,32 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.2 – 2026-11-01
+- Auto-Type funktioniert wieder auf Geräten mit App Control / WDAC: PowerShell läuft dort im eingeschränkten Sprachmodus, Keevault tippt jetzt über sein eigenes Hilfsprogramm. Ein Zielfenster, das als Administrator läuft, wird gemeldet statt still zu scheitern.
+- Kopieren: Kein „Die Zwischenablage ist nicht verfügbar“ mehr, wenn ein anderes Programm (Zwischenablage-Verlauf, Virenschutz) die Zwischenablage kurz festhält.
+- Passkey speichern: „Speichern in“ bietet auch Einträge mit demselben Benutzernamen an und wählt ihn vor – z. B. das Microsoft-Konto, auch wenn dort keine login.microsoft.com-Adresse hinterlegt ist.
+- Neu → „Neuer Microsoft-Login“ und „Neuer Active-Directory-Logon“: Vorlagen mit Microsoft-Logo, den Anmeldeadressen (login.microsoftonline.com, login.microsoft.com, Azure-Portal, Admin Center) bzw. den Feldern Domäne (NetBIOS/DNS) und Domänencontroller.
+- Mit eingeschalteten Admin-Werkzeugen zeigt ein Microsoft-Eintrag „Admin Center öffnen …“ – das Konto ist dort schon ausgewählt.
+- Die optionale Leiste unten im Eintrag entfällt; alle Aktionen liegen im „⋯“ neben dem Titel.
+- Admin-Modus: oben rechts dezent „Admin-Modus“ statt der Knöpfe PIM, M365 und Server. PIM und alle Admin Center liegen als Kacheln im Microsoft-Eintrag – ein Klick öffnet sie und meldet mit diesem Konto an.
+- Geräte: Server-Einträge heißen jetzt Geräte (Server, Azure-VM, sonstiges Gerät) und stehen in einem eigenen Reiter „Geräte“, nur im Admin-Modus. Nur dort lassen sie sich anlegen („Neuer Server“, „Neue Azure-VM (Bastion)“).
+- Passkey verschieben: Ein Passkey im falschen Eintrag lässt sich mit dem Pfeil-Symbol in einen anderen Login-Eintrag verschieben (auch in einen anderen Tresor). Er wird erst im Ziel gespeichert und dann im alten Eintrag entfernt.
+- Browser-Erweiterung: Die Leiste „Mit Keevault anmelden“ hat bei mehr als drei Microsoft-Konten ein Suchfeld (Titel, Benutzer, Tresor; Enter nimmt den ersten Treffer).
+- Sicherheit: Microsoft- und Bastion-Anmeldedaten gibt die Erweiterung nur noch an https-Seiten auf dem Standard-Port – nicht an eine gleichnamige Seite über http oder einen anderen Port.
+
+### English
+- Auto-type works again on devices with App Control / WDAC (PowerShell in Constrained Language Mode): Keevault types through its own helper. A target window running as administrator is reported instead of failing silently.
+- Copy: no more "The clipboard is not available" when another program briefly holds the clipboard.
+- Saving a passkey: "Save in" also offers entries with the same user name and preselects it.
+- New → "New Microsoft login" and "New Active Directory logon": templates with the Microsoft logo and the sign-in addresses, or the domain and domain controller fields.
+- With admin tools on, a Microsoft entry shows "Open admin center …" with that account preselected.
+- The optional bar at the bottom of an entry is gone; every action is in the "⋯" beside the title.
+- Admin mode: a quiet "Admin mode" note at the top right instead of the PIM, M365 and Server buttons. PIM and every admin center are tiles in the Microsoft entry – one click opens it, signed in with that account.
+- Devices: server entries are now devices (server, Azure VM, other device) in their own "Devices" tab, only in admin mode, and can only be created there.
+- Move a passkey: a passkey saved in the wrong entry moves to another login (also in another vault) with the arrow icon – saved in the target first, then removed from the old entry.
+- Browser extension: the "Sign in with Keevault" bar gets a search field with more than three Microsoft accounts (title, user, vault; Enter takes the first hit).
+- Security: the extension hands Microsoft and Bastion sign-in data only to https pages on the standard port – not to a page of the same name over http or another port.
+
 ## 0.9.1 – 2026-11-01
 - Microsoft-Anmeldung mit einem Klick: Auf der Microsoft-Anmeldeseite bietet die Browser-Erweiterung „Mit Keevault anmelden“ mit deinen Microsoft-Konten an und trägt Konto, Passwort und Einmalcode selbst ein. Mit „Merken und künftig automatisch anmelden“ startet die Anmeldung beim nächsten Mal von selbst (kurzer Countdown, „Anderes Konto“ zum Wechseln).
 - Nur noch **ein** Eintrag unter Einstellungen → Apps: Der Windows-Passkey-Anbieter ist jetzt Teil der Keevault-Installation (Paket mit externem Speicherort) statt einer eigenen App „Keevault Passkeys“. Das Update stellt automatisch um; danach Keevault einmal unter Einstellungen → Konten → Passkeys → Erweiterte Optionen wieder einschalten – die App erinnert daran.

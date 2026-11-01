@@ -36,6 +36,14 @@ for (const f of ['content/webauthn-main.js', 'content/content.js']) {
   const p = join(extensionPath, f);
   writeFileSync(p, readFileSync(p, 'utf8').replace("'kvpwsafe-webauthn-v1'", "'kvpwsafe-webauthn-smoke'"));
 }
+// The fake Microsoft sign-in page runs over http on a local port: only the copy accepts it. The policy-installed
+// Keevault ignores it (https on the standard port only) – it would otherwise offer the real vault's accounts there.
+{
+  const p = join(extensionPath, 'background.js');
+  const src = readFileSync(p, 'utf8');
+  if (!src.includes('const SIGN_IN_HTTPS_ONLY = true;')) throw new Error('background.js: SIGN_IN_HTTPS_ONLY nicht gefunden');
+  writeFileSync(p, src.replace('const SIGN_IN_HTTPS_ONLY = true;', 'const SIGN_IN_HTTPS_ONLY = false;'));
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
 const check = (ok, message) => {

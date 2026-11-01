@@ -3,7 +3,7 @@
 import { h, icon, iconButton, formatDateTime, avatar, toast } from './dom.js';
 import { totpCode, parseTotp } from './totp.js';
 import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator.js';
-import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods } from './model.js';
+import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods, isMicrosoftLogin, DEVICE_KINDS } from './model.js';
 import { t } from './i18n.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 import { expiryState } from './health.js';
@@ -26,6 +26,12 @@ export function itemDetail(item, ctx) {
   }
   if (item.type === 'certificate' && item.cert.data) rows.push(certificateField(item.cert, ctx));
   if (item.type === 'server') rows.push(...serverRows(item, ctx));
+  // Desktop with admin tools on: PIM and the admin centers – one click opens it, signed in with this account.
+  if (ctx.adminLinks?.length && isMicrosoftLogin(item)) {
+    rows.push(h('div', { class: 'field' }, h('label', {}, t('Verwaltung')), h('div', { class: 'admin-links' },
+      ...ctx.adminLinks.map((l) => h('button', { type: 'button', class: 'admin-link', dataset: { adminLink: l.id }, title: l.title || l.name, onclick: () => l.open(item) },
+        h('span', { class: 'admin-link-icon' }, icon(l.icon, 15)), h('span', {}, l.name))))));
+  }
   if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
   if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
   if (item.totp) rows.push(totpField(item.totp, ctx));
@@ -41,15 +47,14 @@ export function itemDetail(item, ctx) {
 
   // With ctx.menu (desktop): the actions sit in the head – main action as a button, "quick" ones as icons, the rest
   // behind "⋯". Without it (popup): the classic row of buttons below the fields.
-  // Desktop: a quiet "⋯" beside the title (menu on hover) and the floating toolbar at the bottom.
+  // Desktop: a quiet "⋯" beside the title with every action (menu on hover).
   const hoverMenu = ctx.menu && ctx.actions?.length ? itemHoverMenu(ctx) : null;
-  const toolbar = ctx.menu && ctx.actions?.length && ctx.showToolbar !== false ? itemToolbar(ctx) : null;
   return h('div', { class: 'item-detail' },
     h('div', { class: 'item-head' },
       avatar(item.title, 'avatar large', item.icon),
       h('div', { class: 'item-head-text' },
         h('h2', {}, item.favorite ? icon('star', 14) : null, item.title),
-        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type]), item.msAdmin ? t('Microsoft-Admin') : ''].filter(Boolean).join(' · ')),
+        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(item.type === 'server' ? DEVICE_KINDS[item.server.kind] : ITEM_TYPES[item.type]), item.msAdmin ? t('Microsoft-Admin') : ''].filter(Boolean).join(' · ')),
         expiryBadge(item.expires)),
       hoverMenu),
     // Fields as one card with dividers (modern design); the action bar and meta line stay outside.
@@ -57,9 +62,7 @@ export function itemDetail(item, ctx) {
     h('div', { class: 'meta muted' }, item.updatedBy
       ? t('Geändert {date} von {user}', { date: formatDateTime(item.updated), user: item.updatedBy })
       : t('Geändert {date}', { date: formatDateTime(item.updated) })),
-    // Desktop: the toolbar floats at the bottom of the pane (sticky while long entries scroll).
-    toolbar,
-    !toolbar && !hoverMenu && ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
+    !hoverMenu && ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
       type: 'button', class: a.danger ? 'btn danger' : a.primary ? 'btn primary' : 'btn', onclick: a.onClick,
     }, icon(a.icon), a.label))) : null);
 }
@@ -83,34 +86,6 @@ function itemHoverMenu(ctx) {
   b.addEventListener('mouseenter', () => { timer = setTimeout(() => { if (!document.querySelector('.context-menu')) ctx.menu(b, items, { below: true }); }, 150); });
   b.addEventListener('mouseleave', () => clearTimeout(timer));
   return b;
-}
-
-/** Head toolbar: primary actions as buttons, quick actions as icon buttons, everything else in the "⋯" menu. */
-function itemToolbar(ctx) {
-  const primary = ctx.actions.filter((a) => a.primary);
-  const quick = ctx.actions.filter((a) => a.quick && !a.primary);
-  const rest = ctx.actions.filter((a) => !a.primary && !a.quick);
-  const more = rest.length ? iconButton('more', t('Weitere Aktionen'), (e) => {
-    const items = [];
-    rest.forEach((a, i) => {
-      if (a.danger && i > 0) items.push('-');
-      items.push({ action: a.action || '', icon: a.icon, label: a.label, danger: a.danger, onClick: a.onClick });
-    });
-    ctx.menu(e.currentTarget, items);
-  }) : null;
-  more?.classList.add('item-more');
-  more?.setAttribute('aria-haspopup', 'menu');
-  // One capsule: quick icons | main action as a quiet text button | "⋯" – separated by hairlines.
-  const sep = () => h('span', { class: 'item-tools-sep', 'aria-hidden': 'true' });
-  const quickButtons = quick.map((a) => {
-    const b = iconButton(a.icon, a.label, a.onClick);
-    if (a.on) b.classList.add('on');
-    if (a.on !== undefined) b.setAttribute('aria-pressed', String(!!a.on));
-    return b;
-  });
-  const main = primary.map((a) => h('button', { type: 'button', class: 'item-tools-main', onclick: a.onClick }, icon(a.icon, 15), a.label));
-  return h('div', { class: 'item-tools floating', role: 'toolbar', 'aria-label': t('Aktionen') },
-    ...quickButtons, quickButtons.length && main.length ? sep() : null, ...main, more ? sep() : null, more);
 }
 
 /** "Gültig bis" with a warning when the date is near or past. */
@@ -267,6 +242,7 @@ function passkeyList(passkeys, ctx) {
       h('div', { class: 'passkey-text' },
         h('div', {}, p.userName || p.userDisplayName || t('(ohne Benutzername)')),
         h('div', { class: 'muted small' }, t('{rpId} · erstellt {date}', { rpId: p.rpId, date: formatDateTime(p.created) }))),
+      ctx.onMovePasskey ? iconButton('move', t('In anderen Eintrag verschieben'), () => ctx.onMovePasskey(p)) : null,
       ctx.onRemovePasskey ? iconButton('trash', t('Passkey entfernen'), () => ctx.onRemovePasskey(p.credentialId)) : null)));
 }
 
@@ -290,7 +266,8 @@ export function itemForm(item, ctx) {
   const containerSelect = h('select', { name: 'container', disabled: !ctx.isNew },
     ...ctx.containers.map((c) => h('option', { value: c.id, selected: c.id === ctx.containerId }, c.name)));
   const typeSelect = h('select', { name: 'type' },
-    ...Object.entries(ITEM_TYPES).map(([k, label]) => h('option', { value: k, selected: k === it.type }, t(label))));
+    ...Object.entries(ITEM_TYPES).filter(([k]) => k !== 'server' || ctx.devices || it.type === 'server')
+      .map(([k, label]) => h('option', { value: k, selected: k === it.type }, t(label))));
   const title = h('input', { name: 'title', value: item.title || '', placeholder: t('z. B. GitHub'), required: true, autocomplete: 'off' });
   const username = h('input', { name: 'username', value: it.username, autocomplete: 'off', spellcheck: 'false' });
   const password = h('input', { name: 'password', type: 'password', value: it.password, autocomplete: 'new-password', spellcheck: 'false' });
@@ -456,6 +433,7 @@ export function itemForm(item, ctx) {
       ...options.map((o) => h('option', { value: o.key, selected: o.key === value }, [o.title, o.username, o.container].filter(Boolean).join(' · '))));
   };
   const sv = it.server;
+  const srvKind = h('select', { name: 'srvKind' }, ...Object.entries(DEVICE_KINDS).map(([k, label]) => h('option', { value: k, selected: k === sv.kind }, t(label))));
   const srvHost = h('input', { name: 'srvHost', value: sv.host, placeholder: t('z. B. 10.0.0.4 oder dc01.contoso.local'), autocomplete: 'off', spellcheck: 'false' });
   const srvPort = h('input', { name: 'srvPort', value: String(sv.port || 3389), inputmode: 'numeric', autocomplete: 'off' });
   const srvRdpLink = linkSelect('srvRdpLink', sv.rdpLink, t('Eigener Benutzer und Passwort'));
@@ -478,6 +456,7 @@ export function itemForm(item, ctx) {
   srvTvLink.addEventListener?.('change', syncServer);
   syncServer();
   const serverOnly = h('div', { class: 'server-only' },
+    row(t('Gerätetyp'), srvKind),
     h('div', { class: 'grid2 server-host' }, row(t('Server (IP oder Name)'), srvHost), row(t('RDP-Port'), srvPort)),
     row(t('RDP-Konto'), srvRdpLink), srvOwn,
     h('div', { class: 'grid2' }, row(t('TeamViewer-ID'), srvTvId), row(t('TeamViewer-Passwort aus'), srvTvLink)), srvTvOwn,
@@ -598,7 +577,7 @@ export function itemForm(item, ctx) {
       card: type === 'card' ? { holder: cardHolder.value, number: cardNumber.value, expiry: cardExpiry.value, cvc: cardCvc.value, pin: cardPin.value } : undefined,
       cert: type === 'certificate' ? cert : undefined,
       server: type === 'server' ? {
-        host: srvHost.value, port: srvPort.value, rdpLink: srvRdpLink.value, tvId: srvTvId.value,
+        kind: srvKind.value, host: srvHost.value, port: srvPort.value, rdpLink: srvRdpLink.value, tvId: srvTvId.value,
         tvLink: srvTvLink.value, tvPassword: srvTvLink.value ? '' : srvTvPass.value,
         bastionUrl: srvBastion.value, bastionLoginLink: srvBastionLogin.value, bastionVmLink: srvBastionVm.value,
       } : undefined,
