@@ -193,6 +193,11 @@ async function copyTotpAfterFill(item) {
 
 // Microsoft sign-in and Azure Bastion (portal blade or shareable link): the only pages that receive one-click sign-ins.
 const SIGN_IN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com|bastion\.azure\.com|portal\.azure\.net)$/i;
+// Microsoft sign-in itself: here the extension offers the Microsoft accounts of the vaults (and signs in automatically
+// with a remembered one).
+const MS_LOGIN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com)$/i;
+const isMicrosoftHost = (h) => /(^|\.)(microsoftonline|microsoft|office|live|azure|windows)\.(com|net)$/i.test(h);
+const msAccount = (s) => s.type === 'login' && (s.msAdmin || (s.hosts || []).some(isMicrosoftHost));
 const senderHost = (sender) => hostFromUrl(sender.origin && sender.origin !== 'null' ? sender.origin : sender.url);
 
 function contentStrings() {
@@ -219,6 +224,12 @@ function contentStrings() {
     saveIn: t('Speichern in „{vault}“'),
     alreadySaved: t('Für dieses Konto ist bereits ein Passkey im Tresor gespeichert.'),
     otp: t('Einmalcode'),
+    msTitle: t('Mit Keevault anmelden'),
+    msRemember: t('Merken und künftig automatisch anmelden'),
+    msAuto: t('Anmeldung als {name} in {seconds} s …'),
+    msSigningIn: t('Anmeldung als {name} …'),
+    msOther: t('Anderes Konto'),
+    msForget: t('Nicht mehr automatisch'),
     noUser: t('(ohne Benutzername)'),
     updateTitle: t('Passwort aktualisieren?'),
     saveTitle: t('Login speichern?'),
@@ -798,6 +809,28 @@ const contentCommands = {
     if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
     return app.signIn(host);
   },
+  // Microsoft sign-in page: the Microsoft accounts from the vaults (admin accounts first) and the remembered one.
+  'cs:msAccounts': async (_msg, sender) => {
+    const host = senderHost(sender);
+    if (!host || !MS_LOGIN_HOSTS.test(host) || !(await isOpen())) return null;
+    const names = await containerNames();
+    const accounts = (await vault.summaries()).filter(msAccount)
+      .sort((a, b) => Number(!!b.msAdmin) - Number(!!a.msAdmin) || a.title.localeCompare(b.title))
+      .map((s) => ({ key: s.key, containerId: s.containerId, id: s.id, title: s.title, username: s.username, container: names.get(s.containerId) || '', admin: !!s.msAdmin }));
+    if (!accounts.length) return null;
+    const { msDefault } = await chrome.storage.local.get('msDefault');
+    return { accounts, defaultKey: accounts.some((a) => a.key === msDefault) ? msDefault : null, ui: contentStrings() };
+  },
+  /** Account for the Microsoft sign-in (the one-time code fresh on every call); only Microsoft logins, only there. */
+  'cs:msAccount': async ({ containerId, id }, sender) => {
+    const host = senderHost(sender);
+    if (!host || !MS_LOGIN_HOSTS.test(host)) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
+    const item = await vault.getItem(containerId, id);
+    if (item.type !== 'login' || !(item.msAdmin || itemHosts(item).some(isMicrosoftHost))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
+    return { mode: 'microsoft', username: item.username, password: item.password, totp: item.totp ? (await totpCode(item.totp)).code : '' };
+  },
+  /** Remember (or forget, key null) the account that signs in automatically on the Microsoft sign-in page. */
+  'cs:msRemember': async ({ key }) => chrome.storage.local.set({ msDefault: key || null }),
   'cs:capture': (msg, sender) => capture(msg, sender),
   'cs:pending': async (_msg, sender) => {
     const p = await pendingCapture(sender);

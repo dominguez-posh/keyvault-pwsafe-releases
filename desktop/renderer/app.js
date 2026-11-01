@@ -378,6 +378,7 @@ async function render() {
   checkWindowsRequests();
   loadLogos();
   if (st.requirePin && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ forced: true });
+  else if (!document.querySelector('dialog[open]') && !st.smoke && !st.demo) checkOtherInstallation();
   // First start after setting up: offer the personal vault once (use an existing one or create a new one).
   else if (!st.settings.personalVault && !st.settings.personalOffered && !document.querySelector('dialog[open]') && !st.smoke && !st.demo) {
     call('updateSettings', { personalOffered: true }).catch(() => {});
@@ -2698,6 +2699,33 @@ function serverDialog() {
   return close;
 }
 
+/**
+ * Two installations (machine-wide MSI and per-user EXE): both are "Keevault" in the Start menu, only one updates
+ * itself – people keep opening the old one. Told once per session; "Don't show again" per path and version.
+ */
+let otherInstallChecked = false;
+async function checkOtherInstallation(found) {
+  if (otherInstallChecked && !found) return;
+  otherInstallChecked = true;
+  const other = found || await call('otherInstallation').catch(() => null);
+  if (!other) return;
+  const id = `${other.dir}|${other.version}`;
+  if (!found && st.settings.otherInstallDismissed === id) return;
+  const text = other.kind === 'msi'
+    ? t('Auf diesem Gerät ist zusätzlich eine Keevault-Installation für alle Benutzer (Version {version}, {dir}). Sie aktualisiert sich nicht selbst und steht im Startmenü ebenfalls als „Keevault“ – so startet man leicht die alte Version.', { version: other.version || '?', dir: other.dir })
+    : t('Auf diesem Gerät ist zusätzlich eine Keevault-Installation nur für dich (Version {version}, {dir}). Sie steht im Startmenü ebenfalls als „Keevault“ – so startet man leicht die falsche Version.', { version: other.version || '?', dir: other.dir });
+  modal(t('Zwei Keevault-Installationen'), h('div', {},
+    h('p', {}, text),
+    h('p', {}, other.kind === 'msi'
+      ? t('Empfehlung: Die Installation für alle Benutzer unter Einstellungen → Apps deinstallieren (braucht Administratorrechte) – oder, wenn eure IT Keevault verteilt, die Installation nur für dich entfernen.')
+      : t('Empfehlung: Eine der beiden unter Einstellungen → Apps deinstallieren. Deine Tresore und Einstellungen bleiben erhalten.')),
+    h('p', { class: 'muted small' }, t('Diese Version: {version}', { version: st.version || '' }))), [
+    { label: t('Nicht mehr anzeigen'), onClick: () => call('updateSettings', { otherInstallDismissed: id }).then((s) => { st.settings = s; }) },
+    { label: t('Später') },
+    { label: t('Apps öffnen'), primary: true, onClick: () => call('openAppsSettings') },
+  ]);
+}
+
 function renderEditor() {
   const isNew = ui.editing === 'new';
   const item = isNew ? { type: ui.newType || 'login', urls: [], password: ui.newPassword || '' } : ui.editingItem;
@@ -4002,6 +4030,7 @@ function settingsDialog() {
       section(t('Windows-Passkey-Anbieter'),
         h('label', { class: 'inline' }, windowsProvider, t('Keevault als Passkey-Anbieter in Windows verwenden (wie 1Password)')),
         h('p', { class: 'muted small' }, t('Dann erscheint Keevault im Windows-Passkey-Dialog – auch für andere Browser und Apps. Jede Anmeldung bestätigst du in dieser App.')),
+        h('p', { class: 'muted small' }, t('Für Edge und Chrome nicht nötig – dort nutzt die Browser-Erweiterung die Passkeys direkt. Beim Einschalten meldet Keevault seine Passkey-Komponente bei Windows an, beim Ausschalten wieder ab.')),
         windowsStatus),
       section(t('Abtippen (Auto-Type)'),
         field(t('Tastenkürzel, überall in Windows'), autoTypeKeys, t('Eintrag in der App auswählen, ins Zielfeld klicken, Kürzel drücken: U = Benutzername, P = Passwort, O = Einmalcode. Gilt nur, solange die App entsperrt ist; Strg+Umschalt überdeckt in Edge Vorlesen/InPrivate/Favoriten.'))),

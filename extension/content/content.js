@@ -842,17 +842,29 @@
     ui().append(banner);
   }
 
-  // ------------------------------------------------------------ admin tools: one-click sign-in
+  // ------------------------------------------------------------ one-click sign-in (admin tools, Microsoft sign-in)
 
-  // Started in the app (admin center or Bastion): the Microsoft sign-in is walked through step by step – account
-  // tile or name, password, one-time code –, Bastion's form is filled. Only on the sign-in hosts, for two minutes.
+  // Started in the app (admin center or Bastion), or chosen in the bar on the Microsoft sign-in page: the Microsoft
+  // sign-in is walked through step by step – account tile or name, password, one-time code –, Bastion's form is
+  // filled. Only on the sign-in hosts.
   const SIGN_IN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com|bastion\.azure\.com|portal\.azure\.net)$/i;
-  if (SIGN_IN_HOSTS.test(location.hostname)) startSignIn();
+  const MS_LOGIN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com)$/i;
+  if (SIGN_IN_HOSTS.test(location.hostname)) initSignIn();
 
-  function startSignIn() {
+  async function initSignIn() {
+    const job = await call('cs:signIn').catch(() => null);
+    if (job) return runSignIn(job, () => call('cs:signIn').catch(() => null));
+    if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) offerMicrosoftAccounts();
+    return undefined;
+  }
+
+  const visibleInput = (sel) => { const e = document.querySelector(sel); return e && usable(e) ? e : null; };
+  // The page asks for an account (name field, account tiles) or a password – only then the bar makes sense.
+  const asksForAccount = () => !!(visibleInput('input[name=loginfmt]') || visibleInput('input[name=passwd]') || document.querySelector('[data-test-id] [role=button], #tilesHolder [data-test-id]'));
+
+  function runSignIn(job, fresh) {
     const started = Date.now();
     const done = new Set();
-    let job;
     let busy = false;
     let timer = null;
     let observer = null;
@@ -861,17 +873,14 @@
       const b = document.querySelector('#idSIButton9') || document.querySelector('input[type=submit], button[type=submit]');
       if (b && !b.disabled) b.click();
     };
-    const visibleInput = (sel) => { const el = document.querySelector(sel); return el && usable(el) ? el : null; };
     const step = async () => {
       if (busy || !alive) return;
       if (Date.now() - started > 120_000) return stop();
       busy = true;
       try {
-        if (job === undefined) job = await call('cs:signIn').catch(() => null);
-        if (!job) return stop();
         if (job.mode === 'microsoft') {
           const name = job.username.toLowerCase();
-          const tile = name && [...document.querySelectorAll('[data-test-id]')].find((el) => (el.getAttribute('data-test-id') || '').toLowerCase() === name);
+          const tile = name && [...document.querySelectorAll('[data-test-id]')].find((e) => (e.getAttribute('data-test-id') || '').toLowerCase() === name);
           if (tile && !done.has('tile')) { done.add('tile'); tile.click(); return; }
           const user = visibleInput('input[name=loginfmt]');
           if (user && job.username && !done.has('user')) { done.add('user'); setValue(user, job.username); next(); return; }
@@ -880,16 +889,16 @@
           const otc = visibleInput('input[name=otc]');
           if (otc && !done.has('otc')) {
             // Ask again: the code has to be current when it is typed in.
-            const fresh = await call('cs:signIn').catch(() => null);
-            if (fresh?.totp) { done.add('otc'); setValue(otc, fresh.totp); next(); }
+            const current = await fresh();
+            if (current?.totp) { done.add('otc'); setValue(otc, current.totp); next(); }
             return;
           }
         } else if (!done.has('form')) {
-          const f = loginFields(document);
-          if (f.password && job.password) {
+          const fields = loginFields(document);
+          if (fields.password && job.password) {
             done.add('form');
-            if (f.username && job.username) setValue(f.username, job.username);
-            setValue(f.password, job.password);
+            if (fields.username && job.username) setValue(fields.username, job.username);
+            setValue(fields.password, job.password);
             stop();
           }
         }
@@ -906,6 +915,88 @@
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', begin, { once: true });
     else begin();
+  }
+
+  /** Microsoft sign-in page: bar with the Microsoft accounts; a remembered one starts by itself after 3 seconds. */
+  function offerMicrosoftAccounts() {
+    let waited = 0;
+    const whenAsked = () => {
+      if (!alive) return;
+      if (asksForAccount()) { show(); return; }
+      if ((waited += 500) < 15_000) setTimeout(whenAsked, 500);
+    };
+    let msBanner = null;
+    const show = async () => {
+      const offer = await call('cs:msAccounts').catch(() => null);
+      if (!offer?.accounts?.length) return;
+      if (offer.ui) texts = offer.ui;
+      const fill = (text, vars) => Object.entries(vars).reduce((acc, [k, v]) => acc.replace('{' + k + '}', v), text || '');
+      msBanner?.remove();
+      msBanner = el('div', 'banner');
+      const close = el('button', 'x', '×');
+      close.title = texts.close || '';
+      close.addEventListener('click', (e) => { if (e.isTrusted) msBanner.remove(); });
+      const title = el('div', 'title');
+      title.append(el('span', 'logo', 'K'), document.createTextNode(texts.msTitle));
+      msBanner.append(close, title);
+      // Attached first: the countdown below only runs while the bar is on the page.
+      ui().append(msBanner);
+      const start = async (account, remember) => {
+        if (remember) await call('cs:msRemember', { key: account.key }).catch(() => {});
+        const job = await call('cs:msAccount', { containerId: account.containerId, id: account.id }).catch(() => null);
+        if (!job) return;
+        msBanner.replaceChildren(title, el('div', 'user', fill(texts.msSigningIn, { name: account.username || account.title })));
+        setTimeout(() => msBanner?.remove(), 4000);
+        runSignIn(job, () => call('cs:msAccount', { containerId: account.containerId, id: account.id }).catch(() => null));
+      };
+      const list = () => {
+        const remember = el('input');
+        remember.type = 'checkbox';
+        const label = el('label', 's');
+        label.append(remember, document.createTextNode(' ' + texts.msRemember));
+        const entries = offer.accounts.map((a) => {
+          const b = el('button', 'entry');
+          const text = el('div', 'txt');
+          text.append(el('div', 't', a.title), el('div', 's', [a.username, a.container].filter(Boolean).join(' · ')));
+          b.append(el('span', 'avatar', (a.title || '?').slice(0, 1).toUpperCase()), text);
+          b.addEventListener('click', (e) => { if (e.isTrusted) start(a, remember.checked); });
+          return b;
+        });
+        msBanner.replaceChildren(close, title, ...entries, label);
+        if (offer.defaultKey) {
+          const forget = el('button', 'b', texts.msForget);
+          forget.addEventListener('click', (e) => {
+            if (!e.isTrusted) return;
+            call('cs:msRemember', { key: null }).catch(() => {});
+            offer.defaultKey = null;
+            forget.remove();
+          });
+          msBanner.append(el('div', 'row'), forget);
+        }
+      };
+      const remembered = offer.accounts.find((a) => a.key === offer.defaultKey);
+      if (remembered) {
+        // Remembered account: a short countdown, then it signs in – "Other account" stops it.
+        let seconds = 3;
+        const info = el('div', 'user');
+        const other = el('button', 'b', texts.msOther);
+        const row = el('div', 'row');
+        row.append(other);
+        msBanner.append(info, row);
+        const tick = () => {
+          if (!msBanner?.isConnected) return;
+          if (seconds === 0) { start(remembered, false); return; }
+          info.textContent = fill(texts.msAuto, { name: remembered.username || remembered.title, seconds });
+          seconds -= 1;
+          countdown = setTimeout(tick, 1000);
+        };
+        let countdown = null;
+        other.addEventListener('click', (e) => { if (!e.isTrusted) return; clearTimeout(countdown); list(); });
+        tick();
+      } else list();
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', whenAsked, { once: true });
+    else whenAsked();
   }
 
   if (isTop) {

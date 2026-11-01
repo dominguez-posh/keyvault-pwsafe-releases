@@ -113,13 +113,19 @@ step('Passkey-Anbieter (MSIX)', () => {
   if (!dotnet) throw new Error('.NET SDK 10 nicht gefunden (https://dot.net).');
   run(dotnet, ['publish', project, '-c', 'Release', '-o', stage, '--nologo']);
   for (const n of readdirSync(stage)) if (n.endsWith('.pdb')) rmSync(join(stage, n), { force: true });
-  cpSync(join(project, 'Assets'), join(stage, 'Assets'), { recursive: true });
+  // Package with external location: the package carries manifest and logos only; the program
+  // (stage/KvPwSafe.PasskeyProvider.exe) ships in the installation under resources\provider (package.json
+  // extraResources), the app registers the package with that folder. No "Keevault Passkeys" entry under Apps.
+  const packageDir = join(outDir, 'package');
+  rmSync(packageDir, { recursive: true, force: true });
+  mkdirSync(packageDir, { recursive: true });
+  cpSync(join(project, 'Assets'), join(packageDir, 'Assets'), { recursive: true });
   const escXml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   // replaceAll: the placeholders also appear in the manifest's comment.
-  writeFileSync(join(stage, 'AppxManifest.xml'), readFileSync(join(project, 'AppxManifest.xml'), 'utf8').replaceAll('__PUBLISHER__', escXml(publisher)).replaceAll('__VERSION__', `${version}.0`));
+  writeFileSync(join(packageDir, 'AppxManifest.xml'), readFileSync(join(project, 'AppxManifest.xml'), 'utf8').replaceAll('__PUBLISHER__', escXml(publisher)).replaceAll('__VERSION__', `${version}.0`));
   const msix = join(outDir, 'KvPwSafe.PasskeyProvider.msix');
   if (existsSync(msix)) rmSync(msix, { force: true });
-  run(makeappx, ['pack', '/d', stage, '/p', msix, '/o', '/nv']);
+  run(makeappx, ['pack', '/d', packageDir, '/p', msix, '/o', '/nv']);
   // Public part of the certificate: devices must trust it before the MSIX installs.
   const cer = join(outDir, 'KvPwSafe-Test.cer');
   if (existsSync(cer)) rmSync(cer, { force: true });

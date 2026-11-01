@@ -1,20 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- MSIX manifest of the Windows passkey provider. __PUBLISHER__ and __VERSION__ are set by windows/build.ps1. -->
+<!-- MSIX manifest of the Windows passkey provider. __PUBLISHER__ and __VERSION__ are set by scripts/release.mjs.
+     A package with external location ("sparse package"): it holds no program files, only the identity Windows needs
+     for a passkey plugin. The provider itself ships inside the Keevault installation
+     (resources\provider\KvPwSafe.PasskeyProvider.exe); the app registers this package with that folder as external
+     location. Such a package has no entry of its own under Settings → Apps – there is only "Keevault". -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
   xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
   xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
-  IgnorableNamespaces="uap uap3 desktop rescap com">
+  IgnorableNamespaces="uap uap3 uap10 desktop rescap com">
 
-  <Identity Name="KvPwSafe.PasskeyProvider" Publisher="__PUBLISHER__" Version="__VERSION__" ProcessorArchitecture="x64" />
+  <Identity Name="Keevault.Passkeys" Publisher="__PUBLISHER__" Version="__VERSION__" ProcessorArchitecture="x64" />
 
   <Properties>
     <DisplayName>Keevault Passkeys</DisplayName>
     <PublisherDisplayName>Keevault</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
   </Properties>
 
   <Dependencies>
@@ -27,7 +33,7 @@
   </Resources>
 
   <Applications>
-    <Application Id="Provider" Executable="KvPwSafe.PasskeyProvider.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="Provider" Executable="resources\provider\KvPwSafe.PasskeyProvider.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
       <uap:VisualElements
         DisplayName="Keevault Passkeys"
         Description="Passkey-Anbieter für Windows (Keevault)"
@@ -39,13 +45,13 @@
         <!-- Windows activates the plugin authenticator through this COM class. -->
         <com:Extension Category="windows.comServer">
           <com:ComServer>
-            <com:ExeServer Executable="KvPwSafe.PasskeyProvider.exe" Arguments="-PluginActivated" DisplayName="Keevault">
+            <com:ExeServer Executable="resources\provider\KvPwSafe.PasskeyProvider.exe" Arguments="-PluginActivated" DisplayName="Keevault">
               <com:Class Id="829d1c65-49a0-41a5-8b6b-ae387f64db07" DisplayName="Keevault" />
             </com:ExeServer>
           </com:ComServer>
         </com:Extension>
         <!-- The desktop app calls the provider through this alias, which runs it with package identity. -->
-        <uap3:Extension Category="windows.appExecutionAlias" Executable="KvPwSafe.PasskeyProvider.exe" EntryPoint="Windows.FullTrustApplication">
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="resources\provider\KvPwSafe.PasskeyProvider.exe" EntryPoint="Windows.FullTrustApplication">
           <uap3:AppExecutionAlias>
             <desktop:ExecutionAlias Alias="kvpwsafe-passkeys.exe" />
           </uap3:AppExecutionAlias>
@@ -56,5 +62,6 @@
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
   </Capabilities>
 </Package>

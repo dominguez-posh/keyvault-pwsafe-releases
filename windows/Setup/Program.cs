@@ -165,6 +165,13 @@ namespace Keevault.Setup
             ["Fehlercode {0}"] = "Error code {0}",
             ["Hilfe zu diesem Fehler"] = "Help for this error",
             ["Noch geöffnet: {0}"] = "Still open: {0}",
+            ["Auf diesem Gerät ist noch Keevault {0} für alle Benutzer installiert. Sie bliebe neben der neuen Version stehen, aktualisiert sich nicht und steht im Startmenü ebenfalls als „Keevault“. Am besten vorher entfernen (Administratorrechte nötig)."] = "Keevault {0} for all users is still installed on this device. It would stay next to the new version, does not update itself and also appears as “Keevault” in the Start menu. Best remove it first (administrator rights needed).",
+            ["Entfernen & installieren"] = "Remove & install",
+            ["Überspringen"] = "Skip",
+            ["Alte Installation wird entfernt …"] = "Removing the old installation …",
+            ["Bitte die Abfrage von Windows bestätigen."] = "Please confirm the Windows prompt.",
+            ["Alte Installation nicht entfernt"] = "Old installation not removed",
+            ["Die alte Installation für alle Benutzer wurde nicht entfernt – die Abfrage wurde abgebrochen oder es fehlen Administratorrechte. Erneut versuchen oder die alte Installation unter Einstellungen → Apps entfernen."] = "The old installation for all users was not removed – the prompt was cancelled or administrator rights are missing. Try again or remove the old installation under Settings → Apps.",
         };
 
         public static string T(string s, params object[] a)
@@ -418,17 +425,26 @@ namespace Keevault.Setup
 
         private void Show(UIElement e, bool visible) => e.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
-        private void ShowWelcome()
+        private void ShowWelcome(MachineInstall old = null)
         {
             title.Text = Text.T("Keevault installieren");
             subtitle.Text = Text.T("Passwörter und Passkeys im eigenen Azure Key Vault – für dich und dein Team.");
             Show(features, true);
             Show(bar, false);
-            Show(status, ExistingInstallDir() != null);
-            status.Text = Text.T("Keevault ist bereits installiert – die Installation aktualisiert es.");
+            // An older installation for all users (MSI) would stay next to this one: both are "Keevault" in the
+            // Start menu and only this one updates itself. Offer to remove it first.
+            old = old ?? (args.Has("screenshot") ? null : MachineInstall.Find());
+            status.Foreground = Theme.B(old != null ? th.Danger : th.Muted);
+            Show(status, old != null || ExistingInstallDir() != null);
+            status.Text = old != null
+                ? Text.T("Auf diesem Gerät ist noch Keevault {0} für alle Benutzer installiert. Sie bliebe neben der neuen Version stehen, aktualisiert sich nicht und steht im Startmenü ebenfalls als „Keevault“. Am besten vorher entfernen (Administratorrechte nötig).", string.IsNullOrEmpty(old.Version) ? "?" : old.Version)
+                : Text.T("Keevault ist bereits installiert – die Installation aktualisiert es.");
             Show(location, ExistingInstallDir() == null);
             Show(closeButton, true);
-            SetActions(new Button(this, Text.T("Installieren"), ButtonKind.Primary, async () => await RunInstall()));
+            if (old != null)
+                SetActions(new Button(this, Text.T("Entfernen & installieren"), ButtonKind.Primary, async () => await RemoveOldAndInstall(old)),
+                    new Button(this, Text.T("Überspringen"), ButtonKind.Secondary, async () => await RunInstall()));
+            else SetActions(new Button(this, Text.T("Installieren"), ButtonKind.Primary, async () => await RunInstall()));
             SetFill(0.0);
             checkScale.ScaleX = checkScale.ScaleY = 0;
             Loaded += (s, e) => DrawOutline();
@@ -442,6 +458,7 @@ namespace Keevault.Setup
             Show(location, false);
             Show(bar, true);
             Show(status, true);
+            status.Foreground = Theme.B(th.Muted);
             Show(closeButton, false);
             Show(help, false);
             SetActions();
@@ -624,6 +641,20 @@ namespace Keevault.Setup
             catch { /* no browser */ }
         }
 
+        private async Task RemoveOldAndInstall(MachineInstall old)
+        {
+            ShowProgress(Text.T("Alte Installation wird entfernt …"), Text.T("Bitte die Abfrage von Windows bestätigen."));
+            // A running old Keevault keeps its files open and makes Windows Installer cancel (1602): end its processes
+            // first – the user chose to remove that installation.
+            if (!string.IsNullOrEmpty(old.Dir)) await InstallProcesses.Release(old.Dir, TimeSpan.FromSeconds(3));
+            if (!await old.Remove())
+            {
+                ShowError(Text.T("Alte Installation nicht entfernt"), SetupError.OldInstallStays(), () => RemoveOldAndInstall(old));
+                return;
+            }
+            await RunInstall();
+        }
+
         private static Task<int> RunHidden(string exe, string arguments) => Task.Run(() =>
         {
             using (var p = Process.Start(new ProcessStartInfo(exe, arguments) { UseShellExecute = false, CreateNoWindow = true }))
@@ -762,6 +793,8 @@ namespace Keevault.Setup
                     Show(bar, false); Show(status, false); Show(closeButton, true);
                     SetActions(new Button(this, Text.T("Keevault starten"), ButtonKind.Primary, () => { }));
                     checkScale.ScaleX = checkScale.ScaleY = 1; keyhole.Visibility = Visibility.Collapsed; break;
+                case "leftover":
+                    ShowWelcome(MachineInstall.Sample()); break;
                 case "error":
                     ShowError(args.Has("update") || updateMode ? Text.T("Update fehlgeschlagen") : Text.T("Installation fehlgeschlagen"), SetupError.FromExitCode(2), () => Task.CompletedTask); break;
                 case "update":

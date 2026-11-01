@@ -60,9 +60,16 @@ Write-Host 'Veröffentliche Passkey-Anbieter …'
 if ($LASTEXITCODE) { throw "dotnet publish fehlgeschlagen ($LASTEXITCODE)" }
 Remove-WithRetry @(Get-ChildItem $stage -Filter *.pdb | ForEach-Object FullName)
 
-Copy-Item (Join-Path $project 'Assets') (Join-Path $stage 'Assets') -Recurse
+# Package with external location: the package holds manifest and logos, the program lies in out\external\resources\provider
+# (same layout as the installed app) – Install-PasskeyProvider.ps1 registers the package with out\external.
+$packageDir = Join-Path $out 'package'
+$external = Join-Path $out 'external\resources\provider'
+foreach ($d in $packageDir, (Join-Path $out 'external')) { if (Test-Path $d) { Remove-WithRetry $d } }
+New-Item -ItemType Directory -Force $packageDir, $external | Out-Null
+Copy-Item (Join-Path $stage 'KvPwSafe.PasskeyProvider.exe') $external
+Copy-Item (Join-Path $project 'Assets') (Join-Path $packageDir 'Assets') -Recurse
 $manifest = (Get-Content (Join-Path $project 'AppxManifest.xml') -Raw).Replace('__PUBLISHER__', [System.Security.SecurityElement]::Escape($Publisher)).Replace('__VERSION__', $Version)
-Set-Content (Join-Path $stage 'AppxManifest.xml') $manifest -Encoding utf8
+Set-Content (Join-Path $packageDir 'AppxManifest.xml') $manifest -Encoding utf8
 
 # MakeAppx/SignTool from NuGet.
 $buildTools = Join-Path $tools "buildtools-$BuildToolsVersion"
@@ -77,7 +84,7 @@ $signtool = Get-ChildItem $buildTools -Recurse -Filter signtool.exe | Where-Obje
 if (-not $makeappx -or -not $signtool) { throw 'MakeAppx/SignTool im NuGet-Paket nicht gefunden.' }
 
 $msix = Join-Path $out 'KvPwSafe.PasskeyProvider.msix'
-& $makeappx.FullName pack /d $stage /p $msix /o /nv | Out-Host
+& $makeappx.FullName pack /d $packageDir /p $msix /o /nv | Out-Host
 if ($LASTEXITCODE) { throw "MakeAppx fehlgeschlagen ($LASTEXITCODE)" }
 
 if (-not $PfxPath) {

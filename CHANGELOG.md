@@ -4,6 +4,20 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.1 – 2026-11-01
+- Microsoft-Anmeldung mit einem Klick: Auf der Microsoft-Anmeldeseite bietet die Browser-Erweiterung „Mit Keevault anmelden“ mit deinen Microsoft-Konten an und trägt Konto, Passwort und Einmalcode selbst ein. Mit „Merken und künftig automatisch anmelden“ startet die Anmeldung beim nächsten Mal von selbst (kurzer Countdown, „Anderes Konto“ zum Wechseln).
+- Nur noch **ein** Eintrag unter Einstellungen → Apps: Der Windows-Passkey-Anbieter ist jetzt Teil der Keevault-Installation (Paket mit externem Speicherort) statt einer eigenen App „Keevault Passkeys“. Das Update stellt automatisch um; danach Keevault einmal unter Einstellungen → Konten → Passkeys → Erweiterte Optionen wieder einschalten – die App erinnert daran.
+- Der Passkey-Anbieter wird nur noch eingerichtet, wenn du ihn in den Einstellungen einschaltest, und beim Ausschalten wieder entfernt. Für Edge und Chrome ist er nicht nötig, dort nutzt die Browser-Erweiterung die Passkeys direkt. Wo er schon eingerichtet ist, bleibt er an.
+- Zwei Installationen auf einem Gerät (MSI für alle Benutzer und EXE nur für dich) erkennt Keevault jetzt und sagt es: Beide stehen im Startmenü als „Keevault“, nur eine aktualisiert sich – bisher startete man so leicht eine alte Version. Der Hinweis zeigt Version und Ort und öffnet auf Wunsch Einstellungen → Apps.
+- Das Setup prüft schon vor der Installation, ob noch eine ältere Keevault-Installation für alle Benutzer da ist, und bietet an, sie zuerst zu entfernen („Entfernen & installieren“, mit der Windows-Abfrage für Administratorrechte).
+
+### English
+- Microsoft sign-in in one click: on the Microsoft sign-in page the browser extension offers “Sign in with Keevault” with your Microsoft accounts and enters account, password and one-time code itself. With “Remember and sign in automatically from now on” the sign-in starts by itself next time (short countdown, “Other account” to switch).
+- Only **one** entry under Settings → Apps: the Windows passkey provider is now part of the Keevault installation (package with external location) instead of a separate app “Keevault Passkeys”. The update switches over automatically; afterwards switch Keevault on once more under Settings → Accounts → Passkeys → Advanced options – the app reminds you.
+- The passkey provider is now only set up when you turn it on in the settings, and removed again when you turn it off. Edge and Chrome do not need it, there the browser extension uses the passkeys directly. Where it is already set up, it stays on.
+- Two installations on one device (MSI for all users and EXE just for you) are now detected and pointed out: both appear as “Keevault” in the Start menu and only one updates itself – so far it was easy to start an old version. The notice shows version and location and opens Settings → Apps on request.
+- Setup checks before installing whether an older Keevault installation for all users is still there and offers to remove it first (“Remove & install”, with the Windows prompt for administrator rights).
+
 ## 0.9.0 – 2026-11-01
 - Notfallzugang beim Anlegen eines Tresors: Break-Glass-Konten bekommen direkt dauerhaft „Verwalten“; Keevault merkt sie sich je Tenant für weitere Tresore und warnt, wenn keines eingetragen ist.
 - „Neu“-Menü und Rechtsklick sagen jetzt, was entsteht: „Neues Passwort / Login“, „Neue sichere Notiz“, „Neue Kreditkarte“, „Neues Zertifikat“, „Neuer Server / Ressource“.
