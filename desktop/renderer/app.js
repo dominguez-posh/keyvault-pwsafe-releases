@@ -578,6 +578,46 @@ function renderLocked(error) {
 }
 
 /** Set, change or remove the app PIN; forced: the organization requires one and none is set yet. */
+/** Admin mode on or off; the list, the New menu and the open entry follow at once. */
+async function setAdminMode(on, pin) {
+  st.settings = on ? await call('activateAdminMode', pin) : await call('deactivateAdminMode');
+  applyViewClass();
+  renderSidebar();
+  renderList();
+  renderDetail();
+  toast(on ? t('Admin-Modus aktiv') : t('Admin-Modus beendet'));
+}
+
+/** "Activate admin mode": confirmed with the app PIN – without a PIN it cannot be switched on. */
+function adminModeDialog() {
+  if (!st.pinSet) {
+    modal(t('Admin-Modus aktivieren'), h('div', {},
+      h('p', {}, t('Der Admin-Modus wird mit deiner App-PIN bestätigt. Lege zuerst eine PIN fest.'))), [
+      { label: t('Abbrechen') },
+      { label: t('PIN festlegen …'), primary: true, onClick: () => { setTimeout(() => pinDialog(), 0); } },
+    ]);
+    return;
+  }
+  const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'admin-pin', 'aria-label': t('App-PIN') });
+  const { dialog } = modal(t('Admin-Modus aktivieren'), h('div', {},
+    h('p', {}, t('Im Admin-Modus siehst du Assets (Server, VMs), Admin Center und Verbindungen. Bestätige mit deiner App-PIN.')),
+    field(t('App-PIN'), pin)), [
+    { label: t('Abbrechen') },
+    { label: t('Aktivieren'), primary: true, onClick: async () => {
+      try {
+        await setAdminMode(true, pin.value);
+        return true;
+      } catch (e) {
+        toast(e.message, 'error');
+        pin.select();
+        return false;
+      }
+    } },
+  ]);
+  pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') dialog.querySelector('.modal-footer .btn.primary')?.click(); });
+  setTimeout(() => pin.focus(), 0);
+}
+
 function pinDialog({ forced = false } = {}) {
   const current = st.pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' }) : null;
   const next = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' });
@@ -940,6 +980,9 @@ function mainMenu(anchor) {
       st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
       entry('trash', 'trash', t('Papierkorb'), openTrash),
       h('div', { class: 'context-sep' }),
+      adminMode()
+        ? entry('admin-off', 'shield', t('Admin-Modus beenden'), () => setAdminMode(false))
+        : entry('admin-on', 'shield', t('Admin-Modus aktivieren …'), adminModeDialog),
       entry('lock', 'lock', t('Sperren'), () => call('lock'))),
     view: h('div', { class: 'main-menu-pane view-pane', role: 'group', 'aria-label': t('Ansicht') },
       viewRow(t('Zoom'), zoomControl()),
@@ -947,12 +990,6 @@ function mainMenu(anchor) {
       viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
       viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
       // Admin mode changes the list (devices tab), the New menu and the open entry (admin tiles): redraw them.
-      viewRow(t('Admin-Werkzeuge'), onOffControl('adminTools', t('Admin-Werkzeuge'), false, async () => {
-        await setView({ pimButton: false });
-        renderSidebar();
-        renderList();
-        renderDetail();
-      })),
       h('div', { class: 'context-sep' }),
       entry('view-reset', 'refresh', t('Auf Standard zurücksetzen'), resetView)),
   };
@@ -1588,9 +1625,12 @@ function newMenuItems(container) {
     { action: 'new-note', icon: 'note', label: t('Neue sichere Notiz'), onClick: () => newItem('note') },
     { action: 'new-card', icon: 'card', label: t('Neue Kreditkarte'), onClick: () => newItem('card') },
     { action: 'new-certificate', icon: 'certificate', label: t('Neues Zertifikat'), onClick: () => newItem('certificate') },
-    '-',
-    { action: 'new-microsoft', icon: 'globe', label: t('Neuer Microsoft-Login'), onClick: () => newItem('login', entryTemplate('microsoft', { msAdmin: st?.settings?.adminTools === true })) },
-    { action: 'new-ad', icon: 'user', label: t('Neuer Active-Directory-Logon'), onClick: () => newItem('login', entryTemplate('ad')) },
+    // Admin templates only in admin mode – for everyone else the menu stays as simple as possible.
+    ...(adminMode() ? [
+      '-',
+      { action: 'new-microsoft', icon: 'globe', label: t('Neuer Microsoft-Login'), onClick: () => newItem('login', entryTemplate('microsoft', { msAdmin: true })) },
+      { action: 'new-ad', icon: 'user', label: t('Neuer Active-Directory-Logon'), onClick: () => newItem('login', entryTemplate('ad')) },
+    ] : []),
   ];
   return [
     ...kinds,
@@ -4225,6 +4265,10 @@ function settingsDialog() {
   const updateMode = h('select', { disabled: enforced('updateMode') },
     ...[['ask', 'Beim Start prüfen und Update anbieten (Standard)'], ['auto', 'Automatisch aktuell halten'], ['off', 'Aus – nur manuell suchen']]
       .map(([v, l]) => h('option', { value: v, selected: (s.updateMode || 'ask') === v }, t(l))));
+  // Early Access: versions in the field test before everyone gets them (beta feed on keevault.de).
+  const updateChannel = h('select', { name: 'updateChannel', disabled: enforced('updateChannel') },
+    ...[['stable', 'Stabil – nur freigegebene Versionen (Standard)'], ['beta', 'Early Access – neue Versionen schon im Praxistest']]
+      .map(([v, l]) => h('option', { value: v, selected: (s.updateChannel || 'stable') === v }, t(l))));
   const machine = h('div', { class: 'muted small' });
   const drawMachine = (x) => {
     if (!x?.supported) return machine.replaceChildren();
@@ -4257,7 +4301,8 @@ function settingsDialog() {
       section(t('Updates'),
         managed
           ? h('p', { class: 'muted small' }, managedUpdateHint(st.updateKind))
-          : field(t('Automatische Updates'), updateMode, t('„Automatisch“ installiert neue Versionen, sobald die App gesperrt ist oder beendet wird. Die Updates kommen von keevault.de.')),
+          : [field(t('Automatische Updates'), updateMode, t('„Automatisch“ installiert neue Versionen, sobald die App gesperrt ist oder beendet wird. Die Updates kommen von keevault.de.')),
+            field(t('Update-Kanal'), updateChannel, t('Early Access bekommt neue Versionen, bevor sie für alle freigegeben werden – hilf beim Testen. Zurück auf „Stabil“ bleibt die installierte Version, bis die stabile sie eingeholt hat.'))],
         h('button', { type: 'button', class: 'btn small', onclick: () => updateDialog() }, icon('download', 14), t('Jetzt nach Updates suchen'))),
       s.enforced.length ? h('p', { class: 'muted small' }, t('Ausgegraute Werte sind über kvpwsafe.config.json vorgegeben.')) : null,
       h('p', { class: 'muted small' }, t('Version {version}', { version: st.version })),
@@ -4344,6 +4389,7 @@ function settingsDialog() {
         signInWindows: signInWindows.checked,
         startWithWindows: startWithWindows.checked,
         updateMode: updateMode.value,
+        updateChannel: updateChannel.value === 'beta' ? 'beta' : 'stable',
         mcpEnabled: mcpEnabled.checked,
         offlineMirror: offlineMirror.checked && st.pinSet,
         mcpScope: mcpMode.value,

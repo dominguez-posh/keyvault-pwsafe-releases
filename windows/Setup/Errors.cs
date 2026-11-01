@@ -45,6 +45,10 @@ namespace Keevault.Setup
         public static SetupError UpdateFileMissing() =>
             new SetupError("KV-S5", Text.T("Die heruntergeladene Update-Datei fehlt – vermutlich hat ein Virenscanner sie entfernt. Keevault lädt das Update beim nächsten Start erneut."));
 
+        /// <summary>The setup ended "successfully" but program or app package are missing (e.g. removed by a virus scanner).</summary>
+        public static SetupError Incomplete() =>
+            new SetupError("KV-S10", Text.T("Die Installation ist unvollständig – Programmdateien fehlen danach (meist hat eine Sicherheitssoftware sie entfernt oder das Setup beendet)."));
+
         public static SetupError OldInstallStays() =>
             new SetupError("KV-S8", Text.T("Die alte Installation für alle Benutzer wurde nicht entfernt – die Abfrage wurde abgebrochen oder es fehlen Administratorrechte. Erneut versuchen oder die alte Installation unter Einstellungen → Apps entfernen."));
 
