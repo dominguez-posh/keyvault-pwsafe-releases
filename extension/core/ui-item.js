@@ -3,7 +3,7 @@
 import { h, icon, iconButton, formatDateTime, avatar, toast } from './dom.js';
 import { totpCode, parseTotp } from './totp.js';
 import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator.js';
-import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber } from './model.js';
+import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods } from './model.js';
 import { t } from './i18n.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 import { expiryState } from './health.js';
@@ -25,6 +25,7 @@ export function itemDetail(item, ctx) {
     if (c.pin) rows.push(secretField(t('PIN'), c.pin, ctx));
   }
   if (item.type === 'certificate' && item.cert.data) rows.push(certificateField(item.cert, ctx));
+  if (item.type === 'server') rows.push(...serverRows(item, ctx));
   if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
   if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
   if (item.totp) rows.push(totpField(item.totp, ctx));
@@ -48,7 +49,7 @@ export function itemDetail(item, ctx) {
       avatar(item.title, 'avatar large', item.icon),
       h('div', { class: 'item-head-text' },
         h('h2', {}, item.favorite ? icon('star', 14) : null, item.title),
-        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type])].filter(Boolean).join(' · ')),
+        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(ITEM_TYPES[item.type]), item.msAdmin ? t('Microsoft-Admin') : ''].filter(Boolean).join(' · ')),
         expiryBadge(item.expires)),
       hoverMenu),
     // Fields as one card with dividers (modern design); the action bar and meta line stay outside.
@@ -229,6 +230,36 @@ function totpField(secret, ctx, label = t('Einmalcode (TOTP)')) {
   return el;
 }
 
+/**
+ * Server entry: where it is, the buttons to connect (desktop: ctx.connect) and which entries hold the accounts
+ * (ctx.linkTitle names a linked entry; it stays a reference, the secret is read only when connecting).
+ */
+function serverRows(item, ctx) {
+  const s = item.server;
+  const rows = [];
+  const methods = serverMethods(item);
+  const LABELS = { rdp: [t('Remotedesktop (RDP)'), 'external'], teamviewer: [t('TeamViewer'), 'external'], bastion: [t('Bastion im Browser'), 'globe'] };
+  if (ctx.connect && methods.length) {
+    rows.push(h('div', { class: 'field' }, h('label', {}, t('Verbinden')), h('div', { class: 'connect-row' },
+      ...methods.map((m) => h('button', { type: 'button', class: 'btn small', dataset: { connect: m }, onclick: () => ctx.connect(item, m) }, icon(LABELS[m][1], 14), LABELS[m][0])))));
+  }
+  if (s.host) rows.push(textField(t('Server (IP oder Name)'), s.port && s.port !== 3389 ? `${s.host}:${s.port}` : s.host, ctx));
+  const link = (label, key) => h('div', { class: 'field' }, h('label', {}, label),
+    h('div', { class: 'field-row' }, h('span', { class: 'value linked' }, icon('link', 14), ' ', ctx.linkTitle?.(key) || t('Verknüpfter Eintrag'))));
+  if (s.rdpLink) rows.push(link(t('RDP-Konto'), s.rdpLink));
+  if (s.tvId) rows.push(textField(t('TeamViewer-ID'), s.tvId, ctx));
+  if (s.tvLink) rows.push(link(t('TeamViewer-Passwort'), s.tvLink));
+  else if (s.tvPassword) rows.push(secretField(t('TeamViewer-Passwort'), s.tvPassword, ctx));
+  if (s.bastionUrl) {
+    rows.push(h('div', { class: 'field' }, h('label', {}, t('Bastion-Link')), h('div', { class: 'field-row' },
+      h('a', { href: '#', class: 'url', title: s.bastionUrl, onclick: (e) => { e.preventDefault(); ctx.openUrl(s.bastionUrl); } }, s.bastionUrl),
+      iconButton('copy', t('Kopieren'), () => ctx.copy(s.bastionUrl, t('Adresse'))))));
+  }
+  if (s.bastionLoginLink) rows.push(link(t('Microsoft-Anmeldung (Bastion)'), s.bastionLoginLink));
+  if (s.bastionVmLink) rows.push(link(t('Konto auf dem Server (Bastion)'), s.bastionVmLink));
+  return rows;
+}
+
 function passkeyList(passkeys, ctx) {
   return h('div', { class: 'field' }, h('label', {}, passkeys.length > 1 ? t('Passkeys') : t('Passkey')),
     ...passkeys.map((p) => h('div', { class: 'passkey-row' },
@@ -237,6 +268,15 @@ function passkeyList(passkeys, ctx) {
         h('div', {}, p.userName || p.userDisplayName || t('(ohne Benutzername)')),
         h('div', { class: 'muted small' }, t('{rpId} · erstellt {date}', { rpId: p.rpId, date: formatDateTime(p.created) }))),
       ctx.onRemovePasskey ? iconButton('trash', t('Passkey entfernen'), () => ctx.onRemovePasskey(p.credentialId)) : null)));
+}
+
+const secretInputEl = (name, value) => h('input', { name, type: 'password', value, autocomplete: 'off', spellcheck: 'false' });
+function revealButton(input) {
+  const b = iconButton('eye', t('Anzeigen'), () => {
+    input.type = input.type === 'password' ? 'text' : 'password';
+    b.replaceChildren(icon(input.type === 'password' ? 'eye' : 'eyeOff'));
+  });
+  return b;
 }
 
 /**
@@ -402,11 +442,55 @@ export function itemForm(item, ctx) {
   };
   renderPasskeys();
 
+  // Logins: marker for Microsoft admin accounts (offered by the admin tools for admin centers and Bastion).
+  const msAdmin = h('input', { type: 'checkbox', name: 'msAdmin', checked: it.msAdmin });
+
+  // Server: links to other entries are a select over ctx.linkOptions (desktop); without them (popup) the stored
+  // links are kept as they are. A link the user cannot see any more stays selected as "not available".
+  const linkSelect = (name, value, emptyLabel, options = ctx.linkOptions) => {
+    if (!options) return h('input', { type: 'hidden', name, value });
+    const known = options.some((o) => o.key === value);
+    return h('select', { name },
+      h('option', { value: '', selected: !value }, emptyLabel),
+      value && !known ? h('option', { value, selected: true }, t('Verknüpfter Eintrag (nicht verfügbar)')) : null,
+      ...options.map((o) => h('option', { value: o.key, selected: o.key === value }, [o.title, o.username, o.container].filter(Boolean).join(' · '))));
+  };
+  const sv = it.server;
+  const srvHost = h('input', { name: 'srvHost', value: sv.host, placeholder: t('z. B. 10.0.0.4 oder dc01.contoso.local'), autocomplete: 'off', spellcheck: 'false' });
+  const srvPort = h('input', { name: 'srvPort', value: String(sv.port || 3389), inputmode: 'numeric', autocomplete: 'off' });
+  const srvRdpLink = linkSelect('srvRdpLink', sv.rdpLink, t('Eigener Benutzer und Passwort'));
+  const srvUser = h('input', { name: 'srvUser', value: it.type === 'server' ? it.username : '', placeholder: 'DOMAIN\\user · user@domain', autocomplete: 'off', spellcheck: 'false' });
+  const srvPass = secretInputEl('srvPass', it.type === 'server' ? it.password : '');
+  const srvOwn = h('div', { class: 'grid2' }, row(t('Benutzer'), srvUser), row(t('Passwort'), h('div', { class: 'field-row' }, srvPass, revealButton(srvPass))));
+  const srvTvId = h('input', { name: 'srvTvId', value: sv.tvId, inputmode: 'numeric', placeholder: '123 456 789', autocomplete: 'off' });
+  const srvTvLink = linkSelect('srvTvLink', sv.tvLink, t('Eigenes Passwort'));
+  const srvTvPass = secretInputEl('srvTvPass', sv.tvPassword);
+  const srvTvOwn = row(t('TeamViewer-Passwort'), h('div', { class: 'field-row' }, srvTvPass, revealButton(srvTvPass)));
+  const srvBastion = h('input', { name: 'srvBastion', value: sv.bastionUrl, placeholder: t('Link aus dem Azure-Portal oder Bastion-Freigabelink'), autocomplete: 'off', spellcheck: 'false' });
+  const adminOptions = ctx.linkOptions && [...ctx.linkOptions].sort((a, b) => Number(!!b.msAdmin) - Number(!!a.msAdmin));
+  const srvBastionLogin = linkSelect('srvBastionLogin', sv.bastionLoginLink, t('Keine – im Browser selbst anmelden'), adminOptions);
+  const srvBastionVm = linkSelect('srvBastionVm', sv.bastionVmLink, t('Wie bei RDP'));
+  const syncServer = () => {
+    srvOwn.hidden = !!srvRdpLink.value;
+    srvTvOwn.hidden = !!srvTvLink.value;
+  };
+  srvRdpLink.addEventListener?.('change', syncServer);
+  srvTvLink.addEventListener?.('change', syncServer);
+  syncServer();
+  const serverOnly = h('div', { class: 'server-only' },
+    h('div', { class: 'grid2 server-host' }, row(t('Server (IP oder Name)'), srvHost), row(t('RDP-Port'), srvPort)),
+    row(t('RDP-Konto'), srvRdpLink), srvOwn,
+    h('div', { class: 'grid2' }, row(t('TeamViewer-ID'), srvTvId), row(t('TeamViewer-Passwort aus'), srvTvLink)), srvTvOwn,
+    row(t('Bastion-Link'), srvBastion),
+    h('div', { class: 'grid2' }, row(t('Microsoft-Anmeldung (Bastion)'), srvBastionLogin), row(t('Konto auf dem Server (Bastion)'), srvBastionVm)),
+    h('p', { class: 'muted small' }, t('Verknüpfte Einträge bleiben, wo sie sind – Keevault liest sie erst beim Verbinden.')));
+
   const loginOnly = h('div', { class: 'login-only' },
     row(t('Benutzername'), username),
     h('div', { class: 'field' }, h('label', {}, t('Passwort')), h('div', { class: 'field-row' }, password, reveal, genButton), meter, generator),
     row(t('Websites'), urls),
     row(t('Einmalcode (TOTP)'), h('div', { class: 'field-row' }, totp, revealTotp, scanTotp)),
+    h('label', { class: 'inline' }, msAdmin, t('Microsoft-Admin-Konto (für Admin Center und Bastion)')),
     passkeyBox);
   // Credit card
   const secretInput = (name, value, extra = {}) => h('input', { name, type: 'password', value, autocomplete: 'off', spellcheck: 'false', ...extra });
@@ -459,6 +543,7 @@ export function itemForm(item, ctx) {
     loginOnly.hidden = typeSelect.value !== 'login';
     cardOnly.hidden = typeSelect.value !== 'card';
     certOnly.hidden = typeSelect.value !== 'certificate';
+    serverOnly.hidden = typeSelect.value !== 'server';
   };
   typeSelect.addEventListener('change', syncType);
   syncType();
@@ -473,6 +558,7 @@ export function itemForm(item, ctx) {
     loginOnly,
     cardOnly,
     certOnly,
+    serverOnly,
     h('div', { class: 'grid2' }, row(t('Ordner'), h('div', {}, folder, folderOptions)), h('div', { class: 'field' }, h('label', {}, ' '), h('label', { class: 'inline' }, favorite, t('Favorit')))),
     row(t('Gültig bis (optional)'), h('div', { class: 'field-row' }, expires, h('span', { class: 'muted small' }, t('Erinnerung 30 Tage vorher, z. B. für Zertifikate, Service-Konten, Kundenzugänge')))),
     h('div', { class: 'field' }, h('label', {}, t('Zusätzliche Felder')), fieldsBox,
@@ -505,12 +591,18 @@ export function itemForm(item, ctx) {
       ...item,
       type,
       title: title.value,
-      username: login ? username.value : '',
-      password: login ? password.value : type === 'certificate' ? certPassword.value : '',
+      username: login ? username.value : type === 'server' && !srvRdpLink.value ? srvUser.value : '',
+      password: login ? password.value : type === 'certificate' ? certPassword.value : type === 'server' && !srvRdpLink.value ? srvPass.value : '',
       urls: login ? urls.value.split(/\r?\n/) : [],
       totp: login ? totp.value : '',
       card: type === 'card' ? { holder: cardHolder.value, number: cardNumber.value, expiry: cardExpiry.value, cvc: cardCvc.value, pin: cardPin.value } : undefined,
       cert: type === 'certificate' ? cert : undefined,
+      server: type === 'server' ? {
+        host: srvHost.value, port: srvPort.value, rdpLink: srvRdpLink.value, tvId: srvTvId.value,
+        tvLink: srvTvLink.value, tvPassword: srvTvLink.value ? '' : srvTvPass.value,
+        bastionUrl: srvBastion.value, bastionLoginLink: srvBastionLogin.value, bastionVmLink: srvBastionVm.value,
+      } : undefined,
+      msAdmin: login && msAdmin.checked,
       folder: folder.value,
       icon: icon64,
       favorite: favorite.checked,

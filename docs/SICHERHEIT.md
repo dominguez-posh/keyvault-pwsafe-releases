@@ -236,6 +236,31 @@ Ein Datei-Tresor (Format 1) nur für eine Person, kostenlos und nicht teilbar.
 - **Restrisiko:** Konfliktkopien des Sync-Programms bei gleichzeitiger Bearbeitung auf zwei Geräten werden nicht
   zusammengeführt.
 
+## Admin-Werkzeuge (Ein-Klick-Anmeldung, RDP, TeamViewer)
+
+- **Ein-Klick-Anmeldung:** Ein Klick auf ein Admin Center bzw. „Bastion“ legt in der App einen Anmeldeauftrag an:
+  ein Konto, bestimmte Anmelde-Hosts (`login.microsoftonline.com` …, Bastion), höchstens zwei Minuten. Die
+  Erweiterung fragt nur auf diesen Hosts nach; der Host kommt vom Browser (Absender des Content-Skripts), nicht
+  von der Seite. Andere Websites erhalten nichts. Einmalcodes werden bei jedem Schritt frisch berechnet.
+- **Verknüpfte Einträge:** Server-Einträge speichern nur den Schlüssel des verknüpften Eintrags, nie eine Kopie
+  des Passworts. Gelesen wird er erst beim Verbinden – mit den Rechten der Person, die verbindet.
+- **RDP:** Das Passwort geht über stdin an das Hilfsprogramm, das es als Windows-Anmeldeinformation
+  `TERMSRV/<Server>` (nur für diese Anmeldesitzung) ablegt, mstsc startet und sie nach 45 Sekunden wieder
+  entfernt; eine vorher gespeicherte wird wiederhergestellt. Kein Passwort in Datei oder Befehlszeile.
+- **TeamViewer:** TeamViewer erhält das Passwort als Startparameter (`--Password`) – andere Prozesse desselben
+  Benutzers könnten es in der Befehlszeile sehen. Auf gemeinsam genutzten Rechnern besser ohne gespeichertes
+  TeamViewer-Passwort.
+
+## Notfall-Export und Notfallzugang
+
+- **Notfall-Export** (`installer/emergency/Keevault-Notfall-Export.ps1`, auf der Website unter /tools mit SHA-256):
+  eigenständiges PowerShell-7-Skript, liest die Einträge direkt per Key-Vault-REST (nur lesend) und schreibt CSV,
+  JSON und KeePass-XML **unverschlüsselt**. Zusätzlich geschützte Tresore öffnet es mit Masterpasswort oder
+  Wiederherstellungsschlüssel (gleiche Kryptografie wie `protect.js`; ein Test prüft die Kompatibilität). Nur mit
+  Passkeys geschützte Tresore kann es nicht öffnen.
+- **Break-Glass-Konten** lassen sich beim Anlegen eines Tresors mit „Verwalten“ eintragen und werden je Tenant für
+  weitere Tresore vorgeschlagen. Empfehlungen: Website „Tresore absichern“.
+
 ## Desktop-App ↔ Erweiterung
 
 Der Native-Messaging-Host ist nur für den eigenen Windows-Benutzer registriert und nur für die eingetragenen

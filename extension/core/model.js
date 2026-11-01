@@ -11,7 +11,7 @@ export const ITEM_TAG = 'kvpwsafe';
 export const ITEM_PREFIX = 'pws-';
 // Key Vault allows 25 KB per secret value; keep headroom.
 export const MAX_ITEM_BYTES = 24 * 1024;
-export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat' };
+export const ITEM_TYPES = { login: 'Login', note: 'Sichere Notiz', card: 'Kreditkarte', certificate: 'Zertifikat', server: 'Server' };
 // Certificate files live inside the item (base64), so they must fit into one secret together with the rest.
 export const CERT_MAX_BYTES = 16 * 1024;
 
@@ -120,6 +120,9 @@ export function normalizeItem(input = {}) {
     icon: isImageDataUrl(input.icon, ICON_MAX_CHARS) ? input.icon : '',
     card: normalizeCard(input.card),
     cert: normalizeCert(input.cert),
+    server: normalizeServer(input.server),
+    // Login used for Microsoft admin centers and Bastion (admin tools pick these accounts).
+    msAdmin: !!input.msAdmin,
     created: input.created || '',
     createdBy: input.createdBy || '',
   };
@@ -138,6 +141,36 @@ function normalizeCard(c = {}) {
 function normalizeCert(c = {}) {
   const data = /^[A-Za-z0-9+/=]*$/.test(str(c?.data)) ? str(c?.data) : '';
   return { fileName: str(c?.fileName).trim(), data, size: data ? Math.floor((data.length * 3) / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0) : 0 };
+}
+
+/** Entry key "containerId/itemId" of a linked entry, or ''. */
+const linkKey = (v) => (/^[^/\s]+\/[^/\s]+$/.test(str(v).trim()) ? str(v).trim() : '');
+
+/**
+ * Server / resource: where it is and how to connect. Credentials are either the entry's own user name and password
+ * or a link to another entry (only its key is stored, never a copy of the secret).
+ *   rdp: host + port, account = rdpLink or own; teamviewer: ID, password = tvLink or tvPassword;
+ *   bastion: link (portal or shareable link), Microsoft sign-in = bastionLoginLink, VM account = bastionVmLink or RDP's.
+ */
+function normalizeServer(s = {}) {
+  const port = Number.parseInt(s?.port, 10);
+  return {
+    host: str(s?.host).trim(),
+    port: port > 0 && port < 65536 ? port : 3389,
+    rdpLink: linkKey(s?.rdpLink),
+    tvId: str(s?.tvId).replace(/\s+/g, ''),
+    tvPassword: str(s?.tvPassword),
+    tvLink: linkKey(s?.tvLink),
+    bastionUrl: normalizeUrl(str(s?.bastionUrl)) || '',
+    bastionLoginLink: linkKey(s?.bastionLoginLink),
+    bastionVmLink: linkKey(s?.bastionVmLink),
+  };
+}
+
+/** Connection methods a server entry offers (also mirrored into its tags for the server list). */
+export function serverMethods(item) {
+  const s = item.server || {};
+  return [s.host ? 'rdp' : '', s.tvId ? 'teamviewer' : '', s.bastionUrl ? 'bastion' : ''].filter(Boolean);
 }
 
 /** Card number in groups of four for display ("4111 1111 1111 1111"). */
@@ -174,6 +207,8 @@ export function serializeItem(input, actor = '') {
     passkeys: item.passkeys,
     card: item.type === 'card' ? item.card : undefined,
     cert: item.type === 'certificate' && item.cert.data ? { fileName: item.cert.fileName, data: item.cert.data } : undefined,
+    server: item.type === 'server' ? item.server : undefined,
+    msAdmin: item.type === 'login' && item.msAdmin ? true : undefined,
     folder: item.folder,
     favorite: item.favorite,
     expires: item.expires || undefined,
@@ -194,7 +229,8 @@ export function serializeItem(input, actor = '') {
     n: truncate(item.title, 256),
   };
   // Lists show the user name – for cards the last four digits, for certificates the file name.
-  const sub = item.type === 'card' ? cardLast4(item.card.number) || item.card.holder : item.type === 'certificate' ? item.cert.fileName : item.username;
+  const sub = item.type === 'card' ? cardLast4(item.card.number) || item.card.holder : item.type === 'certificate' ? item.cert.fileName
+    : item.type === 'server' ? item.server.host || (item.server.tvId && `TeamViewer ${item.server.tvId}`) : item.username;
   if (sub) tags.u = truncate(sub, 256);
   const hosts = itemHosts(item);
   if (hosts.length) tags.h = truncate(hosts.join(' '), 256);
@@ -205,6 +241,8 @@ export function serializeItem(input, actor = '') {
   if (item.totp) tags.otp = '1';
   if (item.icon) tags.ic = '1';
   if (item.expires) tags.exp = item.expires;
+  if (item.type === 'login' && item.msAdmin) tags.adm = '1';
+  if (item.type === 'server' && serverMethods(item).length) tags.sv = serverMethods(item).join(' ');
   return { value, contentType: CONTENT_TYPE, tags, doc };
 }
 
@@ -227,6 +265,8 @@ export function summaryFromSecret(secret, containerId) {
     hasTotp: t.otp === '1',
     hasIcon: t.ic === '1',
     expires: /^\d{4}-\d{2}-\d{2}$/.test(t.exp || '') ? t.exp : '',
+    msAdmin: t.adm === '1',
+    methods: split(t.sv),
     updated: (secret.attributes?.updated || 0) * 1000,
   };
 }
