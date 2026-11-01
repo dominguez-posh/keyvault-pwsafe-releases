@@ -615,3 +615,8 @@ html.admin-theme { --accent: #ac5500; --accent-hover: #8b4500; --accent-soft: #f
 /* Passkey rows can be dragged onto another login in the list. */
 .passkey-row[draggable="true"] { cursor: grab; }
 .row-item.drop { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+
+/* Version at the bottom right: the detail pane keeps a free strip below its content, so the last line of an entry
+   never ends under it; a small pill in the window colour keeps it readable while content scrolls past. */
+.detail-pane::after { content: ""; display: block; height: 30px; }
+#app-version { padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--surface) 85%, transparent); }
