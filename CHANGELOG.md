@@ -4,6 +4,26 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.11 – 2026-11-02
+- Admin-Modus: Keevault startet immer im normalen Modus; den Admin-Modus schaltest du jedes Mal bewusst mit der PIN ein (#8).
+- Seitenleiste: Sie lässt sich nur so schmal ziehen, dass Sperren- und Menü-Knopf immer sichtbar bleiben (#6).
+- Microsoft-Anmeldung im Browser: Beim Abmelden („Von welchem Konto möchten Sie sich abmelden?“) erscheint keine Anmeldeleiste mehr und es meldet sich niemand automatisch an (#9). Die Leiste hat ab zwei Konten eine Suche (#10).
+- Ein-Klick-Anmeldung (Admin Center, Bastion): Zeigt Microsoft eine Kontoauswahl ohne das gewählte Konto, nimmt Keevault „Anderes Konto verwenden“ statt eines fremden Kontos; bei der Passkey-Abfrage steht der Passkey dieses Kontos oben (#13).
+- Bastion im Azure-Portal: Nach „Connect“ im Bastion-Bereich einer VM fragt die Browser-Erweiterung jetzt, ob der Zugang gespeichert werden soll. Ist die VM schon als Asset da, wird der Zugang dort hinterlegt (#12).
+- Mehrfachauswahl: Strg+Klick und Shift+Klick wählen jetzt Ordner und Einträge zusammen aus; per Drag & Drop wandert die ganze Auswahl in einen Ordner oder einen anderen Tresor – Ordner mit Unterordnern und Einträgen (#11).
+- Admin Center im Microsoft-Eintrag: neues Verwaltungs-Panel – „Rolle aktivieren“ (PIM) oben, darunter die Admin Center gruppiert (Identität & Sicherheit, Microsoft 365, Azure) als Kacheln mit eigenem Symbol und Farbe (#7).
+- Interne Verbesserungen: Die Website kommt nach der Prod-Freigabe automatisch auf keevault.de; Schlüsselspeicher über die neue asynchrone Electron-Schnittstelle.
+
+### English
+- Admin mode: Keevault always starts in normal mode; you switch admin mode on deliberately with the PIN each time (#8).
+- Sidebar: it can only be made as narrow as the lock and menu buttons allow – both always stay visible (#6).
+- Microsoft sign-in in the browser: signing out ("Which account do you want to sign out of?") no longer shows the sign-in bar or signs anyone in (#9). The bar has a search from two accounts on (#10).
+- One-click sign-in (admin centers, Bastion): if Microsoft's account picker lacks the chosen account, Keevault takes "Use another account" instead of someone else's; the passkey prompt puts that account's passkey first (#13).
+- Bastion in the Azure portal: after "Connect" in a VM's Bastion blade the browser extension now offers to save the access. If the VM is already an asset, the access is stored there (#12).
+- Multiple selection: Ctrl+click and Shift+click now select folders and entries together; drag and drop moves the whole selection into a folder or another vault – folders with their subfolders and entries (#11).
+- Admin centers in the Microsoft entry: new management panel – "Activate role" (PIM) on top, below it the admin centers grouped (identity & security, Microsoft 365, Azure) as tiles with their own symbol and colour (#7).
+- Internal: the website goes to keevault.de automatically after the Prod approval; key storage uses Electron's new asynchronous API.
+
 ## 0.9.10 – 2026-11-01
 - Die Versionsnummer unten rechts verdeckt keinen Eintrag mehr (Platz am Ende der Detailansicht). In der Überschrift „Tresore“ steht nur noch die Lupe, keine Anzahl; unten links nur noch „Hilfe“ (ohne Firmenname); „Infos“ steht direkt im Tresor-Menü statt unter „Verwaltung“.
 - Bastion-Zugang speichern: Meldest du dich über Bastion an einer VM an, fragt die Browser-Erweiterung, ob der Zugang gespeichert werden soll (Tresor und Ordner wählbar). Er wird als Asset (Azure-VM) mit VM-Name, Bastion-Link und VM-Konto angelegt; „Bastion“ im Eintrag verbindet direkt. Für schon vorhandene VMs kommt keine Frage.
