@@ -50,6 +50,8 @@ const DEFAULTS = {
   mcpScopes: [], // [{ vaultId, folder }] – folder '' = whole vault
   // Per agent: may it write (create/change), and until when the approval holds (null = until removed).
   agentRules: {}, // { [agent]: { write: boolean, until: ISO string | null } }
+  // Entries an agent reads without asking ("never ask again"), revoked from the entry's context menu.
+  mcpTrusted: [], // [{ agent, vaultId, entryId, title }]
   // Offline read mode: encrypted mirror of the vault answers (needs the app PIN); off by default, policy can forbid it.
   offlineMirror: false,
   // View (main menu): zoom factor of the window and see-through ground (off | light | strong, Windows 11 acrylic).

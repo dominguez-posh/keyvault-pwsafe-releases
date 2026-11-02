@@ -4,6 +4,14 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.12 – 2026-11-02
+- KI-Agenten (MCP): Bei der Frage „… möchte ein Passwort lesen“ gibt es jetzt „Für diesen Eintrag nie mehr fragen“. Danach liest genau dieser Agent genau dieses Passwort ohne Rückfrage – auch nach dem Sperren. Per Rechtsklick auf den Eintrag → „KI-Freigabe entziehen“ fragt Keevault wieder nach.
+- Update-Fenster: Es erscheint jetzt im Design der App – bei dunklem Design also dunkel, auch wenn Windows hell eingestellt ist.
+
+### English
+- AI agents (MCP): the "… wants to read a password" question now offers "Never ask again for this entry". That agent then reads that one password without asking – also after locking. Right-click the entry → "Revoke AI approval" and Keevault asks again.
+- Update window: it now follows the app's design – dark with the dark theme, even when Windows is set to light.
+
 ## 0.9.11 – 2026-11-02
 - Admin-Modus: Keevault startet immer im normalen Modus; den Admin-Modus schaltest du jedes Mal bewusst mit der PIN ein (#8).
 - Seitenleiste: Sie lässt sich nur so schmal ziehen, dass Sperren- und Menü-Knopf immer sichtbar bleiben (#6).
