@@ -142,8 +142,13 @@ export async function featureChecks(ctx) {
         await js(`[...document.querySelectorAll('.main-menu .seg[aria-label="${label}"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
         await sleep(400);
       };
+      // The update window (Keevault-Update.exe) gets the app's own theme, not Windows' app mode.
+      const updaterTheme = () => { const a = ctx.updaterArgs(); return a[a.indexOf('--theme') + 1]; };
       await segClick('Design', 'Dunkel');
       if (config.get().theme !== 'dark') fail('mainmenu', `theme not switched (${config.get().theme})`);
+      if (updaterTheme() !== 'dark') fail('mainmenu', `update window not dark with the dark theme (${ctx.updaterArgs().join(' ')})`);
+      await segClick('Design', 'Hell');
+      if (updaterTheme() !== 'light') fail('mainmenu', `update window not light with the light theme (${ctx.updaterArgs().join(' ')})`);
       await segClick('Design', 'System');
       await segClick('Transparenz', 'Stark');
       if (config.get().transparency !== 'strong') fail('mainmenu', `transparency not switched (${config.get().transparency})`);
@@ -349,6 +354,32 @@ export async function featureChecks(ctx) {
       await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
       await sleep(300);
       if (!(await js('!!document.querySelector(".context-menu [data-action=edit]")'))) fail('list', '"⋯" menu without "Edit"');
+    });
+
+    // ---- AI agents: "never ask again" for one entry shows "Revoke AI approval" in its context menu, which removes it
+    await step('agenttrust', async () => {
+      await js('document.querySelector(".context-menu")?.remove()');
+      const entry = await save({ type: 'login', title: 'Smoke Trust', username: 'agent@contoso.com', password: 'x' });
+      const menu = async () => {
+        await js('document.querySelector(".context-menu")?.remove(); [...document.querySelectorAll(".list li.row-item")].find((r) => r.querySelector(".row-title")?.firstChild?.textContent === "Smoke Trust")?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }))');
+        await sleep(300);
+        return !!(await js('!!document.querySelector(".context-menu [data-action=agent-untrust]")'));
+      };
+      if (await menu()) fail('agenttrust', 'revoke offered for an entry without approval');
+      ctx.trustAgentEntry({ agent: 'smoke-agent', vaultId: kvc.id, entryId: entry.id, title: entry.title });
+      await sleep(400);
+      if (!(await menu())) return fail('agenttrust', 'context menu offers no "Revoke AI approval" for a trusted entry');
+      await js('document.querySelector(".context-menu [data-action=agent-untrust]")?.click()');
+      await sleep(400);
+      const text = String(await js('document.querySelector("dialog[open]")?.textContent || ""'));
+      if (!text.includes('smoke-agent')) fail('agenttrust', `confirmation does not name the agent (${text.slice(0, 80)})`);
+      await js('document.querySelector("dialog[open] .modal-footer .btn.primary")?.click()');
+      for (let i = 0; i < 10 && (config.get().mcpTrusted || []).length; i++) await sleep(200);
+      if ((config.get().mcpTrusted || []).length) fail('agenttrust', `approval not removed (${JSON.stringify(config.get().mcpTrusted)})`);
+      let still = true;
+      for (let i = 0; i < 5 && still; i++) still = await menu();
+      if (still) fail('agenttrust', 'revoke still offered after revoking');
+      await js('document.querySelector(".context-menu")?.remove()');
     });
 
     // ---- folders: drag a folder onto another one – it moves in with its entries; never into itself

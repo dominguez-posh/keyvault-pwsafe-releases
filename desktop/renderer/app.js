@@ -200,6 +200,8 @@ window.pwsafe.onEvent((ev) => {
     questionDialog(ev);
   } else if (ev.type === 'questionClose') {
     openQuestions.get(ev.id)?.();
+  } else if (ev.type === 'mcpTrusted') {
+    loadAgentTrust();
   } else if (ev.type === 'passkeyFlash') {
     flashPasskey(ev.text);
   } else if (ev.type === 'checkUpdates') {
@@ -461,6 +463,18 @@ function setupSplitters(shell) {
 
 async function loadItems() {
   items = await call('items');
+  await loadAgentTrust();
+}
+
+// Entries AI agents read without asking ("never ask again"): item key → agent names, for the context menu.
+let agentTrust = new Map();
+async function loadAgentTrust() {
+  const map = new Map();
+  for (const x of await call('mcpTrusted').catch(() => [])) {
+    const key = `${x.vaultId}/${x.entryId}`;
+    map.set(key, [...(map.get(key) || []), x.agent]);
+  }
+  agentTrust = map;
 }
 
 async function reloadAll() {
@@ -2580,6 +2594,13 @@ function itemActions(i) {
     { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), disabled: !canWrite, onClick: () => duplicateItem(containerId, id) },
     { action: 'history', icon: 'history', label: t('Verlauf'), onClick: async () => historyDialog(await open()) },
     { action: 'copy-link', icon: 'link', label: t('Link kopieren'), disabled: !buildItemLink(c, id), onClick: () => copyItemLink(c, id) },
+    agentTrust.has(i.key) ? { action: 'agent-untrust', icon: 'shield', label: t('KI-Freigabe entziehen'), onClick: async () => {
+      const agents = agentTrust.get(i.key).join(', ');
+      if (!(await confirmDialog(t('KI-Freigabe entziehen'), t('„{agents}“ liest „{title}“ bisher ohne Rückfrage. Danach fragt Keevault wieder nach.', { agents, title: i.title }), { confirmLabel: t('Entziehen') }))) return;
+      await call('mcpUntrust', containerId, id);
+      await loadAgentTrust();
+      toast(t('KI-Freigabe entzogen'));
+    } } : null,
     { action: 'delete', icon: 'trash', label: t('Löschen'), danger: true, disabled: !canWrite, onClick: async () => {
       if (!(await confirmDialog(t('Eintrag löschen'), `${t('„{title}“ löschen?', { title: i.title })} ${await deleteNotice(c)}`, { confirmLabel: t('Löschen'), danger: true }))) return;
       await call('delete', containerId, id);

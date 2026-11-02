@@ -119,9 +119,11 @@ export class McpService {
    * vault(): open VaultSession or null (locked); confirmRead({ agent, title, vault }) → 'session' | 'once' | 'deny';
    * confirmWrite({ agent, action, title, vault, fields }) → boolean; audit({ agent, tool, vault, entry, result });
    * scope(): released vaults/folders (see scopeAllows; without it everything is released).
+   * trusted(agent, vaultId, entryId) → boolean, trust({ agent, vaultId, entryId, title }): entries the user released
+   * for an agent with "never ask again" (stored by the app, revoked from the entry's context menu).
    */
-  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }) }) {
-    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy });
+  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }), trusted = () => false, trust = () => {} }) {
+    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy, trusted, trust });
     this.clients = new Set();
     this.grants = new WeakMap();
     // Timed grants by agent name ("for 1 hour"): survive a restart of the agent process, end when the app locks.
@@ -171,14 +173,17 @@ export class McpService {
 
   /**
    * confirmRead answers: 'once' | 'session' (this agent process, max 8 h) | 'minutes:<n>' (this agent name for n
-   * minutes, max 8 h – also across restarts of the agent process) | anything else = denied.
+   * minutes, max 8 h – also across restarts of the agent process) | 'always' (this agent and this entry until the
+   * user revokes it) | anything else = denied.
    */
-  async requireRead(client, title, vault) {
+  async requireRead(client, item, container) {
     const now = Date.now();
     if ((this.grants.get(client)?.until || 0) > now || (this.timed.get(client.agent) || 0) > now) return;
-    const answer = await this.confirmRead({ agent: client.agent, title, vault });
+    if (this.trusted(client.agent, container.id, item.id)) return;
+    const answer = await this.confirmRead({ agent: client.agent, title: item.title, vault: container.name });
     const minutes = /^minutes:(\d+)$/.exec(String(answer))?.[1];
-    if (answer === 'session') this.grants.set(client, { until: now + SESSION_MS });
+    if (answer === 'always') this.trust({ agent: client.agent, vaultId: container.id, entryId: item.id, title: item.title });
+    else if (answer === 'session') this.grants.set(client, { until: now + SESSION_MS });
     else if (minutes) this.timed.set(client.agent, now + Math.min(Number(minutes) * 60_000, SESSION_MS));
     else if (answer !== 'once') throw fail(t('Vom Benutzer abgelehnt'));
   }
@@ -233,7 +238,7 @@ export class McpService {
         const c = await this.container(a.vaultId);
         const item = await this.session().getItem(c.id, a.entryId, { fresh: true });
         this.requireScope(c.id, item.folder);
-        await this.requireRead(client, item.title, c.name);
+        await this.requireRead(client, item, c);
         if (tool === 'get_totp') {
           if (!item.totp) throw fail(t('Kein Einmalcode (TOTP) hinterlegt'));
           const { code, remaining } = await totpCode(item.totp);
