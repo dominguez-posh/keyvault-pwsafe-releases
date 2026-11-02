@@ -14,6 +14,29 @@ import { expiryState } from './health.js';
  *           containerName: (id: string) => string, actions?: Array<{ icon, label, onClick, danger?, primary? }>,
  *           onRemovePasskey?: (credentialId: string) => void }} ctx
  */
+/** Admin centers of a Microsoft account: PIM ("activate a role") on top, then the centers grouped as tiles. */
+function adminPanel(item, links) {
+  // The colour as a custom property set in script (a style attribute would be blocked by the page's CSP).
+  const logo = (l, size) => {
+    const el = h('span', { class: 'admin-logo' }, icon(l.icon, size));
+    if (l.color) el.style.setProperty('--c', l.color);
+    return el;
+  };
+  const tile = (l) => h('button', { type: 'button', class: 'admin-link', dataset: { adminLink: l.id }, title: l.title || `${l.name} – ${t('öffnen und anmelden')}`, onclick: () => l.open(item) },
+    logo(l, 16), h('span', { class: 'admin-text' }, h('b', {}, l.name), l.host ? h('small', {}, l.host) : null));
+  // Product names stay as they are in every language.
+  const groups = [{ id: 'identity', label: t('Identität & Sicherheit') }, { id: 'm365', label: 'Microsoft 365' }, { id: 'azure', label: 'Azure' }];
+  const pim = links.find((l) => !l.group);
+  return h('div', { class: 'field admin-panel' }, h('label', {}, t('Verwaltung')),
+    pim ? h('button', { type: 'button', class: 'admin-link admin-pim', dataset: { adminLink: pim.id }, title: pim.title || pim.name, onclick: () => pim.open(item) },
+      logo(pim, 18), h('span', { class: 'admin-text' }, h('b', {}, t('Rolle aktivieren')), h('small', {}, 'Privileged Identity Management')), icon('external', 15)) : null,
+    ...groups.map(({ id, label }) => {
+      const list = links.filter((l) => l.group === id);
+      return list.length ? h('div', { class: 'admin-group', dataset: { adminGroup: id } }, h('div', { class: 'admin-group-title' }, label),
+        h('div', { class: 'admin-tiles' }, ...list.map(tile))) : null;
+    }));
+}
+
 export function itemDetail(item, ctx) {
   const rows = [];
   if (item.type === 'card') {
@@ -27,11 +50,7 @@ export function itemDetail(item, ctx) {
   if (item.type === 'certificate' && item.cert.data) rows.push(certificateField(item.cert, ctx));
   if (item.type === 'server') rows.push(...serverRows(item, ctx));
   // Desktop with admin tools on: PIM and the admin centers – one click opens it, signed in with this account.
-  if (ctx.adminLinks?.length && isMicrosoftLogin(item)) {
-    rows.push(h('div', { class: 'field' }, h('label', {}, t('Verwaltung')), h('div', { class: 'admin-links' },
-      ...ctx.adminLinks.map((l) => h('button', { type: 'button', class: 'admin-link', dataset: { adminLink: l.id }, title: l.title || l.name, onclick: () => l.open(item) },
-        h('span', { class: 'admin-link-icon' }, icon(l.icon, 15)), h('span', {}, l.name))))));
-  }
+  if (ctx.adminLinks?.length && isMicrosoftLogin(item)) rows.push(adminPanel(item, ctx.adminLinks));
   if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
   if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
   if (item.totp) rows.push(totpField(item.totp, ctx));

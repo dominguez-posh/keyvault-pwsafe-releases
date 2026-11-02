@@ -60,6 +60,7 @@ export async function featureChecks(ctx) {
       if (await js('!!document.querySelector(".sidebar .nav") && !!document.querySelector(".list-pane .list-scroll")')) return;
       await sleep(250);
     }
+    if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log('[features] UI not ready:', await js('JSON.stringify({ dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => d.innerText.slice(0, 200)), body: document.body.innerText.slice(0, 300) })'));
   };
   const step = async (area, fn) => {
     const started = Date.now();
@@ -170,7 +171,11 @@ export async function featureChecks(ctx) {
       await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=main]")?.click(); document.querySelector(".main-menu [data-action=trash]")?.click()');
       let listed = false;
       for (let i = 0; i < 10 && !listed; i++) { await sleep(300); listed = await js(`!!document.querySelector('dialog[open] [data-restore="${gone.id}"]')`); }
-      if (!listed) { fail('trash', 'main menu → trash does not list the deleted entry'); return; }
+      if (!listed) {
+        if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log('[features] trash screen:', await js('JSON.stringify({ dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => d.innerText.slice(0, 300)), body: document.body.innerText.slice(0, 400) })'));
+        fail('trash', 'main menu → trash does not list the deleted entry');
+        return;
+      }
       await js(`document.querySelector('dialog[open] [data-restore="${gone.id}"]').click()`);
       let back = false;
       for (let i = 0; i < 30 && !back; i++) { await sleep(400); back = (await vault.summaries()).some((x) => x.id === gone.id); }
@@ -279,6 +284,36 @@ export async function featureChecks(ctx) {
       await js('document.querySelector(".context-menu")?.remove()');
     });
 
+    // ---- start: admin mode is always off after a start (#8)
+    await step('adminstart', async () => {
+      config.update({ adminTools: true });
+      ctx.startInNormalMode();
+      if (config.get().adminTools) fail('adminstart', 'admin mode survives a start');
+    });
+
+    // ---- narrow sidebar: lock and menu button stay visible, even in admin mode (#6)
+    await step('narrowsidebar', async () => {
+      await setAdmin(true);
+      const r = JSON.parse(await js(`(() => {
+        const sp = document.querySelector(".shell > .splitter");
+        const x = sp.getBoundingClientRect().left;
+        const ev = (type, clientX) => new PointerEvent(type, { bubbles: true, clientX, pointerId: 1 });
+        sp.dispatchEvent(ev("pointerdown", x));
+        sp.dispatchEvent(ev("pointermove", x - 600));
+        sp.dispatchEvent(ev("pointerup", x - 600));
+        const side = document.querySelector(".sidebar").getBoundingClientRect();
+        const box = (q) => { const b = document.querySelector(q)?.getBoundingClientRect(); return b ? { l: b.left, r: b.right, w: b.width } : null; };
+        const out = { side: Math.round(side.width), menu: box(".brand .menu-btn"), lock: box(".brand .icon-btn"), right: side.right };
+        sp.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        return JSON.stringify(out);
+      })()`));
+      if (r.side > 240) fail('narrowsidebar', );
+      if (r.side > 240) fail('narrowsidebar', `dragging the splitter did not narrow the sidebar (${r.side}px)`);
+      const inside = (b) => b && b.w >= 24 && b.r <= r.right + 1;
+      if (!inside(r.menu) || !inside(r.lock)) fail('narrowsidebar', `menu/lock button cut off at the narrowest sidebar (${JSON.stringify(r)})`);
+      await setAdmin(false);
+    });
+
     // ---- sidebar foot: only Help (no company name)
     await step('sidebarfoot', async () => {
       if (await js('!!document.querySelector(".sidebar-foot .org-name")')) fail('sidebarfoot', 'company name back in the sidebar foot');
@@ -347,6 +382,50 @@ export async function featureChecks(ctx) {
       const moved = (await vault.summaries()).find((x) => x.containerId === kvc.id && x.title === 'Smoke in A');
       if (moved?.folder !== 'Smoke B/Smoke A') fail('folderdrag', `entry of the dragged folder is in "${moved?.folder}"`);
       if ((await vault.summaries()).find((x) => x.title === 'Smoke in B')?.folder !== 'Smoke B') fail('folderdrag', 'target folder content changed');
+    });
+
+    // ---- several folders and an entry selected together (Ctrl+click) and dragged into a folder at once (#11)
+    await step('multidrag', async () => {
+      await save({ type: 'login', title: 'Smoke in C', username: 'c', password: 'x', folder: 'Smoke C' });
+      await save({ type: 'login', title: 'Smoke in D', username: 'd', password: 'x', folder: 'Smoke D' });
+      await save({ type: 'login', title: 'Smoke in T', username: 't', password: 'x', folder: 'Smoke T' });
+      await save({ type: 'login', title: 'Smoke loose', username: 'l', password: 'x' });
+      await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
+      for (let i = 0; i < 15; i++) {
+        await sleep(300);
+        const rows = String(await js('[...document.querySelectorAll(".list li.row-item .row-title")].map((e) => e.textContent).join("|")'));
+        if (['Smoke C', 'Smoke D', 'Smoke T', 'Smoke loose'].every((x) => rows.includes(x))) break;
+      }
+      const row = (title) => `[...document.querySelectorAll(".list li.row-item")].find((r) => r.querySelector(".row-title")?.firstChild?.textContent === ${JSON.stringify(title)})`;
+      for (const title of ['Smoke C', 'Smoke D', 'Smoke loose']) {
+        await js(`${row(title)}?.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }))`);
+        await sleep(250);
+      }
+      const sel = JSON.parse(await js(`JSON.stringify({ multi: [...document.querySelectorAll(".list li.row-item.multi .row-title")].map((e) => e.firstChild?.textContent), head: document.querySelector(".detail-pane .multi-selection h2")?.textContent || "" })`));
+      if (['Smoke C', 'Smoke D', 'Smoke loose'].some((x) => !sel.multi.includes(x))) fail('multidrag', `Ctrl+click did not select folders and entry together (${sel.multi.join(", ")})`);
+      if (!/2 Ordner/.test(sel.head)) fail('multidrag', `detail pane does not count the folders (${sel.head})`);
+      const r = await js(`(() => {
+        const src = ${row('Smoke C')}, dst = ${row('Smoke T')};
+        if (!src || !dst) return "rows missing";
+        const dt = new DataTransfer();
+        src.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: dt }));
+        const over = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt });
+        dst.dispatchEvent(over);
+        if (!over.defaultPrevented) return "target did not accept the selection";
+        dst.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+        src.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer: dt }));
+        return "ok";
+      })()`);
+      if (r !== 'ok') fail('multidrag', r);
+      const where = async () => Object.fromEntries((await vault.summaries()).filter((x) => x.containerId === kvc.id && /^Smoke (in [CDT]|loose)$/.test(x.title)).map((x) => [x.title, x.folder || '']));
+      let w = {};
+      for (let i = 0; i < 20; i++) {
+        await sleep(400);
+        w = await where();
+        if (w['Smoke loose'] === 'Smoke T' && w['Smoke in C'] === 'Smoke T/Smoke C' && w['Smoke in D'] === 'Smoke T/Smoke D') break;
+      }
+      const want = { 'Smoke in C': 'Smoke T/Smoke C', 'Smoke in D': 'Smoke T/Smoke D', 'Smoke in T': 'Smoke T', 'Smoke loose': 'Smoke T' };
+      if (JSON.stringify(Object.keys(want).map((k) => w[k])) !== JSON.stringify(Object.values(want))) fail('multidrag', `after the drop: ${JSON.stringify(w)}`);
     });
 
     // ---- passkey: drag it from the entry onto another login in the list – it moves there (after one confirmation)
@@ -419,6 +498,19 @@ export async function featureChecks(ctx) {
       await openItem('Smoke Microsoft');
       const tiles = await js('[...document.querySelectorAll(".detail-pane [data-admin-link]")].map((b) => b.dataset.adminLink).join(",")');
       for (const id of ['pim', 'm365', 'entra', 'intune', 'azure']) if (!String(tiles).split(',').includes(id)) fail('admin', `tile "${id}" missing`);
+      // #7: PIM as the first, wide action; the centers in three groups, each tile with its own symbol on its colour.
+      const panel = JSON.parse(await js(`JSON.stringify((() => {
+        const p = document.querySelector(".detail-pane .admin-panel");
+        const tiles = [...(p?.querySelectorAll(".admin-link") || [])];
+        return {
+          first: tiles[0]?.dataset.adminLink || "",
+          groups: [...(p?.querySelectorAll(".admin-group") || [])].map((g) => g.dataset.adminGroup).join(","),
+          bare: tiles.filter((b) => !b.querySelector(".admin-logo svg *") || getComputedStyle(b.querySelector(".admin-logo")).backgroundImage === "none").map((b) => b.dataset.adminLink),
+          colors: new Set(tiles.map((b) => b.querySelector(".admin-logo")?.style.getPropertyValue("--c"))).size,
+        };
+      })())`));
+      if (panel.first !== 'pim' || panel.groups !== 'identity,m365,azure') fail('admin', `admin panel layout: ${JSON.stringify(panel)}`);
+      if (panel.bare.length || panel.colors < 8) fail('admin', `admin tiles without their own symbol/colour: ${JSON.stringify(panel)}`);
       ctx.clearSignIns();
       await js('document.querySelector(".detail-pane [data-admin-link=entra]")?.click()');
       await sleep(400);

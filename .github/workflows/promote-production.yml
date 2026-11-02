@@ -54,8 +54,26 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --quiet --tags origin
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # Only forward: main must be an ancestor of the release (every Prod came from Early Access).
-          git merge --ff-only "$TAG"
+          # Exception: a merge on GitHub (e.g. a pull request from early-access) that adds no content of its own –
+          # then main gets a merge commit with exactly the release's files, still without a force push.
+          if ! git merge-base --is-ancestor HEAD "$TAG" && git diff --quiet "$(git merge-base HEAD "$TAG")" HEAD; then
+            git merge --ff-only "$(git commit-tree "$TAG^{tree}" -p HEAD -p "$TAG" -m "main auf $TAG")"
+          else
+            git merge --ff-only "$TAG"
+          fi
           git push --quiet origin main
       - name: Als „Latest" freigeben
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest --title "Keevault ${{ inputs.version }}"
+      - name: Website anstoßen
+        # The website (and its live demo) is built in the private Dev repo: "Website veröffentlichen" there. Needs the
+        # environment secret WEBSITE_DISPATCH_TOKEN (Actions: write on the Dev repo); without it this step only reports.
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+          DEV_REPO: ${{ vars.DEV_REPO || 'dominguez-posh/keyvault-pwsafe' }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::WEBSITE_DISPATCH_TOKEN fehlt – Website von Hand hochladen"; exit 0; fi
+          gh workflow run website.yml --repo "$DEV_REPO" -f version="${{ inputs.version }}"
+          echo "Website-Upload für ${{ inputs.version }} gestartet ($DEV_REPO)"

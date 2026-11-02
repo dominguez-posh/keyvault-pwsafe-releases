@@ -6,7 +6,7 @@
 
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
-import { hostFromUrl, itemMatchesHost, urlScore } from './core/match.js';
+import { hostFromUrl, itemMatchesHost, rankCandidates } from './core/match.js';
 import { itemHosts } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
@@ -251,6 +251,7 @@ function contentStrings() {
     saveTitle: t('Login speichern?'),
     bastionTitle: t('Bastion-Zugang speichern?'),
     bastionHint: t('Als Asset (Azure-VM) mit Bastion-Link – im Eintrag verbindet „Bastion“ direkt.'),
+    bastionExisting: t('Die VM ist schon als Asset da – der Zugang wird dort hinterlegt.'),
     folderPlaceholder: t('Ordner (optional), z. B. Kunde/Azure'),
     update: t('Aktualisieren'),
     save: t('Speichern'),
@@ -314,7 +315,9 @@ async function writableContainers() {
 }
 
 // Bastion: its sign-in form lives on these hosts (portal blade or shareable link); the VM comes from the tab's address.
-const BASTION_HOSTS = /(^|\.)(bastion\.azure\.com|reactblade\.portal\.azure\.net|portal\.azure\.net)$/i;
+const BASTION_HOSTS = /(^|\.)(bastion\.azure\.com|reactblade\.portal\.azure\.net|portal\.azure\.net|portal\.azure\.com)$/i;
+// In the portal itself only the VM's Bastion/Connect blade counts (not every form on a VM page).
+const BASTION_BLADE = /\/virtualMachines\/[^/?#]+\/(bastionHost|bastion|connect)/i;
 const VM_IN_URL = /\/subscriptions\/[^/]+\/resource[gG]roups\/[^/]+\/providers\/Microsoft\.Compute\/virtualMachines\/([^/?#]+)/;
 
 /** The VM a Bastion sign-in belongs to: name and portal link from the tab's address (portal blade), else the page. */
@@ -324,6 +327,7 @@ async function bastionContext(sender) {
   const tab = await chrome.tabs.get(sender.tab.id).catch(() => null);
   const url = decodeURIComponent(String(tab?.url || ''));
   const m = VM_IN_URL.exec(url);
+  if (m && /(^|\.)portal\.azure\.com$/i.test(host) && !BASTION_BLADE.test(url)) return null;
   if (m) return { vmName: m[1], bastionUrl: String(tab.url).replace(/\/(connect|bastionHost)(\/.*)?$/i, '/bastionHost') };
   // Shareable link (bst-….bastion.azure.com/api/shareable-url/…): the link itself, named after the page.
   if (/bastion\.azure\.com$/i.test(host) && /^https:/i.test(tab?.url || '')) return { vmName: (tab.title || host).slice(0, 80), bastionUrl: tab.url };
@@ -338,6 +342,8 @@ async function describeCapture(p) {
     host: p.host,
     username: p.username,
     title: p.target?.title || p.bastion?.vmName || '',
+    // Bastion: the VM is already an asset – the login goes into it (no vault or folder to choose).
+    existing: p.action === 'bastion' && !!p.target,
     containers,
     defaultContainer: containers.some((c) => c.id === s.defaultContainer) ? s.defaultContainer : containers[0]?.id || '',
     ui: contentStrings(),
@@ -348,12 +354,21 @@ async function capture({ username = '', password = '' }, sender) {
   const s = await getSettings();
   const host = senderHost(sender);
   if (!s.savePrompt || !host || !password || s.neverSave.includes(host) || !(await isOpen())) return { action: 'none' };
-  // Bastion sign-in to a VM: offered as an asset (Azure VM with the Bastion link) – unless that VM is already there.
+  // Bastion sign-in to a VM: offered as an asset (Azure VM with the Bastion link). Is the VM already an asset, the
+  // login goes into it (unless it already holds exactly this account).
   const bastion = await bastionContext(sender);
   if (bastion) {
-    const known = (await vault.summaries()).some((x) => x.type === 'server' && x.title.toLowerCase() === bastion.vmName.toLowerCase());
-    if (known || !(await writableContainers()).length) return { action: 'none' };
-    const pending = { action: 'bastion', bastion, host, origin: new URL(sender.url).origin, username, password, created: Date.now() };
+    const writable = await writableContainers();
+    if (!writable.length) return { action: 'none' };
+    const known = (await vault.summaries()).find((x) => x.type === 'server' && x.title.toLowerCase() === bastion.vmName.toLowerCase()
+      && writable.some((c) => c.id === x.containerId));
+    let target = null;
+    if (known) {
+      const item = await vault.getItem(known.containerId, known.id).catch(() => null);
+      if (!item || (item.username === username && item.password === password)) return { action: 'none' };
+      target = { containerId: known.containerId, id: known.id, title: item.title };
+    }
+    const pending = { action: 'bastion', bastion, target, host, origin: new URL(sender.url).origin, username, password, created: Date.now() };
     await chrome.storage.session.set({ [captureKey(sender.tab.id)]: pending });
     const info = await describeCapture(pending);
     chrome.tabs.sendMessage(sender.tab.id, { type: 'save:show', info }, { frameId: 0 }).catch(() => {});
@@ -395,8 +410,15 @@ async function saveCaptured({ containerId, folder = '' }, sender) {
   const p = await pendingCapture(sender);
   if (!p) throw new Error(t('Nichts zu speichern'));
   let saved;
-  if (p.action === 'bastion') {
-    // Asset "Azure VM": name, Bastion link, the account on the VM – the entry's "Bastion" button connects directly.
+  if (p.action === 'bastion' && p.target) {
+    // The VM is already an asset: its account becomes the one just used; the Bastion link stays (or is added).
+    const item = await vault.getItem(p.target.containerId, p.target.id, { fresh: true });
+    saved = await vault.saveItem(p.target.containerId, {
+      ...item, username: p.username, password: p.password,
+      server: { ...item.server, kind: item.server?.kind || 'azurevm', bastionUrl: item.server?.bastionUrl || p.bastion.bastionUrl },
+    }, { expectedVersion: item.version });
+  } else if (p.action === 'bastion') {
+    // Asset"Azure VM": name, Bastion link, the account on the VM – the entry's "Bastion" button connects directly.
     saved = await vault.saveItem(containerId, {
       type: 'server', title: p.bastion.vmName, username: p.username, password: p.password, folder: String(folder || '').trim(),
       server: { kind: 'azurevm', bastionUrl: p.bastion.bastionUrl },
@@ -434,14 +456,9 @@ async function containerNames() {
 }
 
 /** Passkeys whose entry URL fits the page best come first (keevault.de/admin before keevault.de) – none is dropped. */
-function rankCandidates(list, pageUrl) {
-  if (!pageUrl) return list;
-  return list.map((c, i) => ({ c, i, score: urlScore(c.urls, pageUrl) })).sort((a, b) => b.score - a.score || a.i - b.i).map((x) => x.c);
-}
-
-async function publicCandidates(list, pageUrl = '') {
+async function publicCandidates(list, pageUrl = '', preferUser = '') {
   const names = await containerNames();
-  return rankCandidates(list, pageUrl).map((c) => ({
+  return rankCandidates(list, pageUrl, preferUser).map((c) => ({
     containerId: c.containerId,
     itemId: c.itemId,
     credentialId: c.passkey.credentialId,
@@ -514,6 +531,11 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
     created: Date.now(),
   };
   const open = await isOpen();
+  // A one-click sign-in (admin tile, Bastion) is running on this sign-in page: its account's passkey comes first.
+  if (kind === 'get' && open && !demo) {
+    const host = signInHost(sender);
+    if (host && SIGN_IN_HOSTS.test(host)) request.preferUser = (await app.signIn(host).catch(() => null))?.username || '';
+  }
   if (kind === 'get') {
     const locked = open ? await lockedProtected() : 0;
     if (open) {
@@ -521,12 +543,12 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
       if (!found.length && !locked) return { fallback: true };
       if (request.conditional) {
         await saveRequest(request);
-        return { conditional: { requestId: request.id, locked: false, lockedContainers: locked, candidates: await publicCandidates(found, request.pageUrl), ui: contentStrings() } };
+        return { conditional: { requestId: request.id, locked: false, lockedContainers: locked, candidates: await publicCandidates(found, request.pageUrl, request.preferUser), ui: contentStrings() } };
       }
       if (found.length) {
         // Chooser inside the page (a bar at the top, like the browser's own sheet); the window only on request.
         await saveRequest(request);
-        return { inline: { requestId: request.id, site: rpId, lockedContainers: locked, candidates: await publicCandidates(found, request.pageUrl), ui: contentStrings() } };
+        return { inline: { requestId: request.id, site: rpId, lockedContainers: locked, candidates: await publicCandidates(found, request.pageUrl, request.preferUser), ui: contentStrings() } };
       }
     } else if (request.conditional) {
       await saveRequest(request);
@@ -556,7 +578,7 @@ async function inlineFor(req) {
   if (req.kind === 'get') {
     const found = await vault.passkeyCandidates(rpId, options.allowCredentials);
     if (!found.length) return null;
-    return { requestId: req.id, site: rpId, lockedContainers: await lockedProtected(), candidates: await publicCandidates(found, req.pageUrl), ui: contentStrings() };
+    return { requestId: req.id, site: rpId, lockedContainers: await lockedProtected(), candidates: await publicCandidates(found, req.pageUrl, req.preferUser), ui: contentStrings() };
   }
   // Saving a new passkey also happens in the bar at the top of the page; the window only on "Other options".
   const containers = await writableContainers();
@@ -614,7 +636,7 @@ async function webauthnDetails({ requestId }) {
   if (!out.unlocked) return out;
   out.lockedContainers = (await vault.containers()).filter((c) => c.protected && c.locked).map((c) => ({ id: c.id, name: c.name, kind: c.kind }));
   if (req.kind === 'get') {
-    out.candidates = await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials), req.pageUrl);
+    out.candidates = await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials), req.pageUrl, req.preferUser);
     return out;
   }
   const s = await getSettings();
@@ -744,7 +766,7 @@ async function conditionalCandidates({ requestId }, sender) {
   return {
     locked: false,
     lockedContainers: await lockedProtected(),
-    candidates: await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials), req.pageUrl),
+    candidates: await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials), req.pageUrl, req.preferUser),
   };
 }
 

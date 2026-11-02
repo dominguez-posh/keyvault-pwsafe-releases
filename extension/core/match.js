@@ -73,3 +73,11 @@ export function normalizeUrl(value) {
   if (!s) return '';
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
 }
+
+/** Order of the offered passkeys: the account of a running one-click sign-in first, then by how well the entry fits the page. */
+export function rankCandidates(list, pageUrl, preferUser = '') {
+  const wanted = String(preferUser || '').trim().toLowerCase();
+  if (!pageUrl && !wanted) return list;
+  const isWanted = (c) => !!wanted && [c.passkey?.userName, c.username].some((u) => String(u || '').trim().toLowerCase() === wanted);
+  return list.map((c, i) => ({ c, i, score: (isWanted(c) ? 1000 : 0) + (pageUrl ? urlScore(c.urls, pageUrl) : 0) })).sort((a, b) => b.score - a.score || a.i - b.i).map((x) => x.c);
+}

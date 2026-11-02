@@ -338,7 +338,9 @@ body { overflow: hidden; }
 .brand { align-items: center; }
 .brand .spacer { flex: 1; }
 .brand .icon-btn { -webkit-app-region: no-drag; width: 32px; height: 32px; border-radius: 9px; }
-.brand-name { white-space: nowrap; }
+.brand-name { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Lock and menu button always stay visible – the name gives way first. */
+.brand > .icon-btn, .brand > img { flex-shrink: 0; }
 .menu-btn { position: relative; }
 .menu-dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: #e8a400; box-shadow: 0 0 0 2px var(--bg); }
 .main-menu { position: fixed; z-index: 1000; width: 270px; padding: 6px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
@@ -542,11 +544,27 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .new-split .new-more:hover { color: var(--text); }
 .new-split button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 /* Admin tools: PIM and admin centers as compact tiles in a Microsoft entry, connect buttons of a server entry. */
-.admin-links { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px; margin-top: 4px; }
-.admin-link { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 10px 6px 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
-.admin-link span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.admin-link:hover, .admin-link:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
-.admin-link-icon { flex: none; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+/* Admin panel of a Microsoft entry: PIM as a wide action, the centers as grouped tiles with their own symbols. */
+.admin-panel { display: grid; gap: 10px; }
+.admin-link { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .15s, background .15s, transform .15s, box-shadow .15s; }
+.admin-link:hover, .admin-link:focus-visible { border-color: color-mix(in srgb, var(--c, var(--accent)) 55%, var(--border)); background: color-mix(in srgb, var(--c, var(--accent)) 7%, var(--surface));
+  transform: translateY(-1px); box-shadow: 0 4px 14px rgb(0 0 0 / .08); outline: none; }
+.admin-link:active { transform: none; }
+.admin-logo { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--c) 82%, #fff), var(--c)); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .18); }
+.admin-text { display: grid; min-width: 0; line-height: 1.25; }
+.admin-text b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-text small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.admin-pim { --c: #8661c5; padding: 10px 12px; background: color-mix(in srgb, var(--c) 8%, var(--surface)); border-color: color-mix(in srgb, var(--c) 35%, var(--border)); }
+.admin-pim .admin-logo { width: 36px; height: 36px; border-radius: 10px; }
+.admin-pim .admin-text { flex: 1; }
+.admin-pim .admin-text b { font-size: 14px; }
+.admin-pim > .icon:last-child { color: var(--muted); }
+.admin-group { display: grid; gap: 6px; }
+.admin-group-title { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.admin-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 6px; }
 /* Linked entry in the device form: a field that opens a search window instead of a drop-down with every entry. */
 .link-pick { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 38px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .link-pick:hover, .link-pick:focus-visible { border-color: var(--accent); outline: none; }
@@ -620,3 +638,6 @@ html.admin-theme { --accent: #ac5500; --accent-hover: #8b4500; --accent-soft: #f
    never ends under it; a small pill in the window colour keeps it readable while content scrolls past. */
 .detail-pane::after { content: ""; display: block; height: 30px; }
 #app-version { padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--surface) 85%, transparent); }
+
+/* Mixed selection: folders in the list of the detail pane. */
+.multi-list .multi-folder { display: flex; align-items: center; gap: 6px; font-weight: 600; }
