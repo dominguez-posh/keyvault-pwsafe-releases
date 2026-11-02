@@ -790,6 +790,22 @@ const ADMIN_CENTER_HOSTS = ['admin.microsoft.com', 'entra.microsoft.com', 'intun
   'admin.exchange.microsoft.com', 'admin.teams.microsoft.com', 'portal.azure.com'];
 
 /**
+ * Azure portal, Entra and Intune open in the account's tenant (#@contoso.com): a browser signed in with an account of
+ * another tenant then has to sign in again – otherwise Microsoft keeps that account silently and the extension never
+ * gets to pick the chosen one.
+ */
+const AZURE_PORTAL_HOSTS = ['portal.azure.com', 'entra.microsoft.com', 'intune.microsoft.com'];
+let lastAdminUrl = '';
+function adminCenterUrl(url, username) {
+  const domain = /^[^@\s]+@([a-z0-9-]+(?:\.[a-z0-9-]+)+)$/i.exec(String(username || '').trim())?.[1];
+  const u = new URL(url);
+  if (!domain || !AZURE_PORTAL_HOSTS.includes(u.hostname)) return url;
+  const view = u.hash.replace(/^#\/?/, '');
+  u.hash = `@${domain.toLowerCase()}${view ? `/${view}` : ''}`;
+  return u.toString();
+}
+
+/**
  * A second copy installed another way – the per-machine MSI next to the per-user EXE or the other way round. Both
  * appear as "Keevault" in the Start menu and only one of them is kept up to date, so people end up in an old version.
  * Returns { dir, version, kind } of the other copy, or null.
@@ -1380,8 +1396,8 @@ function applyView() {
   win.webContents.setZoomFactor(Math.min(1.5, Math.max(0.8, Number(v.zoom) || 1)));
   // Colour scheme from the menu (screenshots with --theme keep theirs); the title bar recolours on 'updated'.
   if (!forcedTheme) nativeTheme.themeSource = v.theme === 'light' || v.theme === 'dark' ? v.theme : 'system';
-  // Transparency: the whole window becomes see-through, the programs behind it shine through (light 95 %, strong 75 %).
-  win.setOpacity(v.transparency === 'strong' ? 0.75 : v.transparency === 'light' ? 0.95 : 1);
+  // Transparency: the whole window becomes see-through, the programs behind it shine through (light 98.5 %, strong 95 %).
+  win.setOpacity(v.transparency === 'strong' ? 0.95 : v.transparency === 'light' ? 0.985 : 1);
 }
 
 /** Window buttons over the hidden title bar: the ground colour of the app (extension/styles/app.css --bg). */
@@ -2359,9 +2375,13 @@ const api = {
       // not a URL
     }
     if (!ADMIN_CENTER_HOSTS.includes(host)) throw new Error(t('Unbekanntes Admin Center'));
-    if (key) addSignInJob(MS_LOGIN_HOSTS, String(key), 'microsoft');
+    if (key) {
+      addSignInJob(MS_LOGIN_HOSTS, String(key), 'microsoft');
+      url = adminCenterUrl(url, (await vault.getItem(...splitEntryKey(String(key)))).username);
+    }
+    lastAdminUrl = url;
     if (!smokeTest) await shell.openExternal(url);
-    return { signIn: !!key && !!bridge?.clients?.size };
+    return { signIn: !!key && !!bridge?.clients?.size, url };
   },
   /** Connects to a server entry: RDP (mstsc with the account), TeamViewer, or Bastion in the browser. */
   async connectServer({ containerId, id, method }) {
@@ -3501,7 +3521,10 @@ function runSmokeTest() {
           const saved = await vault.saveItem(kvc.id, { type: 'server', title: 'DC01', folder: '', server: { host: '10.0.0.4', rdpLink: login.key, tvId: '123456789', tvPassword: 'tv-secret', bastionUrl: 'https://portal.azure.com/#@contoso.com/resource/vm/connect', bastionLoginLink: login.key } });
           await vault.saveItem(kvc.id, { type: 'server', title: 'SQL01', server: { host: 'sql01.contoso.local', port: 3390 }, username: 'CONTOSO\sqladmin', password: 'x' });
           const full = await vault.getItem(kvc.id, login.id);
-          await api.openAdminCenter({ url: 'https://entra.microsoft.com', key: login.key });
+          const opened = await api.openAdminCenter({ url: 'https://entra.microsoft.com', key: login.key });
+          // Azure portal family opens in the account's tenant (another signed-in account must not be taken silently).
+          const domain = String(full.username || '').split('@')[1]?.toLowerCase();
+          if (domain && opened.url !== `https://entra.microsoft.com/#@${domain}`) errors.push(`admin: Entra not opened in the account's tenant (${opened.url})`);
           const ms = await signInFor('login.microsoftonline.com');
           if (ms?.username !== full.username || ms?.mode !== 'microsoft') errors.push('admin: Microsoft sign-in job not handed out');
           if (await signInFor('evil.example.com')) errors.push('admin: sign-in handed to another host');
@@ -3601,6 +3624,8 @@ function runSmokeTest() {
           js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe,
           clipboardHas: async (text) => (await runHelperExe('--clipboard-clear', text)) === 0,
           clearSignIns: () => { signInJobs = []; },
+          adminCenterUrl,
+          lastAdminUrl: () => lastAdminUrl,
           signInDone: (host) => browserHandlers.signInDone({ host }),
           // The feature checks use PIN 2468 (the personal vault check sets the same one).
           ensurePin: async () => {
