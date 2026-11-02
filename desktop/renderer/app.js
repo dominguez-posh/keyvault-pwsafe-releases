@@ -55,7 +55,7 @@ if (/Win/.test(navigator.platform)) {
   }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['open'] });
 }
 const panes = { sidebar: h('aside', { class: 'sidebar' }), list: h('section', { class: 'list-pane' }), detail: h('section', { class: 'detail-pane' }) };
-const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), type: '', vaultQuery: '', searchAll: false, devices: false };
+const ui = { view: 'all', containerId: null, selected: null, editing: null, editingItem: null, query: '', folder: '', folderOf: null, multi: new Set(), multiFolders: new Set(), anchor: null, type: '', vaultQuery: '', searchAll: false, devices: false };
 // Vaults that fit in the sidebar without scrolling; with more, the list scrolls and a search appears above it.
 const VAULTS_FIT = 5;
 const explicitFolders = new Map(); // containerId → created folders (also empty ones)
@@ -166,7 +166,7 @@ const protectCtx = {
 window.pwsafe.onEvent((ev) => {
   if (ev.type === 'locked') {
     Object.assign(ui, { selected: null, editing: null, editingItem: null });
-    ui.multi.clear();
+    clearSelection();
     busyContainers.clear();
     items = [];
     render();
@@ -391,7 +391,8 @@ async function render() {
 // Default split: the list is the widest column (about half the window), the detail beside it.
 // list: null = proportional (55 % of the width beside the sidebar) until the user drags it.
 const PANE_DEFAULTS = { sidebar: 280, list: null };
-const PANE_LIMITS = { sidebar: [180, 420], list: [260, 960] };
+// The sidebar never gets narrower than its head needs (logo, "Keevault for Admins", lock and menu button).
+const PANE_LIMITS = { sidebar: [236, 420], list: [260, 960] };
 const DETAIL_MIN = 340;
 
 function paneWidths() {
@@ -423,7 +424,7 @@ function setupSplitters(shell) {
     const el = h('div', { class: 'splitter', role: 'separator', 'aria-orientation': 'vertical', title: t('Breite ziehen – Doppelklick setzt zurück') });
     el.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      el.setPointerCapture(e.pointerId);
+      try { el.setPointerCapture(e.pointerId); } catch {}
       el.classList.add('dragging');
       shell.classList.add('resizing');
       const startX = e.clientX;
@@ -1092,7 +1093,7 @@ function modeSwitch() {
     if (devices && ui.view === 'passkeys') ui.view = 'all';
     ui.selected = null;
     ui.editing = null;
-    ui.multi.clear();
+    clearSelection();
     renderSidebar();
     renderList();
     renderDetail();
@@ -1195,13 +1196,10 @@ function renderList() {
       oncontextmenu: (e) => contextMenu(e, itemActions(i)),
       draggable: draggable ? 'true' : false,
       ondragstart: draggable ? (e) => {
-        // Dragging a selected row takes the whole selection along.
-        const keys = ui.multi.has(i.key) ? [...ui.multi] : [i.key];
-        e.dataTransfer.setData(DRAG_TYPE, keys.join('\n'));
-        e.dataTransfer.effectAllowed = 'move';
-        draggedKeys = keys;
+        // Dragging a selected row takes the whole selection along – selected folders included.
+        startDrag(e, container, ui.multi.has(i.key) ? [...ui.multi] : [i.key], ui.multi.has(i.key) ? [...ui.multiFolders] : []);
       } : undefined,
-      ondragend: draggable ? () => { draggedKeys = []; } : undefined,
+      ondragend: draggable ? endDrag : undefined,
       // A passkey dragged out of an entry lands on this login (another writable login, not its own entry).
       ondragover: (e) => {
         if (!e.dataTransfer.types.includes(DRAG_PASSKEY) || !passkeyFits(i)) return;
@@ -1220,30 +1218,16 @@ function renderList() {
         if (data && passkeyFits(i, data)) dropPasskey(data, i);
       },
       onclick: (e) => {
-      // Shift: range from the last clicked entry; Ctrl: toggle; plain click: single selection.
-      if (e.shiftKey && ui.selected) {
-        const order = [...rowsEl.querySelectorAll('li.row-item[data-key]')].map((el) => el.dataset.key);
-        const a = order.indexOf(ui.selected);
-        const b = order.indexOf(i.key);
-        if (a >= 0 && b >= 0) {
-          if (!ui.multi.size) ui.multi.add(ui.selected);
-          for (const k of order.slice(Math.min(a, b), Math.max(a, b) + 1)) ui.multi.add(k);
-          renderRows();
-          renderDetail();
-          return;
-        }
-      }
-      if (e.ctrlKey || e.metaKey) {
-        if (!ui.multi.size && ui.selected && ui.selected !== i.key) ui.multi.add(ui.selected);
-        if (ui.multi.has(i.key)) ui.multi.delete(i.key);
-        else ui.multi.add(i.key);
-        ui.selected = i.key;
+      // Shift: range from the last clicked row (entries and folders); Ctrl: toggle; plain click: single selection.
+      if (selectRow(e, `key:${i.key}`)) {
+        if (e.ctrlKey || e.metaKey) ui.selected = i.key;
         ui.editing = null;
         renderRows();
         renderDetail();
         return;
       }
-      ui.multi.clear();
+      clearSelection();
+      ui.anchor = `key:${i.key}`;
       ui.selected = i.key;
       ui.editing = null;
       renderRows();
@@ -1433,13 +1417,44 @@ let draggedPasskey = null; // { from: entry key, credentialId } while a passkey 
 let draggedVault = null; // container id while a vault row is dragged
 // What is being dragged right now (dataTransfer can only be read on drop; the vault rows decide earlier whether they accept).
 let draggedKeys = [];
-let draggedFolder = null; // { containerId, folder }
+let draggedFolder = null; // { containerId, folders: [...] } while folders are dragged (alone or with entries)
+
+/** Starts dragging entries (keys) and folders of container c; either list may be empty. */
+function startDrag(e, c, keys, folders) {
+  if (keys.length) e.dataTransfer.setData(DRAG_TYPE, keys.join('\n'));
+  if (folders.length) e.dataTransfer.setData(DRAG_FOLDER, [c.id, ...folders].join('\n'));
+  e.dataTransfer.effectAllowed = 'move';
+  draggedKeys = keys;
+  draggedFolder = folders.length ? { containerId: c.id, folders } : null;
+}
+
+function endDrag() {
+  draggedKeys = [];
+  draggedFolder = null;
+}
+
+/** What a drop carries: entry keys and { containerId, folders } (or null). */
+function dropped(e) {
+  const keys = e.dataTransfer.types.includes(DRAG_TYPE) ? e.dataTransfer.getData(DRAG_TYPE).split('\n').filter(Boolean) : [];
+  const [containerId, ...folders] = e.dataTransfer.types.includes(DRAG_FOLDER) ? e.dataTransfer.getData(DRAG_FOLDER).split('\n').filter(Boolean) : [];
+  endDrag();
+  return { keys, folder: containerId && folders.length ? { containerId, folders } : null };
+}
+
+/** Entries that travel inside one of the dragged folders anyway (they keep their place in it). */
+const outsideFolders = (keys, folder) => keys.filter((k) => {
+  const i = items.find((x) => x.key === k);
+  const at = i?.folder || '';
+  return !folder || !folder.folders.some((f) => at === f || at.startsWith(`${f}/`));
+});
 
 /** Whether the dragged entries (or folder) may go into vault c: writable, from another vault, nothing shared into the personal one. */
 function vaultAccepts(c, keys, folder = null) {
   if (folder) {
     if (!writable(c) || !featureAllowed(c, 'folders') || folder.containerId === c.id) return false;
-    return !(c.personal && !st.containers.find((x) => x.id === folder.containerId)?.personal);
+    if (c.personal && !st.containers.find((x) => x.id === folder.containerId)?.personal) return false;
+    // Entries dragged along with the folders must fit as well.
+    return !keys.length || vaultAccepts(c, keys);
   }
   if (!keys.length || !writable(c)) return false;
   const sources = keys.map((k) => splitKey(k)[0]);
@@ -1478,7 +1493,7 @@ function vaultDropTarget(c) {
         e.currentTarget.classList.toggle('drop-before', !half(e));
         return;
       }
-      const ok = e.dataTransfer.types.includes(DRAG_FOLDER) ? vaultAccepts(c, [], draggedFolder)
+      const ok = e.dataTransfer.types.includes(DRAG_FOLDER) ? vaultAccepts(c, draggedKeys, draggedFolder)
         : e.dataTransfer.types.includes(DRAG_TYPE) && vaultAccepts(c, draggedKeys);
       if (!ok) return;
       e.preventDefault();
@@ -1496,14 +1511,25 @@ function vaultDropTarget(c) {
         if (id && id !== c.id && !c.personal) await reorderVault(id, c.id, after);
         return;
       }
-      if (e.dataTransfer.types.includes(DRAG_FOLDER)) {
-        const [containerId, folder] = e.dataTransfer.getData(DRAG_FOLDER).split('\n');
-        draggedFolder = null;
-        if (containerId && folder && vaultAccepts(c, [], { containerId, folder })) await moveFolderTo(containerId, folder, c);
+      const { keys: all, folder } = dropped(e);
+      if (folder) {
+        if (!vaultAccepts(c, all, folder)) return;
+        const rest = outsideFolders(all, folder).map((k) => items.find((i) => i.key === k)).filter(Boolean);
+        if (folder.folders.length === 1 && !rest.length) {
+          await moveFolderTo(folder.containerId, folder.folders[0], c);
+          return;
+        }
+        // Several folders (and entries): one question for all of them.
+        if (!(await confirmDialog(t('Nach „{vault}“ verschieben?', { vault: c.name }),
+          t('{folders} Ordner (mit Unterordnern) und {n} Einträge nach „{vault}“ verschieben? Danach sehen alle mit Zugriff auf „{vault}“ die Einträge. Sie werden im Ziel neu angelegt und in der Quelle gelöscht.', { folders: folder.folders.length, n: rest.length, vault: c.name }),
+          { confirmLabel: t('Verschieben') }))) return;
+        for (const f of folder.folders) await moveFolderTo(folder.containerId, f, c, { confirmed: true });
+        if (rest.length) await moveItemsTo(rest, c.id);
+        clearSelection();
+        await reloadAll();
         return;
       }
-      const keys = e.dataTransfer.getData(DRAG_TYPE).split('\n').filter(Boolean);
-      draggedKeys = [];
+      const keys = all;
       if (!vaultAccepts(c, keys)) return;
       const list = keys.map((k) => items.find((i) => i.key === k)).filter(Boolean).filter((i) => i.containerId !== c.id);
       if (!list.length) return;
@@ -1521,12 +1547,15 @@ function vaultDropTarget(c) {
  * folder of the same vault, which moves in with its subfolders and entries (never into itself or a subfolder of it).
  */
 function dropTarget(folder, container = null) {
-  const folderFits = (src) => !!src && !!container && src.containerId === container.id
-    && src.folder !== folder && !folder.startsWith(`${src.folder}/`) && parentOf(src.folder) !== folder;
+  // Folders go in only within their vault, never into themselves or a subfolder of theirs; one that already lies
+  // directly in the target stays where it is (and does not block the others).
+  const oneFits = (f) => f !== folder && !folder.startsWith(`${f}/`);
+  const folderFits = (src) => !!src && !!container && src.containerId === container.id && src.folders.every(oneFits)
+    && src.folders.some((f) => parentOf(f) !== folder);
   return {
     ondragover: (e) => {
       const types = e.dataTransfer.types;
-      if (!types.includes(DRAG_TYPE) && !(types.includes(DRAG_FOLDER) && folderFits(draggedFolder))) return;
+      if (types.includes(DRAG_FOLDER) ? !folderFits(draggedFolder) : !types.includes(DRAG_TYPE)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       e.currentTarget.classList.add('drop');
@@ -1536,20 +1565,28 @@ function dropTarget(folder, container = null) {
       e.preventDefault();
       e.stopPropagation();
       e.currentTarget.classList.remove('drop');
-      if (e.dataTransfer.types.includes(DRAG_FOLDER)) {
-        const [containerId, src] = e.dataTransfer.getData(DRAG_FOLDER).split('\n');
-        draggedFolder = null;
-        if (folderFits({ containerId, folder: src })) moveFolderInto(container, src, folder);
+      const { keys: all, folder: src } = dropped(e);
+      if (src) {
+        if (!folderFits(src)) return;
+        moveSelectionInto(container, src.folders, outsideFolders(all, src), folder);
         return;
       }
-      const keys = e.dataTransfer.getData(DRAG_TYPE).split('\n').filter(Boolean);
-      if (keys.length > 1) moveManyToFolder(keys, folder);
-      else if (keys[0]) moveToFolder(keys[0], folder);
+      if (all.length > 1) moveManyToFolder(all, folder);
+      else if (all[0]) moveToFolder(all[0], folder);
     },
   };
 }
 
 const parentOf = (folder) => (folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '');
+
+/** Folders and entries dragged together into folder target of the same vault: the folders first, then the entries. */
+async function moveSelectionInto(c, folders, keys, target) {
+  for (const f of folders) if (parentOf(f) !== target) await moveFolderInto(c, f, target);
+  if (keys.length) await moveManyToFolder(keys, target);
+  clearSelection();
+  renderList();
+  renderDetail();
+}
 
 /** Moves folder src (with subfolders and entries) into target ('' = top level) of the same vault. */
 async function moveFolderInto(c, src, target) {
@@ -1681,15 +1718,22 @@ function folderRows(container, list, row, rerender) {
     const count = inside(f);
     const name = f.slice(prefix.length);
     const dragFolder = writable(container) && featureAllowed(container, 'folders');
-    out.push(h('li', { class: 'row-item folder-row', onclick: () => open(f), oncontextmenu: (e) => contextMenu(e, folderActions(container, f, count, open)), ...dropTarget(f, container),
+    out.push(h('li', { class: `row-item folder-row ${ui.multiFolders.has(f) ? 'multi' : ''}`, dataset: { folder: f },
+      // Ctrl/Shift select folders (together with entries); a plain click opens the folder.
+      onclick: (e) => {
+        if (selectRow(e, `folder:${f}`)) { rerender(); renderDetail(); return; }
+        clearSelection();
+        ui.anchor = null;
+        open(f);
+      },
+      oncontextmenu: (e) => contextMenu(e, folderActions(container, f, count, open)), ...dropTarget(f, container),
       draggable: dragFolder ? 'true' : false,
       ondragstart: dragFolder ? (e) => {
         if (e.target !== e.currentTarget) return;
-        e.dataTransfer.setData(DRAG_FOLDER, `${container.id}\n${f}`);
-        e.dataTransfer.effectAllowed = 'move';
-        draggedFolder = { containerId: container.id, folder: f };
+        const selected = ui.multiFolders.has(f);
+        startDrag(e, container, selected ? [...ui.multi] : [], selected ? [...ui.multiFolders] : [f]);
       } : undefined,
-      ondragend: dragFolder ? () => { draggedFolder = null; } : undefined },
+      ondragend: dragFolder ? endDrag : undefined },
       h('span', { class: 'folder-icon' }, icon('folder', 18)),
       h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, name), h('div', { class: 'row-sub' }, t('{count} Einträge', { count }))),
       !count && writable(container) ? h('button', { class: 'icon-btn', title: t('Leeren Ordner löschen'), onclick: async (e) => {
@@ -2513,7 +2557,7 @@ async function deleteNotice(container) {
 }
 
 function itemActions(i) {
-  if (ui.multi.size > 1 && ui.multi.has(i.key)) return multiActions();
+  if (selectionSize() > 1 && ui.multi.has(i.key)) return multiActions();
   const [containerId, id] = splitKey(i.key);
   const c = st.containers.find((x) => x.id === containerId) || {};
   const canWrite = writable(c);
@@ -2548,6 +2592,44 @@ function itemActions(i) {
 
 // ---------------------------------------------------------------- several entries at once (Shift/Ctrl)
 
+/** Clears the selection of entries and folders. */
+function clearSelection() {
+  ui.multi.clear();
+  ui.multiFolders.clear();
+}
+
+/** Entries and folders selected together. */
+const selectionSize = () => ui.multi.size + ui.multiFolders.size;
+
+/**
+ * Ctrl/Shift on a row of the list (entry or folder). token: "key:<entry key>" or "folder:<path>". Shift selects the
+ * range from the last clicked row, Ctrl toggles one row; folders and entries mix freely. Returns false for a plain click.
+ */
+function selectRow(e, token) {
+  const add = (tk) => (tk.startsWith('folder:') ? ui.multiFolders.add(tk.slice(7)) : ui.multi.add(tk.slice(4)));
+  const has = (tk) => (tk.startsWith('folder:') ? ui.multiFolders.has(tk.slice(7)) : ui.multi.has(tk.slice(4)));
+  const drop = (tk) => (tk.startsWith('folder:') ? ui.multiFolders.delete(tk.slice(7)) : ui.multi.delete(tk.slice(4)));
+  const anchor = ui.anchor || (ui.selected ? `key:${ui.selected}` : null);
+  if (e.shiftKey && anchor) {
+    const order = [...document.querySelectorAll('.list li.row-item')].map((el) => (el.dataset.key ? `key:${el.dataset.key}` : el.dataset.folder != null ? `folder:${el.dataset.folder}` : null)).filter(Boolean);
+    const a = order.indexOf(anchor);
+    const b = order.indexOf(token);
+    if (a >= 0 && b >= 0) {
+      add(anchor);
+      for (const tk of order.slice(Math.min(a, b), Math.max(a, b) + 1)) add(tk);
+      return true;
+    }
+  }
+  if (e.ctrlKey || e.metaKey) {
+    if (!selectionSize() && anchor && anchor !== token) add(anchor);
+    if (has(token)) drop(token);
+    else add(token);
+    ui.anchor = token;
+    return true;
+  }
+  return false;
+}
+
 const multiKeys = () => [...ui.multi].filter((k) => items.some((i) => i.key === k));
 const multiItems = () => multiKeys().map((k) => items.find((i) => i.key === k));
 
@@ -2563,19 +2645,22 @@ function multiActions() {
     '-',
     { action: 'multi-delete', icon: 'trash', label: t('{n} Einträge löschen', { n: list.length }), danger: true, disabled: !canWrite, onClick: () => deleteManyDialog(list) },
     '-',
-    { action: 'multi-clear', icon: 'x', label: t('Auswahl aufheben'), onClick: () => { ui.multi.clear(); renderRows(); renderDetail(); } },
+    { action: 'multi-clear', icon: 'x', label: t('Auswahl aufheben'), onClick: () => { clearSelection(); renderRows(); renderDetail(); } },
   ];
 }
 
 function renderMultiSelection() {
   const list = multiItems();
-  const actions = multiActions().filter((a) => a !== '-' && a.action !== 'multi-clear');
+  const folders = [...ui.multiFolders].sort((a, b) => a.localeCompare(b));
+  // With folders in the selection the buttons act on the entries only – dragging moves everything.
+  const actions = list.length ? multiActions().filter((a) => a !== '-' && a.action !== 'multi-clear') : [];
+  const lines = [...folders.map((f) => h('li', { class: 'multi-folder' }, icon('folder', 13), f.split('/').pop())), ...list.map((i) => h('li', {}, i.title))];
   panes.detail.replaceChildren(h('div', { class: 'placeholder multi-selection' }, icon('check', 40),
-    h('h2', {}, t('{n} Einträge ausgewählt', { n: list.length })),
-    h('p', { class: 'muted small' }, t('Shift+Klick wählt einen Bereich, Strg+Klick einzelne Einträge. Ziehen verschiebt alle in einen Ordner.')),
-    h('ul', { class: 'multi-list' }, ...list.slice(0, 12).map((i) => h('li', {}, i.title)), list.length > 12 ? h('li', { class: 'muted' }, `… +${list.length - 12}`) : null),
+    h('h2', {}, folders.length ? t('{folders} Ordner und {n} Einträge ausgewählt', { folders: folders.length, n: list.length }) : t('{n} Einträge ausgewählt', { n: list.length })),
+    h('p', { class: 'muted small' }, t('Shift+Klick wählt einen Bereich, Strg+Klick einzelne Einträge und Ordner. Ziehen verschiebt alles in einen Ordner oder Tresor.')),
+    h('ul', { class: 'multi-list' }, ...lines.slice(0, 12), lines.length > 12 ? h('li', { class: 'muted' }, `… +${lines.length - 12}`) : null),
     h('div', { class: 'actions' }, ...actions.map((a) => h('button', { type: 'button', class: a.danger ? 'btn danger' : 'btn', disabled: a.disabled, onclick: a.onClick }, icon(a.icon), a.label)),
-      h('button', { type: 'button', class: 'btn', onclick: () => { ui.multi.clear(); renderRows(); renderDetail(); } }, t('Auswahl aufheben')))));
+      h('button', { type: 'button', class: 'btn', onclick: () => { clearSelection(); renderRows(); renderDetail(); } }, t('Auswahl aufheben')))));
   return undefined;
 }
 
@@ -2670,13 +2755,13 @@ function moveManyDialog(list) {
  * ("Kunden/Contoso" → "Contoso", subfolders along); an existing folder of that name is merged. The source folder is
  * removed once every entry arrived.
  */
-async function moveFolderTo(sourceId, folder, target) {
+async function moveFolderTo(sourceId, folder, target, { confirmed = false } = {}) {
   const source = st.containers.find((c) => c.id === sourceId);
   const name = folder.split('/').pop();
   const inside = (f) => f === folder || f.startsWith(`${folder}/`);
   const map = (f) => name + f.slice(folder.length);
   const list = modeItems(sourceId).filter((i) => inside(i.folder || ''));
-  if (!(await confirmDialog(t('Nach „{vault}“ verschieben?', { vault: target.name }),
+  if (!confirmed && !(await confirmDialog(t('Nach „{vault}“ verschieben?', { vault: target.name }),
     t('Ordner „{folder}“ ({n} Einträge, mit Unterordnern) nach „{vault}“ verschieben? Danach sehen alle mit Zugriff auf „{vault}“ die Einträge. Sie werden im Ziel neu angelegt und in der Quelle gelöscht; gibt es dort schon einen Ordner „{folder}“, landet alles darin.', { folder: name, n: list.length, vault: target.name }),
     { confirmLabel: t('Verschieben') }))) return;
   try {
@@ -2711,7 +2796,7 @@ async function moveItemsTo(list, targetId, folderOf = null) {
       toast(`${i.title}: ${e.message}`, 'error');
     }
   }
-  ui.multi.clear();
+  clearSelection();
   ui.selected = list.length === 1 && last ? last.key : null;
   if (moved && !folderOf) toast(moved === 1 ? t('Verschoben') : t('{n} Einträge verschoben', { n: moved }));
   if (!folderOf) await reloadAll();
@@ -2774,7 +2859,7 @@ async function renderDetail() {
   const pane = panes.detail;
   call('selectItem', ui.selected).catch(() => {});
   if (ui.editing) return renderEditor();
-  if (ui.multi.size > 1) return renderMultiSelection();
+  if (selectionSize() > 1) return renderMultiSelection();
   if (!ui.selected) {
     pane.replaceChildren(h('div', { class: 'placeholder' }, placeholderMark(), h('p', {}, t('Wähle einen Eintrag aus oder lege einen neuen an.'))));
     return undefined;
@@ -2889,17 +2974,19 @@ async function connectServer(containerId, id, method) {
 // PIM "My roles" (activate eligible Entra roles) – the page aka.ms/pim leads to, opened directly so the sign-in can be
 // handed to the browser extension (only admin center hosts are allowed, see main.js). SharePoint goes through the M365
 // admin center, which knows the tenant.
+// Shown as a panel in the entry: PIM on top, the rest grouped; each with its own symbol (dom.js "ac-…") in a colour
+// close to the product's, so the centers are told apart at a glance.
 const ADMIN_LINKS = [
-  { id: 'pim', name: 'PIM', url: 'https://portal.azure.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/aadmigratedroles', icon: 'shield', title: t('Rolle mit Privileged Identity Management aktivieren') },
-  { id: 'm365', name: 'Microsoft 365', url: 'https://admin.microsoft.com', icon: 'users' },
-  { id: 'entra', name: 'Entra ID', url: 'https://entra.microsoft.com', icon: 'shield' },
-  { id: 'intune', name: 'Intune', url: 'https://intune.microsoft.com', icon: 'settings' },
-  { id: 'defender', name: 'Defender', url: 'https://security.microsoft.com', icon: 'shield' },
-  { id: 'purview', name: 'Purview', url: 'https://purview.microsoft.com', icon: 'note' },
-  { id: 'exchange', name: 'Exchange', url: 'https://admin.exchange.microsoft.com', icon: 'mail' },
-  { id: 'teams', name: 'Teams', url: 'https://admin.teams.microsoft.com', icon: 'users' },
-  { id: 'sharepoint', name: 'SharePoint', url: 'https://admin.microsoft.com/sharepoint', icon: 'folder' },
-  { id: 'azure', name: 'Azure Portal', url: 'https://portal.azure.com', icon: 'globe' },
+  { id: 'pim', name: 'PIM', url: 'https://portal.azure.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/aadmigratedroles', icon: 'ac-elevate', color: '#8661c5', title: t('Rolle mit Privileged Identity Management aktivieren') },
+  { id: 'entra', name: 'Entra ID', url: 'https://entra.microsoft.com', icon: 'ac-id', color: '#0078d4', group: 'identity', host: 'entra.microsoft.com' },
+  { id: 'defender', name: 'Defender', url: 'https://security.microsoft.com', icon: 'ac-shield', color: '#2d5bb9', group: 'identity', host: 'security.microsoft.com' },
+  { id: 'purview', name: 'Purview', url: 'https://purview.microsoft.com', icon: 'ac-compliance', color: '#6b4fbb', group: 'identity', host: 'purview.microsoft.com' },
+  { id: 'm365', name: 'Microsoft 365', url: 'https://admin.microsoft.com', icon: 'ac-apps', color: '#d83b01', group: 'm365', host: 'admin.microsoft.com' },
+  { id: 'exchange', name: 'Exchange', url: 'https://admin.exchange.microsoft.com', icon: 'mail', color: '#0364b8', group: 'm365', host: 'admin.exchange.microsoft.com' },
+  { id: 'teams', name: 'Teams', url: 'https://admin.teams.microsoft.com', icon: 'ac-people', color: '#5b5fc7', group: 'm365', host: 'admin.teams.microsoft.com' },
+  { id: 'sharepoint', name: 'SharePoint', url: 'https://admin.microsoft.com/sharepoint', icon: 'ac-share', color: '#038387', group: 'm365', host: 'SharePoint Admin Center' },
+  { id: 'intune', name: 'Intune', url: 'https://intune.microsoft.com', icon: 'ac-devices', color: '#0f7b6c', group: 'm365', host: 'intune.microsoft.com' },
+  { id: 'azure', name: 'Azure Portal', url: 'https://portal.azure.com', icon: 'ac-cloud', color: '#0089d6', group: 'azure', host: 'portal.azure.com' },
 ];
 
 /**
@@ -4430,8 +4517,8 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape' && ui.editing) {
     ui.editing = null;
     renderDetail();
-  } else if (e.key === 'Escape' && ui.multi.size) {
-    ui.multi.clear();
+  } else if (e.key === 'Escape' && selectionSize()) {
+    clearSelection();
     renderList();
     renderDetail();
   } else if (e.key === 'Delete' && ui.multi.size > 1 && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {

@@ -353,7 +353,8 @@
   // ------------------------------------------------------------ fields
 
   const USER_HINT = /user|login|e-?mail|account|konto|benutzer|anmelde|identifier|kennung/i;
-  const SUBMIT_HINT = /log ?in|sign ?in|anmeld|einlogg|weiter|next|continue|submit|register|registrier|speichern|save|ändern|change/i;
+  // "Connect"/"Verbinden": Bastion's sign-in to a VM (a plain button, no form).
+  const SUBMIT_HINT = /log ?in|sign ?in|anmeld|einlogg|weiter|next|continue|submit|register|registrier|speichern|save|ändern|change|connect|verbind/i;
 
   const visible = (el) => {
     const r = el.getBoundingClientRect();
@@ -813,8 +814,8 @@
     banner.append(close, title, desc, user);
     let select = null;
     let folder = null;
-    if (bastion) banner.append(el('div', 's', texts.bastionHint));
-    if ((info.action === 'save' || bastion) && info.containers.length > 1) {
+    if (bastion) banner.append(el('div', 's', info.existing ? texts.bastionExisting : texts.bastionHint));
+    if ((info.action === 'save' || (bastion && !info.existing)) && info.containers.length > 1) {
       select = el('select');
       for (const c of info.containers) {
         const o = el('option', '', c.name);
@@ -824,7 +825,7 @@
       }
       banner.append(select);
     }
-    if (bastion) {
+    if (bastion && !info.existing) {
       folder = el('input', 'q');
       folder.placeholder = texts.folderPlaceholder;
       banner.append(folder);
@@ -897,6 +898,11 @@
 
   const visibleInput = (sel) => { const e = document.querySelector(sel); return e && usable(e) ? e : null; };
   // The page asks for an account (name field, account tiles) or a password – only then the bar makes sense.
+  // Signing out (Microsoft's "Which account do you want to sign out of?") is not a sign-in: no bar, no auto sign-in.
+  const SIGN_OUT_PATH = /\/(oauth2\/(v2\.0\/)?logout|logout\.srf|logoutsession|signout)/i;
+  const SIGN_OUT_TEXT = /abmelden m(ö|oe)chten|abgemeldet|sign out of|signed out|you have signed out/i;
+  const signingOut = () => SIGN_OUT_PATH.test(location.pathname)
+    || SIGN_OUT_TEXT.test(document.querySelector('#loginHeader, [role=heading], .title, h1')?.textContent || '');
   const asksForAccount = () => !!(visibleInput('input[name=loginfmt]') || visibleInput('input[name=passwd]') || document.querySelector('[data-test-id] [role=button], #tilesHolder [data-test-id]'));
 
   function runSignIn(job, fresh, { onDone = () => call('cs:signInDone').catch(() => {}) } = {}) {
@@ -919,6 +925,9 @@
           const name = job.username.toLowerCase();
           const tile = name && [...document.querySelectorAll('[data-test-id]')].find((e) => (e.getAttribute('data-test-id') || '').toLowerCase() === name);
           if (tile && !done.has('tile')) { done.add('tile'); tile.click(); return; }
+          // "Pick an account" without this account: "Use another account" – never one of the other tiles.
+          const other = !tile && document.querySelector('#otherTile, [data-test-id=otherTile]');
+          if (other && visible(other) && !done.has('other')) { done.add('other'); other.click(); return; }
           const user = visibleInput('input[name=loginfmt]');
           if (user && job.username && !done.has('user')) { done.add('user'); setValue(user, job.username); next(); return; }
           const pw = visibleInput('input[name=passwd]');
@@ -968,6 +977,7 @@
     let waited = 0;
     const whenAsked = () => {
       if (!alive) return;
+      if (signingOut()) return;
       if (asksForAccount()) { show(); return; }
       if ((waited += 500) < 15_000) setTimeout(whenAsked, 500);
     };
@@ -1009,11 +1019,11 @@
           b.dataset.q = [a.title, a.username, a.container].join(' ').toLowerCase();
           return b;
         });
-        // Many accounts: a search field above a scrolling list (title, user name, vault); Enter takes the first hit.
+        // More than one account: a search field above a scrolling list (title, user name, vault); Enter takes the first hit.
         const box = el('div', 'ms-list');
         box.append(...entries);
         const parts = [close, title];
-        if (entries.length > 3) {
+        if (entries.length > 1) {
           const none = el('div', 's ms-none', texts.msNone);
           none.hidden = true;
           const q = el('input', 'q');
