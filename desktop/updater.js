@@ -40,8 +40,8 @@ export class Updater {
    * away in mode "auto"; beforeInstall(): called right before the app quits for the installation;
    * fetch: secureFetch (in memory).
    */
-  constructor({ mode, channel = () => 'stable', onState, offer, isIdle, beforeInstall, fetch, selfUpdate, windowCenter }) {
-    Object.assign(this, { mode, channel, onState, offer, isIdle, beforeInstall, fetch, windowCenter });
+  constructor({ mode, channel = () => 'stable', onState, offer, isIdle, beforeInstall, fetch, selfUpdate, windowCenter, theme }) {
+    Object.assign(this, { mode, channel, onState, offer, isIdle, beforeInstall, fetch, windowCenter, theme });
     // Policy SelfUpdate=0 ('managed'): IT distributes updates – the app only reports a newer version.
     this.kind = selfUpdate?.() === false ? 'managed' : installKind();
     this.state = { kind: this.kind, status: 'idle', current: app.getVersion(), version: null, notes: '', progress: 0, error: null, checked: null };
@@ -192,14 +192,22 @@ export class Updater {
       // Outside the installation folder: the setup replaces everything in it.
       const copy = path.join(path.dirname(setup), 'Keevault-Update.exe');
       fs.copyFileSync(helper, copy);
-      const args = ['--update', setup, '--from', app.getVersion(), '--to', this.state.version || '', '--pid', String(process.pid)];
-      const center = this.windowCenter?.();
-      if (center) args.push('--x', String(Math.round(center.x)), '--y', String(Math.round(center.y)));
-      if (silent) args.push('--silent');
-      spawn(copy, args, { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+      spawn(copy, this.helperArgs(setup, silent), { detached: true, stdio: 'ignore', windowsHide: false }).unref();
       return true;
     } catch {
       return false;
     }
+  }
+
+  /** Command line of Keevault-Update.exe for the downloaded setup. */
+  helperArgs(setup, silent) {
+    const args = ['--update', setup, '--from', app.getVersion(), '--to', this.state.version || '', '--pid', String(process.pid)];
+    const center = this.windowCenter?.();
+    if (center) args.push('--x', String(Math.round(center.x)), '--y', String(Math.round(center.y)));
+    // The update window looks like the app (its own dark/light setting), not like Windows' app mode.
+    const theme = this.theme?.();
+    if (theme === 'dark' || theme === 'light') args.push('--theme', theme);
+    if (silent) args.push('--silent');
+    return args;
   }
 }

@@ -83,6 +83,39 @@ test('mcp: timed grant is bound to the agent name, survives a new client, ends o
   assert.equal(asked.read, 3, 'revoking the agent ends the timed grant');
 });
 
+test('mcp: "never ask again" holds for this agent and this entry only, survives lock, ends when untrusted', async () => {
+  const v = fakeVault();
+  let answer = 'always';
+  let asked = 0;
+  let store = [];
+  const mcp = new McpService({
+    vault: () => v,
+    confirmRead: async () => { asked++; return answer; },
+    confirmWrite: async () => true,
+    trusted: (agent, vaultId, entryId) => store.some((x) => x.agent === agent && x.vaultId === vaultId && x.entryId === entryId),
+    trust: (grant) => { store.push(grant); },
+  });
+  const client = { agent: 'claude-ai' };
+  mcp.connect(client);
+  await mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });
+  assert.deepEqual(store, [{ agent: 'claude-ai', vaultId: 'kv-team', entryId: 'pws-1', title: 'Azure Admin' }]);
+  answer = 'once';
+  mcp.revoke(); // app locked and unlocked again
+  const fresh = { agent: 'claude-ai' };
+  mcp.connect(fresh);
+  assert.equal((await mcp.call(fresh, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' })).password, 'S3cret!');
+  assert.equal(asked, 1, 'trusted entry is read without asking, also after locking and in a new agent process');
+  await mcp.call(fresh, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-2' });
+  assert.equal(asked, 2, 'another entry still asks');
+  const other = { agent: 'copilot' };
+  mcp.connect(other);
+  await mcp.call(other, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });
+  assert.equal(asked, 3, 'another agent still asks');
+  store = [];
+  await mcp.call(fresh, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });
+  assert.equal(asked, 4, 'after revoking from the context menu it asks again');
+});
+
 test('mcp: "only once" asks every time, "deny" refuses', async () => {
   const once = service({ read: 'once' });
   await once.mcp.call(once.client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' });
