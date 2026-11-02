@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.13 – 2026-11-02
+- Microsoft-Anmeldung mit Passkey: Hat das Konto einen Passkey, nimmt Keevault ihn – auch wenn ein Passwort hinterlegt ist. Auf der Passwortseite wechselt Keevault selbst zu „Gesicht, Fingerabdruck, PIN oder Sicherheitsschlüssel“ und verwendet den Passkey dieses Kontos ohne weiteren Klick, wenn du die Anmeldung selbst gestartet hast (Kachel in der App oder Konto in der Leiste). Ein leeres Passwortfeld wird nie mehr abgeschickt.
+- Abmelden bei Microsoft: Danach meldet Keevault dich nicht sofort wieder an. Der offene Ein-Klick-Auftrag endet, und das gemerkte Konto startet erst wieder, wenn du selbst ein Konto wählst.
+- „Angemeldet bleiben?“ beantwortet Keevault nach seiner Anmeldung jetzt auch nach einem Passkey mit „Nein“.
+
+### English
+- Microsoft sign-in with a passkey: if the account has a passkey, Keevault uses it – even when a password is stored. On the password page Keevault switches to "face, fingerprint, PIN or security key" itself and uses that account's passkey without a further click when you started the sign-in (tile in the app or account in the bar). An empty password field is never submitted any more.
+- Signing out of Microsoft: Keevault no longer signs you straight back in. The open one-click sign-in ends, and the remembered account only starts again once you choose an account yourself.
+- "Stay signed in?" is now answered with "No" after Keevault's sign-in with a passkey too.
+
 ## 0.9.12 – 2026-11-02
 - KI-Agenten (MCP): Bei der Frage „… möchte ein Passwort lesen“ gibt es jetzt „Für diesen Eintrag nie mehr fragen“. Danach liest genau dieser Agent genau dieses Passwort ohne Rückfrage – auch nach dem Sperren. Per Rechtsklick auf den Eintrag → „KI-Freigabe entziehen“ fragt Keevault wieder nach.
 - Update-Fenster: Es erscheint jetzt im Design der App – bei dunklem Design also dunkel, auch wenn Windows hell eingestellt ist.

@@ -29,6 +29,9 @@ cpSync(arg('extension') || fileURLToPath(new URL('../extension', import.meta.url
 const manifest = JSON.parse(readFileSync(join(extensionPath, 'manifest.json'), 'utf8'));
 delete manifest.key;
 delete manifest.update_url;
+// The imitated Microsoft sign-in runs over http (as a secure origin, see the browser flags): the copy's passkey shim
+// also loads there.
+manifest.content_scripts.find((c) => c.world === 'MAIN').matches.push('http://login.microsoftonline.com/*', 'http://login.microsoft.com/*');
 writeFileSync(join(extensionPath, 'manifest.json'), JSON.stringify(manifest, null, 2));
 // A Keevault installed by policy (ExtensionInstallForcelist applies to every profile, the test one included) would
 // answer the page's WebAuthn relay as well and race the copy – the copy speaks on its own channel.
@@ -43,6 +46,14 @@ for (const f of ['content/webauthn-main.js', 'content/content.js']) {
   const src = readFileSync(p, 'utf8');
   if (!src.includes('const SIGN_IN_HTTPS_ONLY = true;')) throw new Error('background.js: SIGN_IN_HTTPS_ONLY nicht gefunden');
   writeFileSync(p, src.replace('const SIGN_IN_HTTPS_ONLY = true;', 'const SIGN_IN_HTTPS_ONLY = false;'));
+}
+// Passkeys need https – in the copy the imitated Microsoft sign-in (http, local port) counts like localhost.
+{
+  const p = join(extensionPath, 'core/webauthn.js');
+  const src = readFileSync(p, 'utf8');
+  const http = "!(url.protocol === 'http:' && localhost)";
+  if (!src.includes(http)) throw new Error('core/webauthn.js: https check not found');
+  writeFileSync(p, src.replace(http, "!(url.protocol === 'http:' && (localhost || host === 'login.microsoftonline.com' || host === 'login.microsoft.com'))"));
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
@@ -99,6 +110,24 @@ const msPickPage = msPage.replace('<form onsubmit="return false"><input name="lo
   `<div id="tiles"><div data-test-id="someone@else.com"><div role="button" id="wrongTile" onclick="signedIn.wrongTile = true">someone@else.com</div></div>
 <div id="otherTile" role="button" onclick="document.getElementById('tiles').remove(); document.querySelector('[name=loginfmt]').style.display = ''">Anderes Konto verwenden</div></div>
 <form onsubmit="return false"><input name="loginfmt" type="email" placeholder="Email" style="display:none">`);
+// Microsoft's password page with the switch to a passkey: an entry without a password must take the switch, never
+// submit the empty field.
+// The switch starts Microsoft's passkey prompt; signed in, it continues on login.microsoft.com (another origin) with
+// "Stay signed in?" – Keevault must answer "No" there too.
+const msPasskeyPage = msPage.replace('<input type="submit" id="idSIButton9" value="Next">',
+  `<a id="idA_PWD_SwitchToFido" href="#" style="display:none" onclick="signedIn.fido = true; navigator.credentials.get({ publicKey: { challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: location.hostname, userVerification: 'preferred' } }).then(() => { location.href = 'http://login.microsoft.com:' + location.port + '/mskmsi?pk=resolved'; }, (e) => { signedIn.passkey = e.name; }); return false">Verwenden Sie stattdessen Ihr Gesicht, Ihren Fingerabdruck, Ihre PIN oder Ihren Sicherheitsschlüssel</a>
+<input type="submit" id="idSIButton9" value="Next">`).replace('</script>', `document.getElementById('idSIButton9').addEventListener('click', () => {
+  if (document.querySelector('[name=passwd]').style.display === '') document.getElementById('idA_PWD_SwitchToFido').style.display = '';
+  if (signedIn.password === '') signedIn.emptySubmit = true;
+});
+</script>`);
+const msKmsiPage = `<!doctype html><meta charset="utf-8"><title>Stay signed in</title>
+<div id="KmsiDescription">Angemeldet bleiben?</div><input type="checkbox" id="KmsiCheckboxField">
+<input type="button" id="idBtn_Back" value="Nein">
+<script>
+window.signedIn = { passkey: new URLSearchParams(location.search).get('pk') };
+document.getElementById('idBtn_Back').addEventListener('click', () => { signedIn.staySignedIn = 'no'; });
+</script>`;
 // The Bastion blade inside the Azure portal (served as portal.azure.com, the VM in the address's #-part): no form,
 // a plain "Connect" button (#12).
 const portalBastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
@@ -108,12 +137,14 @@ const portalBastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</
 const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
 <form onsubmit="return false"><input name="username" autocomplete="username"><input name="password" type="password">
 <button type="submit">Connect</button></form>`;
-const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
+const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 
 const proc = spawn(browser, [
-  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1,MAP bst-smoke.bastion.azure.com 127.0.0.1,MAP portal.azure.com 127.0.0.1',
+  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1,MAP login.microsoft.com 127.0.0.1,MAP bst-smoke.bastion.azure.com 127.0.0.1,MAP portal.azure.com 127.0.0.1',
+  // WebAuthn needs a secure context: the imitated Microsoft sign-in runs over http on a local port.
+  `--unsafely-treat-insecure-origin-as-secure=http://login.microsoftonline.com:${server.address().port},http://login.microsoft.com:${server.address().port}`,
   `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
 
@@ -498,12 +529,59 @@ try {
   check(picked?.user === 'breakglass@contoso.onmicrosoft.com' && !picked?.wrongTile, `Kontoauswahl: falsches Konto (${JSON.stringify(picked)})`);
   pageErrors(pick.sessionId, 'ms-pick');
 
+  // Microsoft account with a passkey only: on the password page Keevault takes "face, fingerprint, PIN or security
+  // key" – never "Sign in" with an empty password. Started as the remembered account (automatic after the countdown).
+  const pkSaved = await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'login', title: 'Microsoft Passkey', username: 'passkey@contoso.onmicrosoft.com', password: '', urls: ['https://login.microsoftonline.com/'] } });
+  const remembered = await evaluate(options.sessionId, 'chrome.storage.local.get("msDefault").then((r) => r.msDefault || null)');
+  await evaluate(options.sessionId, `chrome.storage.local.set({ msDefault: ${JSON.stringify(`${personal.id}/${pkSaved?.id}`)} }).then(() => true)`);
+  const pkOnly = await open(`http://login.microsoftonline.com:${server.address().port}/mspk`);
+  const pkState = await waitFor(async () => { const r = await evaluate(pkOnly.sessionId, 'signedIn'); return (r.fido || r.emptySubmit) && r; }, 12000);
+  check(pkState?.user === 'passkey@contoso.onmicrosoft.com' && pkState?.fido && !pkState?.emptySubmit, `Nur Passkey: kein Wechsel zum Passkey (${JSON.stringify(pkState)})`);
+  pageErrors(pkOnly.sessionId, 'ms-passkey');
+
+  // Microsoft account with a password AND a passkey: the passkey comes first and is used without a click (the user
+  // started this sign-in); "Stay signed in?" afterwards on login.microsoft.com (another origin) gets "No".
+  const msPort = server.address().port;
+  const beforeKeys = new Set((await sw(options.sessionId, 'items')).map((x) => x.key));
+  const wa = await open(`http://login.microsoftonline.com:${msPort}/mswa`);
+  await sleep(800);
+  await evaluate(wa.sessionId, 'startCreate(), true');
+  const waSave = await waitFor(() => shadowNode(wa.sessionId, 'kvpwsafe-ui', '.kvtag .primary'));
+  check(waSave, `Microsoft-Passkey: Leiste zum Speichern fehlt (${await evaluate(wa.sessionId, 'JSON.stringify({ secure: isSecureContext, results })')})`);
+  if (waSave) await clickNode(wa.sessionId, '.kvtag .primary');
+  check(await waitFor(async () => (await evaluate(wa.sessionId, 'results')).create === 'resolved', 8000), 'Microsoft-Passkey: nicht angelegt');
+  const msPk = await waitFor(async () => (await sw(options.sessionId, 'items')).find((x) => !beforeKeys.has(x.key) && (x.hosts || []).includes('login.microsoftonline.com')), 8000);
+  check(msPk, 'Microsoft-Passkey: Eintrag fehlt');
+  if (msPk) {
+    const full = await sw(options.sessionId, 'item', { containerId: msPk.containerId, id: msPk.id });
+    await sw(options.sessionId, 'save', { containerId: msPk.containerId, item: { ...full, username: 'smoke@example.com', password: 'Pw-not-used' } });
+    await evaluate(options.sessionId, `chrome.storage.local.set({ msDefault: ${JSON.stringify(msPk.key)} }).then(() => true)`);
+    const both = await open(`http://login.microsoftonline.com:${msPort}/mspk?2`);
+    const bothState = await waitFor(async () => { const r = await evaluate(both.sessionId, 'signedIn'); return r?.staySignedIn && r; }, 15000);
+    const bothFinal = bothState || await evaluate(both.sessionId, 'JSON.stringify({ url: location.href, signedIn })');
+    check(bothState?.passkey === 'resolved' && bothState?.staySignedIn === 'no', `Passkey und Passwort: Passkey nicht automatisch oder „Angemeldet bleiben?“ nicht mit Nein beantwortet (${JSON.stringify(bothFinal)})`);
+    pageErrors(both.sessionId, 'ms-passkey-auto');
+  }
+  await evaluate(options.sessionId, `chrome.storage.local.set({ msDefault: ${JSON.stringify(remembered)} }).then(() => true)`);
+
   // Signing out (Microsoft's logout page, account tiles like a sign-in): no bar and no automatic sign-in (#9).
   const out = await open(`http://login.microsoftonline.com:${server.address().port}/common/oauth2/logout?post_logout_redirect_uri=x`);
   await sleep(5000);
   const outState = await evaluate(out.sessionId, 'JSON.stringify({ bar: !!document.querySelector("kvpwsafe-ui"), user: signedIn.user || null })');
   check(outState === JSON.stringify({ bar: false, user: null }), `Abmelden: Keevault bietet trotzdem eine Anmeldung an (${outState})`);
   pageErrors(out.sessionId, 'ms-logout');
+
+  // After signing out Microsoft returns to its sign-in page: the remembered account must not start by itself (it would
+  // sign straight in again); choosing an account in the bar still works and ends the pause.
+  const back = await open(`http://login.microsoftonline.com:${server.address().port}/ms?4`);
+  await sleep(6000);
+  const backState = await evaluate(back.sessionId, 'JSON.stringify({ user: signedIn.user || null })');
+  check(backState === JSON.stringify({ user: null }), `Nach dem Abmelden: gemerktes Konto meldet sich wieder an (${backState})`);
+  const backAcc = await barPoint(back.sessionId, firstAccount);
+  check(backAcc, 'Nach dem Abmelden: Leiste ohne Konten');
+  if (backAcc) await tap(back.sessionId, backAcc.x, backAcc.y);
+  check(await waitFor(async () => (await evaluate(back.sessionId, 'signedIn')).password, 8000), 'Nach dem Abmelden: Anmeldung per Klick in der Leiste geht nicht');
+  pageErrors(back.sessionId, 'ms-after-logout');
 
   // Import of the sample CSV.
   const before = (await sw(options.sessionId, 'items')).length;
