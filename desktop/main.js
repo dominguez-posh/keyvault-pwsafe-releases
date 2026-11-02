@@ -139,8 +139,8 @@ let offline = null;
 let offlineMode = false;
 const offlineMirror = () => (offline ||= new OfflineMirror({
   dir: app.getPath('userData'),
-  protect: (buf) => safeStorage.encryptString(Buffer.from(buf).toString('base64')),
-  unprotect: (buf) => Buffer.from(safeStorage.decryptString(Buffer.from(buf)), 'base64'),
+  protect: (buf) => safeStorage.encryptStringAsync(Buffer.from(buf).toString('base64')),
+  unprotect: async (buf) => Buffer.from((await safeStorage.decryptStringAsync(Buffer.from(buf))).result, 'base64'),
 }));
 const mirrorWanted = () => !!config.get().offlineMirror && !!config.get().appPin && !demo;
 
@@ -588,7 +588,7 @@ async function bindPersonalKeys({ force = false } = {}) {
 async function bindPersonalKey(entry, { force = false } = {}) {
   if (!entry?.vault || entry.vault.locked || !entry.vault.ck?.raw) return;
   if (!force && config.get().personalDeviceKeys?.[entry.path]) return;
-  if (!recentPin || Date.now() - recentPin.at > 10 * 60_000 || !safeStorage.isEncryptionAvailable()) return;
+  if (!recentPin || Date.now() - recentPin.at > 10 * 60_000 || !(await safeStorage.isAsyncEncryptionAvailable())) return;
   const salt = crypto.randomBytes(16);
   const key = crypto.pbkdf2Sync(recentPin.pin, salt, 310_000, 32, 'sha256');
   const iv = crypto.randomBytes(12);
@@ -596,7 +596,7 @@ async function bindPersonalKey(entry, { force = false } = {}) {
   cipher.setAAD(Buffer.from(`keevault-personal|${entry.id}`));
   const ct = Buffer.concat([cipher.update(Buffer.from(entry.vault.ck.raw)), cipher.final(), cipher.getAuthTag()]);
   const blob = JSON.stringify({ v: 1, vault: entry.id, salt: salt.toString('base64'), iv: iv.toString('base64'), ct: ct.toString('base64') });
-  config.update({ personalDeviceKeys: { ...config.get().personalDeviceKeys, [entry.path]: safeStorage.encryptString(blob).toString('base64') } });
+  config.update({ personalDeviceKeys: { ...config.get().personalDeviceKeys, [entry.path]: (await safeStorage.encryptStringAsync(blob)).toString('base64') } });
 }
 
 /** A correct PIN unlocks every personal vault on this device whose key was bound here before. */
@@ -613,7 +613,7 @@ async function unlockPersonalWithPin(pin) {
 async function unlockPersonalEntry(entry, pin) {
   const stored = config.get().personalDeviceKeys?.[entry.path];
   if (!stored || !entry?.vault || !entry.vault.locked) return;
-  const blob = JSON.parse(safeStorage.decryptString(Buffer.from(stored, 'base64')));
+  const blob = JSON.parse((await safeStorage.decryptStringAsync(Buffer.from(stored, 'base64'))).result);
   if (blob.vault !== entry.id) return;
   const key = crypto.pbkdf2Sync(pin, Buffer.from(blob.salt, 'base64'), 310_000, 32, 'sha256');
   const data = Buffer.from(blob.ct, 'base64');
@@ -2706,8 +2706,14 @@ app.on('web-contents-created', (_event, contents) => {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
 });
 
+/** Every start begins in the normal mode: admin mode is switched on deliberately, with the PIN, each time. */
+function startInNormalMode() {
+  if (config.get().adminTools) config.update({ adminTools: false, pimButton: false });
+}
+
 app.whenReady().then(async () => {
   config = new Config();
+  startInNormalMode();
   pinGuard.restore(config.get().pinGuard);
   applyLanguage();
   auth = demo ? new DemoAuth() : new Auth({
@@ -2767,10 +2773,11 @@ app.whenReady().then(async () => {
     return serve(decodeURIComponent(url.pathname).replace(/^\/+/, ''));
   });
 
-  // Auto-lock after system-wide inactivity, on screen lock and on suspend.
+  // Auto-lock after system-wide inactivity, on screen lock and on suspend. Not in the smoke test: it runs unattended,
+  // and an idle or locked PC must not lock the app halfway through the checks.
   setInterval(() => {
     const minutes = Number(config.get().autoLockMinutes) || 0;
-    if (opened && minutes > 0 && powerMonitor.getSystemIdleTime() >= minutes * 60) lockNow();
+    if (opened && !smokeTest && minutes > 0 && powerMonitor.getSystemIdleTime() >= minutes * 60) lockNow();
   }, 30_000);
   // Pending index writes (debounced) go out before the app quits.
   let flushedBeforeQuit = false;
@@ -2780,8 +2787,8 @@ app.whenReady().then(async () => {
     flushedBeforeQuit = true;
     vault.flushFastIndex().catch(() => {}).finally(() => app.quit());
   });
-  powerMonitor.on('lock-screen', () => lockNow());
-  powerMonitor.on('suspend', () => lockNow());
+  powerMonitor.on('lock-screen', () => { if (!smokeTest) lockNow(); });
+  powerMonitor.on('suspend', () => { if (!smokeTest) lockNow(); });
 
   createWindow();
   if (!smokeTest) createTray();
@@ -3581,6 +3588,7 @@ function runSmokeTest() {
             return '2468';
           },
           resetPinGuard: () => { pinGuard.restore(null); config.update({ pinGuard: null }); },
+          startInNormalMode,
         }).catch((err) => errors.push(`features: ${err.stack || err.message}`));
       }
       if (view) await sleep(1200);

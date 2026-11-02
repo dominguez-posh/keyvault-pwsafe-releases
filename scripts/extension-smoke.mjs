@@ -94,16 +94,26 @@ document.getElementById('idSIButton9').addEventListener('click', () => {
 });
 document.getElementById('idBtn_Back').addEventListener('click', () => { signedIn.staySignedIn = 'no'; });
 </script>`;
+// Microsoft's "Pick an account" with a different account only: Keevault must take "Use another account" (#13).
+const msPickPage = msPage.replace('<form onsubmit="return false"><input name="loginfmt" type="email" placeholder="Email">',
+  `<div id="tiles"><div data-test-id="someone@else.com"><div role="button" id="wrongTile" onclick="signedIn.wrongTile = true">someone@else.com</div></div>
+<div id="otherTile" role="button" onclick="document.getElementById('tiles').remove(); document.querySelector('[name=loginfmt]').style.display = ''">Anderes Konto verwenden</div></div>
+<form onsubmit="return false"><input name="loginfmt" type="email" placeholder="Email" style="display:none">`);
+// The Bastion blade inside the Azure portal (served as portal.azure.com, the VM in the address's #-part): no form,
+// a plain "Connect" button (#12).
+const portalBastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
+<input id="u" placeholder="Username"><input id="p" type="password" placeholder="VM Password">
+<button type="button" id="connect">Connect</button>`;
 // Imitation of a Bastion sign-in to a VM (served as bst-smoke.bastion.azure.com, the VM in the address like the portal).
 const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
 <form onsubmit="return false"><input name="username" autocomplete="username"><input name="password" type="password">
 <button type="submit">Connect</button></form>`;
-const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/ms') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
+const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 
 const proc = spawn(browser, [
-  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1,MAP bst-smoke.bastion.azure.com 127.0.0.1',
+  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1,MAP bst-smoke.bastion.azure.com 127.0.0.1,MAP portal.azure.com 127.0.0.1',
   `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
 
@@ -393,11 +403,29 @@ try {
   const ms = await open(`http://login.microsoftonline.com:${server.address().port}/ms`);
   await sleep(2500);
   await shot(ms.sessionId, 'ext-ms-bar');
-  const width = await evaluate(ms.sessionId, 'innerWidth');
+  // More than one account: the bar has a search field (#10). The bar is a closed shadow root – CDP pierces it.
+  const msTree = await send('DOM.getDocument', { depth: -1, pierce: true }, ms.sessionId);
+  const findNode = (n, ok) => (ok(n) ? n : (n.children || []).concat(n.shadowRoots || []).reduce((hit, c) => hit || findNode(c, ok), null));
+  const attrsOf = (n) => Object.fromEntries((n.attributes || []).reduce((acc, v, i, a) => (i % 2 ? acc : [...acc, [v, a[i + 1]]]), []));
+  const msSearch = findNode(msTree.root, (n) => n.nodeName === 'INPUT' && attrsOf(n).type === 'search');
+  check(!!msSearch, 'Microsoft-Leiste: keine Suche bei mehreren Konten');
+  // Centre of an element in the bar (first match), taken from the pierced DOM – the layout may change.
+  const barPoint = async (sessionId, ok) => {
+    const tree = await send('DOM.getDocument', { depth: -1, pierce: true }, sessionId);
+    const n = findNode(tree.root, ok);
+    if (!n) return null;
+    const { model } = await send('DOM.getBoxModel', { nodeId: n.nodeId }, sessionId);
+    const q = model.border;
+    return { x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2 };
+  };
+  const firstAccount = (n) => n.nodeName === 'BUTTON' && attrsOf(n).class === 'entry';
+  const rememberBox = (n) => n.nodeName === 'INPUT' && attrsOf(n).type === 'checkbox' && !attrsOf(n).id;
   let msResult = null;
   // The bar sits in a closed shadow root at the top right: click its first account (trusted click by position).
-  for (const y of [78, 90, 66]) {
-    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: width - 16 - 170, y, button: 'left', clickCount: 1 }, ms.sessionId);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const p = await barPoint(ms.sessionId, firstAccount);
+    if (!p) { await sleep(800); continue; }
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button: 'left', clickCount: 1 }, ms.sessionId);
     msResult = await waitFor(async () => { const r = await evaluate(ms.sessionId, 'signedIn'); return r.password && r; }, 6000);
     if (msResult) break;
   }
@@ -422,19 +450,60 @@ try {
   check(pendingBastion?.username === 'CONTOSO\\vmadmin' && pendingBastion?.password === 'Vm-Smoke-1', 'Bastion: Anmeldedaten der VM fehlen');
   pageErrors(bst.sessionId, 'bastion');
 
+  // Bastion blade in the portal: "Connect" (a plain button) offers the save; a VM that is already an asset gets the
+  // login stored in it instead (#12).
+  await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'server', title: 'vm-smoke-03', server: { kind: 'azurevm' } } });
+  for (const [vm, existing] of [['vm-smoke-02', false], ['vm-smoke-03', true]]) {
+    await evaluate(options.sessionId, 'chrome.storage.session.get(null).then((all) => chrome.storage.session.remove(Object.keys(all).filter((k) => all[k]?.action === "bastion")))');
+    const portal = await open(`http://portal.azure.com:${server.address().port}/portal#@contoso.com/resource/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/${vm}/bastionHost`);
+    await sleep(1500);
+    await evaluate(portal.sessionId, `(() => { document.getElementById('u').value = 'vmadmin@contoso.local'; document.getElementById('p').value = 'Vm-Portal-1'; return true; })()`);
+    const c = await evaluate(portal.sessionId, 'JSON.stringify((({ x, y, width, height }) => ({ x: x + width / 2, y: y + height / 2 }))(document.getElementById("connect").getBoundingClientRect()))');
+    const { x, y } = JSON.parse(c);
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, portal.sessionId);
+    const p = await waitFor(async () => {
+      const all = await evaluate(options.sessionId, 'chrome.storage.session.get(null)');
+      return Object.values(all || {}).find((q) => q?.action === 'bastion');
+    }, 6000);
+    check(p?.bastion?.vmName === vm && p?.password === 'Vm-Portal-1', `Bastion im Portal: „Connect“ bietet kein Speichern an (${vm}: ${JSON.stringify(p?.bastion || null)})`);
+    check(!!p?.target === existing, `Bastion im Portal: ${existing ? 'vorhandenes Asset nicht erkannt' : 'neue VM als vorhanden behandelt'} (${vm})`);
+    pageErrors(portal.sessionId, 'portal-bastion');
+  }
+
   // "Remember": tick the box, choose the account – the next Microsoft sign-in starts by itself after the countdown.
   const ms2 = await open(`http://login.microsoftonline.com:${server.address().port}/ms?2`);
   await sleep(2500);
   const tap = async (sessionId, x, y) => {
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, sessionId);
   };
-  await tap(ms2.sessionId, width - 16 - 340 + 26, 161);
-  await tap(ms2.sessionId, width - 16 - 170, 78);
+  const box = await barPoint(ms2.sessionId, rememberBox);
+  const acc = await barPoint(ms2.sessionId, firstAccount);
+  check(box && acc, 'Merken: Leiste ohne Konto oder Kästchen');
+  if (box && acc) {
+    await tap(ms2.sessionId, box.x, box.y);
+    await tap(ms2.sessionId, acc.x, acc.y);
+  }
   check(await waitFor(async () => (await evaluate(ms2.sessionId, 'signedIn')).password), 'Merken: Anmeldung nach Klick fehlt');
   const ms3 = await open(`http://login.microsoftonline.com:${server.address().port}/ms?3`);
   const auto = await waitFor(async () => { const r = await evaluate(ms3.sessionId, 'signedIn'); return r.password && r; }, 10000);
   check(auto?.user === 'breakglass@contoso.onmicrosoft.com', `Merken: keine automatische Anmeldung (${auto?.user})`);
   pageErrors(ms3.sessionId, 'ms-auto');
+
+  // "Pick an account" with another account only: the chosen account goes through "Use another account" (#13).
+  const pick = await open(`http://login.microsoftonline.com:${server.address().port}/mspick`);
+  await sleep(2500);
+  const pickAcc = await barPoint(pick.sessionId, firstAccount);
+  if (pickAcc) await tap(pick.sessionId, pickAcc.x, pickAcc.y);
+  const picked = await waitFor(async () => { const r = await evaluate(pick.sessionId, 'signedIn'); return r.password && r; }, 8000);
+  check(picked?.user === 'breakglass@contoso.onmicrosoft.com' && !picked?.wrongTile, `Kontoauswahl: falsches Konto (${JSON.stringify(picked)})`);
+  pageErrors(pick.sessionId, 'ms-pick');
+
+  // Signing out (Microsoft's logout page, account tiles like a sign-in): no bar and no automatic sign-in (#9).
+  const out = await open(`http://login.microsoftonline.com:${server.address().port}/common/oauth2/logout?post_logout_redirect_uri=x`);
+  await sleep(5000);
+  const outState = await evaluate(out.sessionId, 'JSON.stringify({ bar: !!document.querySelector("kvpwsafe-ui"), user: signedIn.user || null })');
+  check(outState === JSON.stringify({ bar: false, user: null }), `Abmelden: Keevault bietet trotzdem eine Anmeldung an (${outState})`);
+  pageErrors(out.sessionId, 'ms-logout');
 
   // Import of the sample CSV.
   const before = (await sw(options.sessionId, 'items')).length;
