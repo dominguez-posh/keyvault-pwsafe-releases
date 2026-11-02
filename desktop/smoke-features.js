@@ -152,7 +152,10 @@ export async function featureChecks(ctx) {
       await segClick('Design', 'System');
       await segClick('Transparenz', 'Stark');
       if (config.get().transparency !== 'strong') fail('mainmenu', `transparency not switched (${config.get().transparency})`);
+      if (Math.abs(win.getOpacity() - 0.95) > 0.01) fail('mainmenu', `strong transparency is not 95 % (${win.getOpacity()})`);
       await segClick('Transparenz', 'Leicht');
+      // Light (the default) is barely see-through.
+      if (Math.abs(win.getOpacity() - 0.985) > 0.01) fail('mainmenu', `light transparency is not 98.5 % (${win.getOpacity()})`);
       // Small window: the menu ends inside the window and scrolls.
       const [w, h] = win.getSize();
       win.setSize(900, 520);
@@ -547,6 +550,16 @@ export async function featureChecks(ctx) {
       await sleep(400);
       const msJob = await ctx.signInFor('login.microsoftonline.com');
       if (msJob?.username !== msUser) fail('admin', 'Entra tile does not sign in with the entry');
+      // Azure portal family opens in the account's tenant: an account of another tenant in the browser is not taken silently.
+      if (ctx.lastAdminUrl() !== 'https://entra.microsoft.com/#@contoso.onmicrosoft.com') fail('admin', `Entra not opened in the account's tenant (${ctx.lastAdminUrl()})`);
+      const tenantUrls = {
+        pim: ctx.adminCenterUrl('https://portal.azure.com/#view/Pim/Blade', 'a@Contoso.com'),
+        intune: ctx.adminCenterUrl('https://intune.microsoft.com', 'admin@fabrikam.com'),
+        m365: ctx.adminCenterUrl('https://admin.microsoft.com', 'a@contoso.com'),
+        noDomain: ctx.adminCenterUrl('https://intune.microsoft.com', 'CONTOSO\\admin'),
+      };
+      if (tenantUrls.pim !== 'https://portal.azure.com/#@contoso.com/view/Pim/Blade' || tenantUrls.intune !== 'https://intune.microsoft.com/#@fabrikam.com'
+        || tenantUrls.m365 !== 'https://admin.microsoft.com' || tenantUrls.noDomain !== 'https://intune.microsoft.com') fail('admin', `tenant links: ${JSON.stringify(tenantUrls)}`);
       // The extension prefers the passkey (and uses it without a click) when the job says the account has one.
       if (msJob?.passkey !== false) fail('admin', `job of an account without passkey says passkey=${msJob?.passkey}`);
       await vault.saveItem(kvc.id, { ...(await vault.getItem(kvc.id, msEntry.id)), passkeys: [{ credentialId: 'AQID', rpId: 'login.microsoft.com', userName: msUser, privateKey: 'x' }] });
