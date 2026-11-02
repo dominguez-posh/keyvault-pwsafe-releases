@@ -9,21 +9,44 @@ import { canWrite } from '../extension/core/members.js';
 import { setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries } from '../extension/core/protect.js';
 import { t } from '../extension/core/i18n.js';
 
-function fileIo(file) {
+// OneDrive, the virus scanner or the indexer hold the file for a moment after each change (EPERM/EBUSY on Windows):
+// the step is tried again for a while instead of failing.
+const BUSY = new Set(['EPERM', 'EBUSY', 'EACCES']);
+export async function retryBusy(fn, ms = 15_000) {
+  const started = Date.now();
+  for (let wait = 50; ; wait = Math.min(wait * 2, 1000)) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!BUSY.has(e.code) || Date.now() - started > ms) throw e;
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+}
+
+let tmpSeq = 0;
+
+export function fileIo(file) {
   return {
     async read() {
       try {
-        return await fs.readFile(file, 'utf8');
+        return await retryBusy(() => fs.readFile(file, 'utf8'));
       } catch (e) {
         if (e.code === 'ENOENT') return null;
         throw e;
       }
     },
     async write(text) {
-      // Write next to the target and rename: a crash never leaves a half-written container.
-      const tmp = `${file}.${process.pid}.tmp`;
-      await fs.writeFile(tmp, text, 'utf8');
-      await fs.rename(tmp, file);
+      // Write next to the target and rename: a crash never leaves a half-written container. Each write has its own
+      // temporary file – two writes into one would hand a half-written file to the rename.
+      const tmp = `${file}.${process.pid}.${++tmpSeq}.tmp`;
+      await retryBusy(() => fs.writeFile(tmp, text, 'utf8'));
+      try {
+        await retryBusy(() => fs.rename(tmp, file));
+      } catch (e) {
+        await fs.rm(tmp, { force: true }).catch(() => {});
+        throw e;
+      }
     },
   };
 }
@@ -117,14 +140,22 @@ export class FileContainers {
     return this.get(id).getItem(itemId);
   }
 
+  /** One change at a time per file: parallel saves (an import) would otherwise read and write over each other. */
+  serial(id, fn) {
+    this.queues ??= new Map();
+    const run = (this.queues.get(id) || Promise.resolve()).then(() => fn());
+    this.queues.set(id, run.catch(() => {}));
+    return run;
+  }
+
   async saveItem(id, item, opts) {
-    const saved = await this.get(id).saveItem(item, opts);
+    const saved = await this.serial(id, () => this.get(id).saveItem(item, opts));
     this.onChange();
     return saved;
   }
 
   async deleteItem(id, itemId, actor) {
-    await this.get(id).deleteItem(itemId, actor);
+    await this.serial(id, () => this.get(id).deleteItem(itemId, actor));
     this.onChange();
   }
 

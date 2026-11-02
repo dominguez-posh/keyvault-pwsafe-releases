@@ -4,6 +4,14 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.15 – 2026-11-02
+- Import (CSV aus Edge, KeePass und anderen) in eine Tresordatei, z. B. in OneDrive: Die Einträge werden jetzt nacheinander gespeichert. Bisher kamen sich die gleichzeitigen Speichervorgänge in die Quere („EPERM: operation not permitted, rename“, „EBUSY“, „Die Datei ist kein Keevault-Tresor“). Hält OneDrive oder der Virenscanner die Datei kurz fest, versucht Keevault es einige Sekunden lang erneut.
+- Ohne ausgewählten Eintrag zeigt die rechte Seite keinen Scrollbalken mehr.
+
+### English
+- Import (CSV from Edge, KeePass and others) into a vault file, e.g. in OneDrive: entries are now saved one after another. Until now the parallel saves got in each other's way ("EPERM: operation not permitted, rename", "EBUSY", "The file is not a Keevault vault"). If OneDrive or the virus scanner holds the file for a moment, Keevault tries again for a few seconds.
+- With no entry selected, the right-hand side no longer shows a scrollbar.
+
 ## 0.9.14 – 2026-11-02
 - Admin-Kacheln: Azure Portal, PIM, Entra und Intune öffnen im Mandanten des gewählten Kontos. Ist im Browser schon ein Konto eines anderen Mandanten angemeldet, verlangt Microsoft eine neue Anmeldung, und Keevault nimmt das gewählte Konto statt still das vorhandene.
 - Transparenz: „Leicht“ (Standard) ist jetzt kaum noch durchscheinend; „Stark“ entspricht dem bisherigen „Leicht“.
