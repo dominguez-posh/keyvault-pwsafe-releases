@@ -704,7 +704,8 @@ async function signInFor(host) {
   const item = typeof job.source === 'string' ? await vault.getItem(...splitEntryKey(job.source)) : job.source;
   // Bastion's sign-in on the VM always gets the FQDN form (user@contoso.local) when the account knows its domain.
   const username = job.mode === 'form' ? fqdnUserName(item) : item.username || '';
-  return { mode: job.mode, username, password: item.password || '', totp: item.totp ? (await totpCode(item.totp))?.code || '' : '' };
+  // passkey: the account has one – the extension prefers it to the password and answers Microsoft's prompt by itself.
+  return { mode: job.mode, username, password: item.password || '', totp: item.totp ? (await totpCode(item.totp))?.code || '' : '', passkey: !!item.passkeys?.length };
 }
 
 const splitEntryKey = (key) => {
