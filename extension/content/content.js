@@ -183,6 +183,8 @@
     inline = { pageId, kind: info.kind || 'get', requestId: info.requestId, candidates: info.candidates || [], site: info.site, containers: info.containers || [], containerId: info.defaultContainer };
     const create = inline.kind === 'create';
     inline.choice = inline.candidates[0];
+    // A sign-in the user started (app tile or Microsoft bar) and this is its account's passkey: used without a click.
+    if (!create && info.auto && inline.choice) return choosePasskey(inline.choice);
     const tag = newTag(create ? (texts.saveQuestion || 'Passkey') : (texts.choosePasskey || 'Passkey'));
 
     // The switcher: the current account (sign-in) or vault (saving); a click opens the choices inside the tag.
@@ -256,6 +258,8 @@
     try {
       const res = await call('cs:webauthnSelect', { requestId: cur.requestId, containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId });
       passkeyAnim('ok', texts.passkeyOk || 'Passkey');
+      // Microsoft: signed in with Keevault's passkey – "Stay signed in?" that follows gets "No".
+      if (MS_LOGIN_HOSTS.test(location.hostname)) markSignedIn();
       toPage({ id: cur.pageId, result: res.result });
     } catch (err) {
       passkeyAnim('hide');
@@ -863,10 +867,12 @@
   // filled. Only on the sign-in hosts.
   const SIGN_IN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com|bastion\.azure\.com|portal\.azure\.net)$/i;
   const MS_LOGIN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com|login\.live\.com)$/i;
-  if (SIGN_IN_HOSTS.test(location.hostname)) initSignIn();
 
   async function initSignIn() {
     if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) declineStaySignedIn();
+    // Signing out: an open one-click sign-in ends and the remembered account no longer starts by itself – otherwise
+    // Microsoft's redirect back to its sign-in page would sign the same account straight in again.
+    if (MS_LOGIN_HOSTS.test(location.hostname) && SIGN_OUT_PATH.test(location.pathname)) return signedOut();
     const job = await call('cs:signIn').catch(() => null);
     if (job) return runSignIn(job, () => call('cs:signIn').catch(() => null));
     if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) offerMicrosoftAccounts();
@@ -874,11 +880,16 @@
   }
 
   // "Stay signed in?" after a sign-in Keevault did in this tab (last 2 minutes): answered with "No" – nothing stays signed
-  // in on the browser by itself. Sign-ins done by hand keep the question.
-  const markSignedIn = () => { try { sessionStorage.setItem('kvMsSignedInAt', String(Date.now())); } catch { /* storage blocked */ } };
-  function declineStaySignedIn() {
+  // in on the browser by itself. Sign-ins done by hand keep the question. Also kept by the service worker: a passkey
+  // sign-in runs through login.microsoft.com, the question comes on login.microsoftonline.com (another origin).
+  const markSignedIn = () => {
+    try { sessionStorage.setItem('kvMsSignedInAt', String(Date.now())); } catch { /* storage blocked */ }
+    call('cs:msMark').catch(() => {});
+  };
+  async function declineStaySignedIn() {
     let recent = false;
     try { recent = Date.now() - Number(sessionStorage.getItem('kvMsSignedInAt') || 0) < 120_000; } catch { /* storage blocked */ }
+    if (!recent) recent = await call('cs:msRecent').catch(() => false);
     if (!recent) return;
     const started = Date.now();
     const look = () => {
@@ -887,6 +898,7 @@
       const no = document.querySelector('#idBtn_Back') || document.querySelector('#declineButton');
       if (kmsi && no && !no.disabled && visible(no)) {
         try { sessionStorage.removeItem('kvMsSignedInAt'); } catch { /* storage blocked */ }
+        call('cs:msMark', { clear: true }).catch(() => {});
         no.click();
         return;
       }
@@ -901,9 +913,14 @@
   // Signing out (Microsoft's "Which account do you want to sign out of?") is not a sign-in: no bar, no auto sign-in.
   const SIGN_OUT_PATH = /\/(oauth2\/(v2\.0\/)?logout|logout\.srf|logoutsession|signout)/i;
   const SIGN_OUT_TEXT = /abmelden m(ö|oe)chten|abgemeldet|sign out of|signed out|you have signed out/i;
+  // Microsoft's switch from the password to a passkey ("face, fingerprint, PIN or security key").
+  const FIDO_TEXT = /gesicht.*fingerabdruck|sicherheitsschl(ü|ue)ssel|face.*fingerprint|security key|passkey|hauptschl(ü|ue)ssel/i;
   const signingOut = () => SIGN_OUT_PATH.test(location.pathname)
     || SIGN_OUT_TEXT.test(document.querySelector('#loginHeader, [role=heading], .title, h1')?.textContent || '');
+  const signedOut = () => call('cs:msSignedOut').catch(() => {});
   const asksForAccount = () => !!(visibleInput('input[name=loginfmt]') || visibleInput('input[name=passwd]') || document.querySelector('[data-test-id] [role=button], #tilesHolder [data-test-id]'));
+  // Started only here: everything it uses is defined above.
+  if (SIGN_IN_HOSTS.test(location.hostname)) initSignIn();
 
   function runSignIn(job, fresh, { onDone = () => call('cs:signInDone').catch(() => {}) } = {}) {
     const started = Date.now();
@@ -913,12 +930,21 @@
     let observer = null;
     const stop = () => { observer?.disconnect(); clearTimeout(timer); };
     const next = () => {
+      // Never "Sign in" with an empty password field (Microsoft only answers "Enter your password").
+      const pwField = visibleInput('input[name=passwd]');
+      if (pwField && !pwField.value) return;
       const b = document.querySelector('#idSIButton9') || document.querySelector('input[type=submit], button[type=submit]');
       if (b && !b.disabled) b.click();
     };
+    // Account with a passkey (or without a password): the passkey is used, the password only when Microsoft offers no
+    // passkey on its password page within a moment.
+    const passkeyFirst = job.mode === 'microsoft' && (job.passkey || !job.password);
+    let passwordPageAt = 0;
     const step = async () => {
       if (busy || !alive) return;
       if (Date.now() - started > 120_000) return stop();
+      // The page turned out to be a sign-out (only recognisable by its heading): nothing is filled in here.
+      if (MS_LOGIN_HOSTS.test(location.hostname) && signingOut()) { stop(); signedOut(); return; }
       busy = true;
       try {
         if (job.mode === 'microsoft') {
@@ -931,7 +957,23 @@
           const user = visibleInput('input[name=loginfmt]');
           if (user && job.username && !done.has('user')) { done.add('user'); setValue(user, job.username); next(); return; }
           const pw = visibleInput('input[name=passwd]');
-          if (pw && job.password && !done.has('pw')) {
+          // Passkey first: Microsoft shows its password page anyway – switch to "face, fingerprint, PIN or security key"
+          // (directly or through "Other ways to sign in"); the passkey prompt then takes this account's passkey by
+          // itself. The job stays open (it runs out by itself): the passkey request asks for it.
+          if (pw && passkeyFirst && !done.has('nofido')) {
+            const fido = document.querySelector('#idA_PWD_SwitchToFido')
+              || [...document.querySelectorAll('a, button, [role=button], [role=link]')].find((e) => FIDO_TEXT.test(e.textContent || '') && visible(e));
+            if (fido && visible(fido) && !done.has('fido')) { done.add('fido'); markSignedIn(); fido.click(); stop(); declineStaySignedIn(); return; }
+            const picker = document.querySelector('#idA_PWD_SwitchToCredPicker');
+            if (!fido && picker && visible(picker) && !done.has('picker')) { done.add('picker'); picker.click(); return; }
+            // No passkey way on this page: after a moment the password (if there is one).
+            if (!fido && !picker && job.password) {
+              passwordPageAt ||= Date.now();
+              if (Date.now() - passwordPageAt < 1500) { setTimeout(schedule, 500); return; }
+              done.add('nofido');
+            }
+          }
+          if (pw && job.password && !done.has('pw') && (!passkeyFirst || done.has('nofido'))) {
             done.add('pw');
             setValue(pw, job.password);
             markSignedIn();
@@ -939,6 +981,11 @@
             // Without a one-time code this was the last step: the sign-in is used up (no second automatic sign-in).
             if (!job.totp) { onDone(); stop(); declineStaySignedIn(); }
             return;
+          }
+          // "Other ways to sign in" list: the passkey option.
+          if (passkeyFirst && done.has('picker') && !done.has('fido')) {
+            const option = [...document.querySelectorAll('[role=button], [role=link], button, a, .tile')].find((e) => FIDO_TEXT.test(e.textContent || '') && visible(e));
+            if (option) { done.add('fido'); markSignedIn(); option.click(); stop(); declineStaySignedIn(); return; }
           }
           const otc = visibleInput('input[name=otc]');
           if (otc && !done.has('otc')) {
@@ -977,7 +1024,7 @@
     let waited = 0;
     const whenAsked = () => {
       if (!alive) return;
-      if (signingOut()) return;
+      if (signingOut()) { signedOut(); return; }
       if (asksForAccount()) { show(); return; }
       if ((waited += 500) < 15_000) setTimeout(whenAsked, 500);
     };
@@ -1059,7 +1106,8 @@
       // Microsoft's page – the list is offered, so the user can be switched.
       let autoRan = false;
       try { autoRan = Date.now() - Number(sessionStorage.getItem('kvMsAutoAt') || 0) < 10 * 60_000; } catch { /* storage blocked */ }
-      const remembered = !autoRan && offer.accounts.find((a) => a.key === offer.defaultKey);
+      // After signing out the remembered account waits until an account is chosen again (cs:msSignedOut).
+      const remembered = !autoRan && !offer.paused && offer.accounts.find((a) => a.key === offer.defaultKey);
       if (remembered) {
         try { sessionStorage.setItem('kvMsAutoAt', String(Date.now())); } catch { /* storage blocked */ }
         // Remembered account: a short countdown, then it signs in – "Other account" stops it.

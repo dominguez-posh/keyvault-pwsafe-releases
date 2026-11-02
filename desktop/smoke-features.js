@@ -510,7 +510,7 @@ export async function featureChecks(ctx) {
     // ---- admin mode: badge, devices tab, Microsoft entry tiles with sign-in for that account
     await step('admin', async () => {
       const msUser = 'smoke-admin@contoso.onmicrosoft.com';
-      await save({ type: 'login', title: 'Smoke Microsoft', username: msUser, password: 'Ms-1', msAdmin: true, urls: ['https://login.microsoftonline.com'] });
+      const msEntry = await save({ type: 'login', title: 'Smoke Microsoft', username: msUser, password: 'Ms-1', msAdmin: true, urls: ['https://login.microsoftonline.com'] });
       await setAdmin(true);
       const look = () => js('JSON.stringify({ accent: getComputedStyle(document.documentElement).getPropertyValue("--accent").trim().toLowerCase(), logo: document.querySelector(".brand img")?.getAttribute("src") || "", name: document.querySelector(".brand-name")?.textContent || "" })');
       let lk = JSON.parse(await look());
@@ -545,7 +545,12 @@ export async function featureChecks(ctx) {
       ctx.clearSignIns();
       await js('document.querySelector(".detail-pane [data-admin-link=entra]")?.click()');
       await sleep(400);
-      if ((await ctx.signInFor('login.microsoftonline.com'))?.username !== msUser) fail('admin', 'Entra tile does not sign in with the entry');
+      const msJob = await ctx.signInFor('login.microsoftonline.com');
+      if (msJob?.username !== msUser) fail('admin', 'Entra tile does not sign in with the entry');
+      // The extension prefers the passkey (and uses it without a click) when the job says the account has one.
+      if (msJob?.passkey !== false) fail('admin', `job of an account without passkey says passkey=${msJob?.passkey}`);
+      await vault.saveItem(kvc.id, { ...(await vault.getItem(kvc.id, msEntry.id)), passkeys: [{ credentialId: 'AQID', rpId: 'login.microsoft.com', userName: msUser, privateKey: 'x' }] });
+      if ((await ctx.signInFor('login.microsoftonline.com'))?.passkey !== true) fail('admin', 'job of an account with passkey does not say so');
       // One-time: once the page reports the last step, the job is gone – a second sign-in is left to the user.
       await ctx.signInDone('login.microsoftonline.com');
       if (await ctx.signInFor('login.microsoftonline.com')) fail('admin', 'sign-in still handed out after it was done');

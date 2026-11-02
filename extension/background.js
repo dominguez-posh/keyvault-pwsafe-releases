@@ -456,6 +456,19 @@ async function containerNames() {
 }
 
 /** Passkeys whose entry URL fits the page best come first (keevault.de/admin before keevault.de) – none is dropped. */
+// A sign-in started by the user (app tile or Microsoft bar) counts for two minutes, like the app's own jobs.
+const MS_JOB_MS = 120_000;
+
+/** Account of the sign-in running on this sign-in host: the app's one-click job, else the account chosen in the bar. */
+async function signInUser(host) {
+  if (!host || !SIGN_IN_HOSTS.test(host)) return '';
+  const job = demo ? null : await app.signIn(host).catch(() => null);
+  if (job?.username) return job.username;
+  if (!MS_LOGIN_HOSTS.test(host)) return '';
+  const { msJob } = await chrome.storage.session.get('msJob');
+  return msJob && msJob.until > Date.now() ? msJob.username || '' : '';
+}
+
 async function publicCandidates(list, pageUrl = '', preferUser = '') {
   const names = await containerNames();
   return rankCandidates(list, pageUrl, preferUser).map((c) => ({
@@ -531,11 +544,9 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
     created: Date.now(),
   };
   const open = await isOpen();
-  // A one-click sign-in (admin tile, Bastion) is running on this sign-in page: its account's passkey comes first.
-  if (kind === 'get' && open && !demo) {
-    const host = signInHost(sender);
-    if (host && SIGN_IN_HOSTS.test(host)) request.preferUser = (await app.signIn(host).catch(() => null))?.username || '';
-  }
+  // A one-click sign-in (admin tile, Bastion, account chosen in the Microsoft bar) is running on this sign-in page:
+  // its account's passkey comes first – and is used without a further click (the user started this sign-in).
+  if (kind === 'get' && open) request.preferUser = await signInUser(signInHost(sender));
   if (kind === 'get') {
     const locked = open ? await lockedProtected() : 0;
     if (open) {
@@ -548,7 +559,9 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
       if (found.length) {
         // Chooser inside the page (a bar at the top, like the browser's own sheet); the window only on request.
         await saveRequest(request);
-        return { inline: { requestId: request.id, site: rpId, lockedContainers: locked, candidates: await publicCandidates(found, request.pageUrl, request.preferUser), ui: contentStrings() } };
+        const candidates = await publicCandidates(found, request.pageUrl, request.preferUser);
+        const auto = !!request.preferUser && (candidates[0]?.userName || '').toLowerCase() === request.preferUser.toLowerCase();
+        return { inline: { requestId: request.id, site: rpId, lockedContainers: locked, candidates, auto, ui: contentStrings() } };
       }
     } else if (request.conditional) {
       await saveRequest(request);
@@ -901,7 +914,8 @@ const contentCommands = {
       .map((s) => ({ key: s.key, containerId: s.containerId, id: s.id, title: s.title, username: s.username, container: names.get(s.containerId) || '', admin: !!s.msAdmin }));
     if (!accounts.length) return null;
     const { msDefault } = await chrome.storage.local.get('msDefault');
-    return { accounts, defaultKey: accounts.some((a) => a.key === msDefault) ? msDefault : null, ui: contentStrings() };
+    const { msSignedOut } = await chrome.storage.session.get('msSignedOut');
+    return { accounts, defaultKey: accounts.some((a) => a.key === msDefault) ? msDefault : null, paused: !!msSignedOut, ui: contentStrings() };
   },
   /** Account for the Microsoft sign-in (the one-time code fresh on every call); only Microsoft logins, only there. */
   'cs:msAccount': async ({ containerId, id }, sender) => {
@@ -909,7 +923,33 @@ const contentCommands = {
     if (!host || !MS_LOGIN_HOSTS.test(host)) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const item = await vault.getItem(containerId, id);
     if (item.type !== 'login' || !(item.msAdmin || itemHosts(item).some(isMicrosoftHost))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
-    return { mode: 'microsoft', username: item.username, password: item.password, totp: item.totp ? (await totpCode(item.totp)).code : '' };
+    // Chosen (or started as the remembered one): the passkey prompt that may follow takes this account's passkey;
+    // a sign-out pause ends here.
+    await chrome.storage.session.set({ msJob: { username: item.username || '', until: Date.now() + MS_JOB_MS }, msSignedOut: false });
+    return { mode: 'microsoft', username: item.username, password: item.password, totp: item.totp ? (await totpCode(item.totp)).code : '', passkey: !!item.passkeys?.length };
+  },
+  /** Signed out on Microsoft's page: open sign-ins end, the remembered account waits until one is chosen again. */
+  'cs:msSignedOut': async (_msg, sender) => {
+    const host = signInHost(sender);
+    if (!host || !MS_LOGIN_HOSTS.test(host)) return null;
+    if (!demo) {
+      for (const h of ['login.microsoftonline.com', 'login.microsoft.com', 'login.live.com']) await Promise.resolve(app.signInDone?.(h)).catch(() => {});
+    }
+    await chrome.storage.session.set({ msSignedOut: true, msJob: null, msSignedInAt: 0 });
+    return true;
+  },
+  /** Keevault signed someone in (password, code or passkey): "Stay signed in?" is answered with "No". */
+  'cs:msMark': async ({ clear = false }, sender) => {
+    const host = signInHost(sender);
+    if (!host || !MS_LOGIN_HOSTS.test(host)) return null;
+    await chrome.storage.session.set({ msSignedInAt: clear ? 0 : Date.now() });
+    return true;
+  },
+  'cs:msRecent': async (_msg, sender) => {
+    const host = signInHost(sender);
+    if (!host || !MS_LOGIN_HOSTS.test(host)) return false;
+    const { msSignedInAt } = await chrome.storage.session.get('msSignedInAt');
+    return Date.now() - Number(msSignedInAt || 0) < MS_JOB_MS;
   },
   /** Remember (or forget, key null) the account that signs in automatically on the Microsoft sign-in page. */
   'cs:msRemember': async ({ key }) => chrome.storage.local.set({ msDefault: key || null }),
