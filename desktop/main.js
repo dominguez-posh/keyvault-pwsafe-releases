@@ -1178,6 +1178,15 @@ const windowsHandlers = {
 
 let mcp = null;
 const mcpScriptPath = () => path.join(app.getPath('userData'), 'mcp', 'keevault-mcp.cjs');
+const mcpTrusted = () => (Array.isArray(config.get().mcpTrusted) ? config.get().mcpTrusted : [])
+  .filter((x) => x && typeof x.agent === 'string' && typeof x.vaultId === 'string' && typeof x.entryId === 'string');
+
+/** "Never ask again": the agent reads this entry without a question until revoked in the entry's context menu. */
+function trustAgentEntry({ agent, vaultId, entryId, title }) {
+  const others = mcpTrusted().filter((x) => !(x.agent === agent && x.vaultId === vaultId && x.entryId === entryId));
+  config.update({ mcpTrusted: [...others, { agent, vaultId, entryId, title }] });
+  send({ type: 'mcpTrusted' });
+}
 
 /** Each agent (MCP client name) is allowed once; off unless switched on (or forbidden by policy). */
 async function approveAgent(agent) {
@@ -1222,8 +1231,9 @@ async function confirmAgentRead({ agent, title, vault: vaultName }) {
       { value: 'session', label: t('Für diese Sitzung'), hint: t('Bis der Agent beendet wird, höchstens 8 Stunden.') },
       { value: 'minutes:60', label: t('Für 1 Stunde'), hint: t('Ohne Rückfrage – auch wenn der Agent zwischendurch neu startet.') },
       { value: 'minutes:240', label: t('Für 4 Stunden'), hint: t('Ohne Rückfrage – auch wenn der Agent zwischendurch neu startet.') },
+      { value: 'always', label: t('Für diesen Eintrag nie mehr fragen'), hint: t('Nur dieser Agent, nur dieses Passwort – bis du es per Rechtsklick auf den Eintrag entziehst.') },
     ],
-    note: t('Sperren von Keevault beendet jede Freigabe.'),
+    note: t('Sperren von Keevault beendet jede zeitliche Freigabe.'),
     allow: t('Erlauben'),
     cancel: 'deny',
   });
@@ -2461,8 +2471,15 @@ const api = {
   mcpRemoveAgent: (agent) => {
     const rules = { ...config.get().agentRules };
     delete rules[agent];
-    config.update({ approvedAgents: config.get().approvedAgents.filter((x) => x !== agent), agentRules: rules });
+    config.update({ approvedAgents: config.get().approvedAgents.filter((x) => x !== agent), agentRules: rules, mcpTrusted: mcpTrusted().filter((x) => x.agent !== agent) });
     mcp?.revoke(agent);
+    return true;
+  },
+  /** Entries agents read without asking ("never ask again"): [{ agent, vaultId, entryId, title }]. */
+  mcpTrusted: () => mcpTrusted(),
+  /** Context menu "Freigabe entziehen": the entry needs a confirmation again, for every agent. */
+  mcpUntrust: (vaultId, entryId) => {
+    config.update({ mcpTrusted: mcpTrusted().filter((x) => !(x.vaultId === vaultId && x.entryId === entryId)) });
     return true;
   },
   /** Rights of an agent: write yes/no, approval for `days` days (0 = until removed). */
@@ -2797,6 +2814,8 @@ app.whenReady().then(async () => {
     confirmRead: confirmAgentRead,
     confirmWrite: confirmAgentWrite,
     policy: (agent) => config.get().agentRules?.[agent] || { write: true },
+    trusted: (agent, vaultId, entryId) => mcpTrusted().some((x) => x.agent === agent && x.vaultId === vaultId && x.entryId === entryId),
+    trust: trustAgentEntry,
     scope: () => {
       const s = config.get();
       const scopes = (Array.isArray(s.mcpScopes) ? s.mcpScopes : []).filter((x) => x && typeof x.vaultId === 'string')
@@ -2825,6 +2844,7 @@ app.whenReady().then(async () => {
       const b = win.getBounds();
       return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
     },
+    theme: () => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light'),
     fetch: secureFetch,
   });
   updater.start();
@@ -3589,6 +3609,8 @@ function runSmokeTest() {
           },
           resetPinGuard: () => { pinGuard.restore(null); config.update({ pinGuard: null }); },
           startInNormalMode,
+          trustAgentEntry,
+          updaterArgs: () => updater.helperArgs('Keevault-Setup.exe', false),
         }).catch((err) => errors.push(`features: ${err.stack || err.message}`));
       }
       if (view) await sleep(1200);
