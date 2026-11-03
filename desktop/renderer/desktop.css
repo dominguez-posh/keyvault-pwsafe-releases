@@ -637,6 +637,8 @@ html.admin-theme { --accent: #ac5500; --accent-hover: #8b4500; --accent-soft: #f
 /* Version at the bottom right: the detail pane keeps a free strip below its content, so the last line of an entry
    never ends under it; a small pill in the window colour keeps it readable while content scrolls past. */
 .detail-pane::after { content: ""; display: block; height: 30px; }
+/* No entry selected: nothing to scroll, so no spacer (and no scrollbar). */
+.detail-pane:has(> .placeholder)::after { display: none; }
 #app-version { padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--surface) 85%, transparent); }
 
 /* Mixed selection: folders in the list of the detail pane. */
