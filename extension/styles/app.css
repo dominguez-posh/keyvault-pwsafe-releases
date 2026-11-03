@@ -145,6 +145,7 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
 .strength { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
 .strength span { flex: 1; height: 4px; border-radius: 2px; background: var(--surface-2); position: relative; overflow: hidden; }
 .strength span::after { content: ""; position: absolute; inset: 0; width: 0; background: var(--danger); transition: width .2s; }
+.strength[data-level="0"] span::after { width: 10%; }
 .strength[data-level="1"] span::after { width: 25%; }
 .strength[data-level="2"] span::after { width: 50%; background: var(--warn); }
 .strength[data-level="3"] span::after { width: 75%; background: var(--success); }
@@ -185,6 +186,8 @@ label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 1
   background: #23262d; color: #fff; padding: 8px 14px; border-radius: 8px; box-shadow: var(--shadow); font-size: 13px;
   transition: opacity .15s, transform .15s; z-index: 1000; max-width: calc(100% - 32px);
 }
+/* Shown as a popover: in the top layer above open dialogs (the browser's popover defaults centre it – undone here). */
+.toast[popover] { inset: auto; left: 50%; bottom: 16px; margin: 0; border: 0; overflow: visible; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast.error { background: var(--danger); }
 .modal { border: 1px solid var(--border); border-radius: 10px; padding: 0; background: var(--surface); color: var(--text); box-shadow: var(--shadow); width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }

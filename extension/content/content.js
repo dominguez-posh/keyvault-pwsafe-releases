@@ -876,7 +876,87 @@
     const job = await call('cs:signIn').catch(() => null);
     if (job) return runSignIn(job, () => call('cs:signIn').catch(() => null));
     if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) offerMicrosoftAccounts();
+    if (BASTION_FORM_HOSTS.test(location.hostname)) offerBastionAccounts();
     return undefined;
+  }
+
+  // Bastion's own sign-in form to the VM: in the portal's blade frame or on a shareable link page.
+  const BASTION_FORM_HOSTS = /(^|\.)(bastion\.azure\.com|portal\.azure\.net)$/i;
+
+  /**
+   * Bastion sign-in opened in the browser (not from the app, #27): a bar with the logins; the chosen one is filled in
+   * and connected, and with "save as asset" the VM is kept as an asset linked to that login.
+   */
+  function offerBastionAccounts() {
+    let waited = 0;
+    let shown = false;
+    const look = () => {
+      if (!alive || shown) return;
+      const fields = loginFields(document);
+      if (fields.password && usable(fields.password)) { shown = true; show(fields); return; }
+      if ((waited += 500) < 30_000) setTimeout(look, 500);
+    };
+    const show = async (fields) => {
+      const offer = await call('cs:bastionAccounts').catch(() => null);
+      if (!offer?.accounts?.length) return;
+      if (offer.ui) texts = offer.ui;
+      const fill = (text, vars) => Object.entries(vars).reduce((acc, [k, v]) => acc.replace('{' + k + '}', v), text || '');
+      const bar = el('div', 'banner bastion-pick');
+      const close = el('button', 'x', '×');
+      close.title = texts.close || '';
+      close.addEventListener('click', (e) => { if (e.isTrusted) bar.remove(); });
+      const title = el('div', 'title');
+      title.append(el('span', 'logo', 'K'), document.createTextNode(texts.bastionPickTitle));
+      const save = el('input');
+      save.type = 'checkbox';
+      save.checked = !offer.linkedKey;
+      const saveLabel = el('label', 's');
+      saveLabel.append(save, document.createTextNode(' ' + texts.bastionSave));
+      const start = async (a) => {
+        const r = await call('cs:bastionAccount', { containerId: a.containerId, id: a.id, save: save.checked }).catch(() => null);
+        if (!r?.job) return;
+        bar.replaceChildren(title, el('div', 'user', fill(texts.bastionConnecting, { name: r.job.username || a.title })));
+        setTimeout(() => bar.remove(), 4000);
+        const f = loginFields(document);
+        if (f.username && r.job.username) setValue(f.username, r.job.username);
+        if (f.password) setValue(f.password, r.job.password);
+        pressConnect(f.password || fields.password);
+      };
+      const entries = offer.accounts.map((a) => {
+        const b = el('button', 'entry');
+        const text = el('div', 'txt');
+        text.append(el('div', 't', a.title), el('div', 's', [a.username, a.container].filter(Boolean).join(' · ')));
+        b.append(el('span', 'avatar', (a.title || '?').slice(0, 1).toUpperCase()), text);
+        b.addEventListener('click', (e) => { if (e.isTrusted) start(a); });
+        b.dataset.q = [a.title, a.username, a.container].join(' ').toLowerCase();
+        return b;
+      });
+      const box = el('div', 'ms-list');
+      box.append(...entries);
+      const none = el('div', 's ms-none', texts.msNone);
+      none.hidden = true;
+      const q = el('input', 'q');
+      q.type = 'search';
+      q.placeholder = texts.msSearch;
+      q.setAttribute('aria-label', texts.msSearch);
+      q.addEventListener('input', () => {
+        const words = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        for (const b of entries) b.hidden = !words.every((w) => b.dataset.q.includes(w));
+        none.hidden = entries.some((b) => !b.hidden);
+      });
+      q.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || !e.isTrusted) return;
+        e.preventDefault();
+        entries.find((b) => !b.hidden)?.click();
+      });
+      box.append(none);
+      const parts = [close, title, el('div', 'user', `VM „${offer.vmName}“`)];
+      if (offer.asset) parts.push(el('div', 's', fill(texts.bastionAsset, { title: offer.asset.title, vault: offer.asset.container })));
+      bar.append(...parts, q, box, saveLabel);
+      ui().append(bar);
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', look, { once: true });
+    else look();
   }
 
   // "Stay signed in?" after a sign-in Keevault did in this tab (last 2 minutes): answered with "No" – nothing stays signed
@@ -1000,6 +1080,8 @@
             done.add('form');
             if (fields.username && job.username) setValue(fields.username, job.username);
             setValue(fields.password, job.password);
+            // Bastion (#31): also press "Connect" once the page took the values (React enables the button late).
+            if (job.mode === 'bastion') pressConnect(fields.password);
             onDone();
             stop();
           }
@@ -1017,6 +1099,31 @@
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', begin, { once: true });
     else begin();
+  }
+
+  // Bastion's button: "Connect" in the portal blade, "Verbinden" in German, "Login"/"Anmelden" on shareable links.
+  const CONNECT_TEXT = /^(connect|verbinden|login|log in|anmelden|sign in)$/i;
+  /** After Bastion's form was filled: its connect button, as soon as it is enabled (up to 10 s). */
+  function pressConnect(field) {
+    const started = Date.now();
+    const find = () => {
+      const scope = field?.form || document;
+      const buttons = [...scope.querySelectorAll('button, input[type=submit], [role=button]')];
+      return buttons.find((b) => CONNECT_TEXT.test((b.textContent || b.value || '').trim()) && visible(b))
+        || buttons.find((b) => (b.type === 'submit') && visible(b));
+    };
+    const tryPress = () => {
+      if (!alive || Date.now() - started > 10_000) return;
+      const b = find();
+      if (b && !b.disabled && b.getAttribute('aria-disabled') !== 'true') {
+        // The service worker closes this tab once Bastion opened the session in a new one (#33).
+        call('cs:bastionConnected').catch(() => {});
+        b.click();
+        return;
+      }
+      setTimeout(tryPress, 400);
+    };
+    setTimeout(tryPress, 500);
   }
 
   /** Microsoft sign-in page: bar with the Microsoft accounts; a remembered one starts by itself after 3 seconds. */
