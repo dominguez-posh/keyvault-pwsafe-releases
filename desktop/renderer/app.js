@@ -137,7 +137,7 @@ function tabbed(key, pages) {
     [...bar.children].forEach((b, n) => b.classList.toggle('active', n === i));
     panels.forEach((p, n) => { p.hidden = n !== i; });
   };
-  pages.forEach((p, i) => bar.append(h('button', { type: 'button', role: 'tab', onclick: () => show(i) }, p.label)));
+  pages.forEach((p, i) => bar.append(h('button', { type: 'button', role: 'tab', onclick: () => show(i) }, p.icon ? icon(p.icon, 16) : null, h('span', {}, p.label))));
   show(Math.min(activeTabs[key] || 0, pages.length - 1));
   return h('div', { class: 'tabbed' }, bar, ...panels);
 }
@@ -178,6 +178,8 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'changed' && st && !st.opened) {
     // Unlocked elsewhere (tray, an agent's request, a test): show the vaults. Still locked: the screen stays as it is.
     call('state').then((s) => { if (s.opened) render(); }).catch(() => {});
+  } else if (ev.type === 'rdp-type-failed') {
+    toast(t('Der Windows-Anmeldedialog kam nicht nach vorne – das Passwort liegt in der Zwischenablage, dort mit Strg+V einfügen.'), 'error');
   } else if (ev.type === 'sync-stopped' && st?.opened) {
     toast(t('{provider} läuft nicht – Änderungen an Tresoren in diesem Ordner werden nicht synchronisiert. Starte {provider}.', { provider: ev.provider }), 'error');
   } else if (ev.type === 'link') {
@@ -3114,7 +3116,7 @@ async function connectServer(containerId, id, method) {
   try {
     const r = await call('connectServer', { containerId, id, method });
     if (method === 'rdp') {
-      toast(r.credentialGuard ? t('Remotedesktop gestartet – Credential Guard erlaubt keine gespeicherten Anmeldedaten: Das Passwort liegt in der Zwischenablage, im Windows-Dialog mit Strg+V einfügen.')
+      toast(r.credentialGuard ? t('Remotedesktop gestartet – Keevault trägt das Passwort im Windows-Dialog ein (Credential Guard erlaubt keine gespeicherten Anmeldedaten).')
         : r.prompt ? t('Remotedesktop gestartet – bitte dort anmelden') : t('Remotedesktop gestartet'));
     }
     else if (method === 'ssh') toast(r.copied ? t('SSH gestartet – das Passwort liegt in der Zwischenablage (im Terminal mit Rechtsklick einfügen)') : t('SSH gestartet'));
@@ -4661,8 +4663,9 @@ function settingsDialog() {
   const section = (title, ...children) => h('div', { class: 'settings-section' }, h('h3', {}, title), ...children);
   const managed = !!managedUpdateHint(st.updateKind);
   // Five tabs instead of one long page: everyday settings first, integrations and agents further right.
-  modal(t('Einstellungen'), tabbed('settings', [
-    { label: t('Allgemein'), content: [
+  // Fixed size, navigation on the left (#211): the dialog no longer jumps between tabs, only the page scrolls.
+  const { dialog: settingsDialogEl } = modal(t('Einstellungen'), tabbed('settings', [
+    { label: t('Allgemein'), icon: 'settings', content: [
       field(t('Sprache'), language),
       st.platform === 'win32' ? h('label', { class: 'inline' }, startWithWindows, t('Mit Windows starten (im Infobereich)')) : null,
       st.platform === 'win32' ? h('p', { class: 'muted small' }, t('Dann ist Keevault für Browser-Erweiterung und KI-Agenten sofort da, ohne dass sie die App erst starten müssen.')) : null,
@@ -4680,7 +4683,7 @@ function settingsDialog() {
       s.enforced.length ? h('p', { class: 'muted small' }, t('Ausgegraute Werte sind über kvpwsafe.config.json vorgegeben.')) : null,
       h('p', { class: 'muted small' }, t('Version {version}', { version: st.version })),
     ] },
-    { label: t('Sicherheit'), content: [
+    { label: t('Sicherheit'), icon: 'shield', content: [
       h('div', { class: 'grid2' },
         field(t('Automatisch sperren nach (Minuten)'), autoLock, t('0 = nur beim Sperren des Computers')),
         field(t('Zwischenablage leeren nach (Sekunden)'), clip, t('0 = nie'))),
@@ -4696,7 +4699,7 @@ function settingsDialog() {
           ? t('Ohne Netzwerk zeigt Keevault den letzten Stand – nur lesen, keine Änderungen. Der Spiegel liegt AES-256-verschlüsselt im Profil; zum Öffnen braucht es dein Windows-Konto und die PIN. Er füllt sich beim nächsten Entsperren mit PIN.')
           : t('Dafür zuerst eine App-PIN festlegen – sie schützt den Offline-Speicher zusammen mit deinem Windows-Konto.'))),
     ] },
-    { label: t('Anmeldung'), content: [
+    { label: t('Anmeldung'), icon: 'user', content: [
       section(t('Microsoft Entra ID (Key-Vault-Tresore)'),
         st.account ? h('p', { class: 'muted small' }, t('Angemeldet als {user}', { user: st.account.username })) : h('p', { class: 'muted small' }, t('Keine IDs nötig: Melde dich einfach an und füge deine Key-Vault-Tresore hinzu.')),
         h('label', { class: 'inline' }, autoDiscover, t('Gefundene Keevault-Tresore automatisch verbinden')),
@@ -4712,7 +4715,7 @@ function settingsDialog() {
           render();
         } }, icon('logout'), t('Abmelden und Token-Cache löschen'))) : null),
     ] },
-    { label: t('Integrationen'), content: [
+    { label: t('Integrationen'), icon: 'link', content: [
       section(t('Browser-Erweiterung'),
         h('label', { class: 'inline' }, browser, t('Datei-Tresore in der Browser-Erweiterung verfügbar machen')),
         h('p', { class: 'muted small' }, t('Registriert einen Native-Messaging-Host für Edge und Chrome (nur für dein Benutzerkonto). Die Erweiterung fragt beim ersten Zugriff nach deiner Zustimmung in dieser App.')),
@@ -4737,8 +4740,8 @@ function settingsDialog() {
           } }, t('Bei Windows registrieren')),
           h('button', { type: 'button', class: 'btn small', onclick: () => call('openWindowsPasskeySettings') }, t('Windows-Einstellungen öffnen')))),
     ] },
-    { label: t('Ansicht'), content: [h('div', { class: 'view-settings' }, ...viewSettings())] },
-    { label: t('KI-Agenten'), content: [
+    { label: t('Ansicht'), icon: 'eye', content: [h('div', { class: 'view-settings' }, ...viewSettings())] },
+    { label: t('KI-Agenten'), icon: 'wand', content: [
       section(t('KI-Agenten (MCP)'),
         h('label', { class: 'inline' }, mcpEnabled, t('KI-Agenten wie Claude oder GitHub Copilot anbinden (Model Context Protocol)')),
         h('p', { class: 'muted small' }, t('Agenten sehen beim Suchen nur Titel, Benutzer und URL. Passwörter lesen erlaubst du pro Sitzung, Einträge anlegen oder ändern bestätigst du jedes Mal. Löschen ist nicht möglich. Läuft Keevault nicht oder ist gesperrt, bekommt der Agent nichts.')),
@@ -4778,6 +4781,7 @@ function settingsDialog() {
       await render();
     } },
   ]);
+  settingsDialogEl.classList.add('settings-modal');
 }
 
 /**

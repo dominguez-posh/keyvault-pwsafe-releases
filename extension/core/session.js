@@ -988,6 +988,11 @@ export class VaultSession {
     requireFolderDepth(item.folder);
     const actor = await this.actor();
     if (!item.id) await this.requireLicenseForNew(c);
+    // An existing entry keeps its type (#263): another type would drop its fields.
+    if (item.id) {
+      const known = (await this.summaries()).find((s) => s.containerId === containerId && s.id === item.id);
+      if (known && known.type !== (item.type || 'login')) throw new Error(t('Der Typ lässt sich nach dem Anlegen nicht mehr ändern.'));
+    }
     if (c.kind !== 'keyvault') return this.adapter(c).saveItem(containerId, item, { expectedVersion, actor });
     const kv = this.kv(c);
     const id = item.id || newItemId();

@@ -44,7 +44,8 @@ namespace Keevault.Setup
             if (args.Has("clipboard-clear")) return Clip.ClearIfEquals();
             if (args.Has("clipboard")) return Clip.Run();
             // Auto-type into the focused window (no window, no WPF).
-            if (args.Has("type")) return Typing.Run();
+            // --wait-window "A|B": only once a window with one of these titles is in front (RDP sign-in under Credential Guard).
+            if (args.Has("type")) return Typing.Run(args.Get("wait-window"));
             // Exclude the app from Windows Error Reporting (no crash dumps with decrypted data).
             if (args.Has("wer-exclude")) return Wer.Exclude(args.Get("wer-exclude"));
             // Where a vault file lives (cloud sync folder / network / local) and whether it is in sync (Location.cs).

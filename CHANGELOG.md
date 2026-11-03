@@ -4,6 +4,20 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.21 – 2026-11-03
+- Einstellungen: feste Größe für alle Bereiche, Navigation links mit Symbolen, nur der Inhalt scrollt – der Dialog springt nicht mehr in der Größe (#211).
+- Remotedesktop mit Credential Guard meldet sich wieder ohne Zutun an: Keevault trägt das Passwort im Windows-Dialog ein, sobald er vorne ist; kommt er nicht, liegt es in der Zwischenablage (#189).
+- Bastion im Browser: Die Konten-Leiste erscheint auch direkt im Azure-Portal (auch nach einem Seitenwechsel). „Speichern“ neben einem Konto legt die VM als Asset an, ohne anzumelden – mit diesem Konto, der zuletzt genutzten Microsoft-Anmeldung und dem Tenant aus der Portal-Adresse. Der Tab schließt sich nur noch, wenn die Anmeldung aus der App über „Bastion“ gestartet wurde (#306).
+- Der Typ eines Eintrags lässt sich nach dem Anlegen nicht mehr ändern (#263).
+- Release: Der Build im öffentlichen Repo scheiterte an einem Test für ein privates Skript; der Export prüft jetzt, dass jede exportierte Datei nur Exportiertes lädt (#99).
+
+### English
+- Settings: one fixed size for every page, navigation on the left with symbols, only the content scrolls – the dialog no longer jumps in size (#211).
+- Remote desktop with Credential Guard signs in by itself again: Keevault enters the password in the Windows dialog once it is in front; if it does not come, the password is on the clipboard (#189).
+- Bastion in the browser: the account bar also appears right in the Azure portal (also after changing pages). "Save" next to an account keeps the VM as an asset without signing in – with that account, the Microsoft sign-in used last and the tenant from the portal address. The tab only closes when the sign-in was started in the app via "Bastion" (#306).
+- An entry's type can no longer be changed once it exists (#263).
+- Release: the build in the public repository failed on a test of a private script; the export now checks that every exported file only loads exported ones (#99).
+
 ## 0.9.20 – 2026-11-03
 - Schmales Fenster: Der Passkey eines Eintrags steht bündig in seinem Feld statt als eingerückter Kasten im Kasten; Benutzername und Adresse brechen nicht mehr mitten im Wort um.
 - Tresorsuche in der Seitenleiste: Das Suchfeld nimmt die ganze Breite der Zeile „Tresore“ ein, statt als kurzes Feld über der abgeschnittenen Überschrift zu liegen.
