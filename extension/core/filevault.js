@@ -32,12 +32,42 @@ export class FileFormatError extends Error {
   }
 }
 
+/**
+ * The complete JSON object at the start of a damaged file: parallel saves through one temporary file (import in
+ * 0.9.13/0.9.14) left a whole earlier version followed by the rest of a longer one. Null if there is none.
+ */
+function leadingJson(text) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  const start = text.indexOf('{');
+  if (start < 0 || text.slice(0, start).trim()) return null;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) {
+      try {
+        return JSON.parse(text.slice(start, i + 1));
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
 export function parseFile(text) {
   let doc;
   try {
     doc = JSON.parse(text);
   } catch {
-    throw new FileFormatError();
+    doc = leadingJson(String(text));
+    if (!doc) throw new FileFormatError();
   }
   if (doc?.format !== FILE_FORMAT || !doc.keyring || typeof doc.items !== 'object') throw new FileFormatError();
   if (doc.version > 2) throw new FileFormatError(t('Die Datei stammt aus einer neueren Version von Keevault'));
