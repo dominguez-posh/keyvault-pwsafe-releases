@@ -1,7 +1,7 @@
 import { h, icon, iconButton, setChildren, toast, avatar, modal, confirmDialog, formatDateTime, passkeySuccess } from '../../extension/core/dom.js';
 import { itemDetail, itemForm, generatorPanel } from '../../extension/core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../../extension/core/generator.js';
-import { unlockPanel, manageDialog, enableDialog, setClipboardWriter, showRecoveryKey } from '../../extension/core/ui-protect.js';
+import { unlockPanel, manageDialog, enableDialog, setClipboardWriter, showRecoveryKey, strengthMeter } from '../../extension/core/ui-protect.js';
 // Codes in dialogs (recovery key, invitation code) go through the app's clipboard like everything else.
 setClipboardWriter((text) => call('copy', text));
 import { importDialog } from '../../extension/core/ui-import.js';
@@ -175,6 +175,11 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'changed' && st?.opened) {
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(() => reloadAll().catch(() => {}), 250);
+  } else if (ev.type === 'changed' && st && !st.opened) {
+    // Unlocked elsewhere (tray, an agent's request, a test): show the vaults. Still locked: the screen stays as it is.
+    call('state').then((s) => { if (s.opened) render(); }).catch(() => {});
+  } else if (ev.type === 'sync-stopped' && st?.opened) {
+    toast(t('{provider} läuft nicht – Änderungen an Tresoren in diesem Ordner werden nicht synchronisiert. Starte {provider}.', { provider: ev.provider }), 'error');
   } else if (ev.type === 'link') {
     const entry = parseItemLink(ev.url);
     if (entry) openItemLink(entry);
@@ -358,7 +363,7 @@ function windowsDialog(r) {
 window.addEventListener('kvpwsafe-refresh', () => reloadAll());
 
 async function render() {
-  st = await call('state');
+  st = await fetchState();
   setLanguage(st.settings.language);
   document.title = 'Keevault';
   document.body.dataset.ready = '1';
@@ -404,9 +409,10 @@ async function render() {
 
 // Default split: the list is the widest column (about half the window), the detail beside it.
 // list: null = proportional (55 % of the width beside the sidebar) until the user drags it.
-const PANE_DEFAULTS = { sidebar: 280, list: null };
+const PANE_DEFAULTS = { sidebar: 300, list: null };
 // The sidebar never gets narrower than its head needs (logo, "Keevault for Admins", lock and menu button).
-const PANE_LIMITS = { sidebar: [236, 420], list: [260, 960] };
+// The sidebar keeps room for longer vault names next to their marks (#19) – it is never dragged narrower than 280 px.
+const PANE_LIMITS = { sidebar: [280, 420], list: [260, 960] };
 const DETAIL_MIN = 340;
 
 function paneWidths() {
@@ -489,8 +495,17 @@ async function loadAgentTrust() {
   agentTrust = map;
 }
 
+// Settings changed here (admin mode, view) count up: a state fetched before such a change keeps the newer settings –
+// otherwise a reload that was under way switched the admin mode back in the window while it stayed on.
+let settingsRev = 0;
+async function fetchState() {
+  const rev = settingsRev;
+  const fresh = await call('state');
+  return rev === settingsRev || !st ? fresh : { ...fresh, settings: st.settings };
+}
+
 async function reloadAll() {
-  st = await call('state');
+  st = await fetchState();
   if (!st.opened) {
     expiryReminded = false;
     return render();
@@ -610,6 +625,7 @@ function renderLocked(error) {
 /** Set, change or remove the app PIN; forced: the organization requires one and none is set yet. */
 /** Admin mode on or off; the list, the New menu and the open entry follow at once. */
 async function setAdminMode(on, pin) {
+  settingsRev++;
   st.settings = on ? await call('activateAdminMode', pin) : await call('deactivateAdminMode');
   applyViewClass();
   renderSidebar();
@@ -662,13 +678,13 @@ function pinDialog({ forced = false } = {}) {
     !forced && st.pinSet && !st.requirePin ? { label: t('PIN entfernen'), danger: true, onClick: async () => {
       await call('setPin', { current: current.value, next: null });
       toast(t('PIN entfernt'));
-      st = await call('state');
+      st = await fetchState();
     } } : null,
     { label: t('Speichern'), primary: true, onClick: async () => {
       if (next.value !== repeat.value) throw new Error(t('Die PINs stimmen nicht überein'));
       await call('setPin', { current: current?.value, next: next.value });
       toast(t('PIN gespeichert'));
-      st = await call('state');
+      st = await fetchState();
     } },
   ].filter(Boolean));
   void close;
@@ -755,12 +771,41 @@ function providerMark(provider, id) {
   return svg(`<defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9aa9bd"/><stop offset="1" stop-color="#5f7088"/></linearGradient></defs><path d="M6.8 19h11a4.2 4.2 0 0 0 .5-8.37A6 6 0 0 0 6.9 9.3 4.85 4.85 0 0 0 6.8 19z" fill="url(#${id})"/>`);
 }
 
+/**
+ * Sync state of a cloud folder: problem (sync client not running, provider error), pending (offline – syncs later –,
+ * file not yet in sync, syncing) or ok. → { level: 'problem' | 'pending' | 'ok' | '', text } (#15)
+ */
+function syncState(loc) {
+  if (loc?.kind !== 'cloud') return { level: '', text: '' };
+  const provider = loc.provider || t('Cloud-Ordner');
+  if (loc.clientRunning === false) return { level: 'problem', text: t('{provider} läuft nicht – nicht synchronisiert', { provider }) };
+  if (loc.providerStatus === 'error' || loc.providerStatus === 'terminated') return { level: 'problem', text: t('Synchronisierung gestört') };
+  if (loc.online === false || loc.providerStatus === 'offline') return { level: 'pending', text: t('offline – wird später synchronisiert') };
+  if (loc.inSync === false || loc.providerStatus === 'syncing') return { level: 'pending', text: t('wird synchronisiert …') };
+  return { level: 'ok', text: loc.inSync ? t('synchronisiert') : '' };
+}
+
+/** Above the list of a file vault in a cloud folder that does not sync: what is wrong and what to do (#15). */
+function syncNotice(container) {
+  if (container?.kind !== 'file') return null;
+  const loc = container.location;
+  const s = syncState(loc);
+  if (s.level === 'problem') {
+    return notice(loc.clientRunning === false
+      ? t('{provider} läuft nicht: Änderungen an diesem Tresor bleiben nur auf diesem Gerät und erreichen deine anderen Geräte nicht. Starte {provider} (Startmenü), dann gleicht er sich von selbst ab.', { provider: loc.provider || 'OneDrive' })
+      : t('Die Synchronisierung dieses Ordners ist gestört – prüfe den Sync-Client ({provider}).', { provider: loc.provider || t('Cloud-Ordner') }), 'warn');
+  }
+  if (loc?.online === false) return notice(t('Kein Netzwerk – Änderungen an diesem Tresor werden synchronisiert, sobald du wieder online bist.'), 'info');
+  return null;
+}
+
 /** Cloud folder (OneDrive, iCloud, Dropbox …) or network drive, with a dot when the file is not in sync. */
 function locationBadge(c, loc, id) {
   const cloud = loc.kind === 'cloud';
-  const problem = loc.providerStatus === 'error' || loc.providerStatus === 'offline' || loc.providerStatus === 'terminated';
-  const pending = !problem && (loc.inSync === false || loc.providerStatus === 'syncing');
-  const state = problem ? t('Synchronisierung gestört') : pending ? t('wird synchronisiert …') : loc.inSync ? t('synchronisiert') : '';
+  const s = syncState(loc);
+  const problem = s.level === 'problem';
+  const pending = s.level === 'pending';
+  const state = s.text;
   const title = [cloud ? loc.provider || t('Cloud-Ordner') : t('Netzlaufwerk'), state].filter(Boolean).join(' · ');
   const el = h('span', { class: `source-badge ${cloud ? 'cloud' : 'network'} ${problem ? 'problem' : pending ? 'pending' : ''}`, title, 'aria-label': title, role: 'img' });
   el.innerHTML = cloud ? providerMark(loc.provider || '', id)
@@ -816,6 +861,8 @@ function renderSidebar() {
       h('span', { class: `brand-name ${adminMode() ? 'admin' : ''}` }, h('span', {}, 'Keevault'), adminMode() ? h('span', { class: 'brand-admin' }, 'for Admins') : null),
       st.offline ? h('span', { class: 'badge warn', title: t('Letzter Stand: {date}', { date: formatDateTime(st.offlineAt) }) }, t('Offline')) : null,
       h('span', { class: 'spacer' }),
+      // Admin mode: optional direct way to PIM (Settings → View), between the brand and the lock.
+      adminMode() && st.settings.adminPim ? pimHeadButton() : null,
       iconButton('lock', t('Sperren'), () => call('lock')),
       mainMenuButton()),
     nav('all', deviceMode() ? t('Alle Assets') : t('Alle Einträge'), 'shield', items.filter((i) => (i.type === 'server') === deviceMode()).length),
@@ -827,7 +874,9 @@ function renderSidebar() {
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
     // Pinned to the bottom edge (sticky): stays reachable however many vaults the list above holds.
     h('div', { class: 'sidebar-foot' }, adminMode() ? modeSwitch() : null, h('button', { type: 'button', class: 'help-btn', title: t('Hilfe und Tipps (F1)'), onclick: helpDialog },
-      h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe'))),
+      h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe')),
+      // Admin mode next to Help (#23) – only once offered under Settings → View (and while it is on, to end it).
+      st.settings.adminOffered || adminMode() ? adminFootButton() : null),
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
         await call('signIn');
@@ -893,6 +942,7 @@ async function stepZoom(dir) {
 }
 
 async function setView(patch) {
+  settingsRev++;
   st.settings = await call('updateSettings', patch);
   applyViewClass();
   document.querySelectorAll('[data-view-value]').forEach((el) => el.dispatchEvent(new Event('view-changed')));
@@ -931,7 +981,7 @@ function onOffControl(key, label, on, after) {
 /** View → "Ansicht auf Standard": zoom, transparency, bottom bar, source marks and column widths as on first start. */
 async function resetView() {
   try { localStorage.removeItem('paneWidths'); } catch {}
-  await setView({ zoom: 1, theme: 'system', transparency: 'light', sourceBadges: true, pimButton: false, pimOnLock: false, adminTools: false });
+  await setView({ zoom: 1, theme: 'system', transparency: 'light', sourceBadges: true, pimButton: false, pimOnLock: false, adminPim: false, adminTools: false });
   await render();
   toast(t('Ansicht zurückgesetzt'));
 }
@@ -958,6 +1008,37 @@ function placeholderMark() {
 }
 
 
+/** Sidebar foot, next to Help: admin mode as a switch – on asks for the app PIN, off ends it at once. */
+function adminFootButton() {
+  const on = adminMode();
+  return h('button', { type: 'button', role: 'switch', 'aria-checked': String(on), class: `admin-switch admin-foot ${on ? 'on' : ''}`,
+    title: on ? t('Admin-Modus beenden') : t('Admin-Modus aktivieren …'), dataset: { action: on ? 'admin-off' : 'admin-on' },
+    onclick: () => (on ? setAdminMode(false) : adminModeDialog()) },
+  h('span', { class: 'switch', 'aria-hidden': 'true' }, h('span', { class: 'switch-knob' })), t('Admin'));
+}
+
+/** Admin mode: PIM in the sidebar head (Settings → View → "PIM button in admin mode"). */
+function pimHeadButton() {
+  const b = iconButton('ac-elevate', t('PIM: Rolle aktivieren'), () => openUrl(ADMIN_LINKS[0].url));
+  b.classList.add('pim-head');
+  return b;
+}
+
+/** Settings → View: every view setting (the menu keeps only design and zoom); changes apply at once. */
+function viewSettings() {
+  return [
+    viewRow(t('Zoom'), zoomControl()),
+    viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
+    viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
+    viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
+    viewRow(t('PIM beim Entsperren'), onOffControl('pimOnLock', t('PIM beim Entsperren'), false)),
+    viewRow(t('Admin-Modus anbieten'), onOffControl('adminOffered', t('Admin-Modus anbieten'), false, renderSidebar)),
+    viewRow(t('PIM-Knopf im Admin-Modus'), onOffControl('adminPim', t('PIM-Knopf im Admin-Modus'), false, renderSidebar)),
+    h('p', { class: 'muted small' }, t('Änderungen gelten sofort. „Admin-Modus anbieten“ zeigt unten neben „Hilfe“ einen Schalter für den Admin-Modus (Einschalten mit der App-PIN). Der PIM-Knopf erscheint im Admin-Modus oben links zwischen „Keevault for Admins“ und dem Schloss.')),
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn small', dataset: { action: 'view-reset' }, onclick: resetView }, icon('refresh', 14), t('Auf Standard zurücksetzen'))),
+  ];
+}
+
 /** Burger next to the logo: opens the main menu; a dot when the password check reports expiring entries. */
 function mainMenuButton() {
   const b = iconButton('menu', t('Menü'), (e) => mainMenu(e.currentTarget));
@@ -981,9 +1062,17 @@ function mainMenu(anchor) {
     close();
     onClick();
   } }, icon(iconName, 16), h('span', { class: 'grow' }, label), extra);
-  // Two tabs keep the menu short: "Menu" (actions and tools) and "View" (how the app looks); the last one is kept.
-  const panes = {
-    main: h('div', { class: 'main-menu-pane', role: 'group', 'aria-label': t('Menü') },
+  // One menu (#18): the most used view settings on top, then actions and tools. Every view setting is under
+  // Settings → View; admin mode is offered there and then sits next to Help (#23).
+  const menu = h('div', { class: 'main-menu', role: 'menu', 'aria-label': t('Menü') },
+    h('div', { class: 'main-menu-account' },
+      h('span', { class: 'main-menu-avatar' }, initials),
+      h('span', { class: 'main-menu-who' }, h('b', {}, name), h('span', {}, st.account?.username || t('Nur Datei-Tresore')))),
+    h('div', { class: 'main-menu-pane view-pane', role: 'group', 'aria-label': t('Ansicht') },
+      viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
+      viewRow(t('Zoom'), zoomControl())),
+    h('div', { class: 'context-sep' }),
+    h('div', { class: 'main-menu-pane', role: 'group', 'aria-label': t('Menü') },
       entry('settings', 'settings', t('Einstellungen'), settingsDialog),
       entry('reload', 'refresh', t('Neu laden'), refresh),
       h('div', { class: 'main-menu-label' }, t('Werkzeuge')),
@@ -992,40 +1081,7 @@ function mainMenu(anchor) {
       st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
       entry('trash', 'trash', t('Papierkorb'), openTrash),
       h('div', { class: 'context-sep' }),
-      adminMode()
-        ? entry('admin-off', 'shield', t('Admin-Modus beenden'), () => setAdminMode(false))
-        : entry('admin-on', 'shield', t('Admin-Modus aktivieren …'), adminModeDialog),
-      entry('lock', 'lock', t('Sperren'), () => call('lock'))),
-    view: h('div', { class: 'main-menu-pane view-pane', role: 'group', 'aria-label': t('Ansicht') },
-      viewRow(t('Zoom'), zoomControl()),
-      viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
-      viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
-      viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
-      viewRow(t('PIM beim Entsperren'), onOffControl('pimOnLock', t('PIM beim Entsperren'), false)),
-      // Admin mode changes the list (devices tab), the New menu and the open entry (admin tiles): redraw them.
-      h('div', { class: 'context-sep' }),
-      entry('view-reset', 'refresh', t('Auf Standard zurücksetzen'), resetView)),
-  };
-  let tab = 'main';
-  try { tab = localStorage.getItem('menuTab') === 'view' ? 'view' : 'main'; } catch {}
-  const tabButton = (key, label) => h('button', { type: 'button', role: 'tab', dataset: { tab: key }, onclick: () => showTab(key) }, label);
-  const tabs = h('div', { class: 'seg main-menu-tabs', role: 'tablist' }, tabButton('main', t('Menü')), tabButton('view', t('Ansicht')));
-  const showTab = (key) => {
-    tab = key;
-    try { localStorage.setItem('menuTab', key); } catch {}
-    for (const b of tabs.children) {
-      b.classList.toggle('on', b.dataset.tab === key);
-      b.setAttribute('aria-selected', String(b.dataset.tab === key));
-    }
-    panes.main.hidden = key !== 'main';
-    panes.view.hidden = key !== 'view';
-  };
-  const menu = h('div', { class: 'main-menu', role: 'menu', 'aria-label': t('Menü') },
-    h('div', { class: 'main-menu-account' },
-      h('span', { class: 'main-menu-avatar' }, initials),
-      h('span', { class: 'main-menu-who' }, h('b', {}, name), h('span', {}, st.account?.username || t('Nur Datei-Tresore')))),
-    tabs, panes.main, panes.view);
-  showTab(tab);
+      entry('lock', 'lock', t('Sperren'), () => call('lock'))));
   const close = () => {
     menu.classList.add('closing');
     setTimeout(() => menu.remove(), 120);
@@ -1335,6 +1391,7 @@ function renderList() {
   setChildren(panes.list,
     h('div', { class: 'list-head' }, container && logos.get(container.id) ? h('img', { class: 'container-logo large', src: logos.get(container.id), alt: '' }) : null,
       listTitle(title, container), deviceMode() ? h('span', { class: 'mode-badge', title: t('Es werden Assets angezeigt – unten links auf „Passwörter“ umschalten') }, icon('external', 13), t('Assets')) : null, newButton),
+    syncNotice(container),
     container?.error ? notice(container.error.status !== 403 ? container.error.message
       : container.rbac === false
         ? t('{message}. Dieser Key Vault nutzt Zugriffsrichtlinien statt Azure RBAC: Stelle ihn unter „Zugriffskonfiguration“ auf „Azure RBAC“ um oder lege eine Zugriffsrichtlinie für dein Konto an.', { message: container.error.message })
@@ -3044,7 +3101,8 @@ async function renderDetail() {
 
 /** Logins a server entry can link to (accounts for RDP, TeamViewer, Bastion); Microsoft admin accounts marked. */
 const linkOptions = () => items.filter((i) => i.type === 'login')
-  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin, loginLinked: !!i.loginLinked }))
+  // avatar: the entry's own icon or logo as in the list (#32), loaded the same way.
+  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin, loginLinked: !!i.loginLinked, avatar: () => itemAvatar(i) }))
   .sort((a, b) => a.title.localeCompare(b.title));
 
 function linkTitle(key) {
@@ -3055,7 +3113,10 @@ function linkTitle(key) {
 async function connectServer(containerId, id, method) {
   try {
     const r = await call('connectServer', { containerId, id, method });
-    if (method === 'rdp') toast(r.prompt ? t('Remotedesktop gestartet – bitte dort anmelden') : t('Remotedesktop gestartet'));
+    if (method === 'rdp') {
+      toast(r.credentialGuard ? t('Remotedesktop gestartet – Credential Guard erlaubt keine gespeicherten Anmeldedaten: Das Passwort liegt in der Zwischenablage, im Windows-Dialog mit Strg+V einfügen.')
+        : r.prompt ? t('Remotedesktop gestartet – bitte dort anmelden') : t('Remotedesktop gestartet'));
+    }
     else if (method === 'ssh') toast(r.copied ? t('SSH gestartet – das Passwort liegt in der Zwischenablage (im Terminal mit Rechtsklick einfügen)') : t('SSH gestartet'));
     else if (method === 'mgmt') toast(t('Verwaltungsseite im Browser geöffnet'));
     else if (method === 'teamviewer') toast(r.copied ? t('TeamViewer geöffnet – das Passwort liegt in der Zwischenablage') : t('TeamViewer gestartet'));
@@ -3342,6 +3403,7 @@ async function personalWizard() {
   const s = { step: 0, info: null, mode: 'create', id: null, recoveryKey: null };
   const body = h('div', { class: 'wizard' });
   const { dialog, close } = modal(t('Persönlicher Tresor'), body, []);
+  dialog.classList.add('wizard-modal');
   const closed = new Promise((resolve) => dialog.addEventListener('close', resolve));
   const steps = [t('Start'), t('Speicherort'), t('Schutz'), t('FIDO-Stick'), t('Fertig')];
   const header = () => h('ol', { class: 'wizard-steps' }, ...steps.map((label, i) => h('li', { class: i === s.step ? 'on' : i < s.step ? 'done' : '' }, h('span', {}, String(i + 1)), label)));
@@ -3357,8 +3419,9 @@ async function personalWizard() {
     if (!info?.folder) return notice(t('Kein OneDrive gefunden. Richte OneDrive ein oder wähle einen anderen synchronisierten Ordner bzw. ein Netzlaufwerk.'), 'warn');
     if (!loc || !REMOTE_KINDS.includes(loc.kind)) return notice(t('Dieser Ordner liegt lokal auf dem Gerät – bitte einen synchronisierten Ordner oder ein Netzlaufwerk wählen.'), 'warn');
     const what = loc.kind === 'cloud' ? loc.provider || t('Cloud-Ordner') : t('Netzlaufwerk');
-    const state = loc.providerStatus === 'error' || loc.providerStatus === 'offline' ? t('Synchronisierung gestört') : loc.providerStatus === 'syncing' ? t('wird synchronisiert …') : t('bereit');
-    return notice(t('{what} · {state}', { what, state }), loc.providerStatus === 'error' || loc.providerStatus === 'offline' ? 'warn' : 'info');
+    const s = syncState(loc);
+    const state = s.level === 'ok' || !s.text ? t('bereit') : s.text;
+    return notice(t('{what} · {state}', { what, state }), s.level === 'problem' ? 'warn' : 'info');
   };
   const pinFields = () => st.pinSet
     ? { el: field(t('App-PIN'), h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'wiz-pin' })), pin: () => body.querySelector('.wiz-pin').value, repeat: null }
@@ -3370,7 +3433,7 @@ async function personalWizard() {
     if (st.pinSet) return pf.pin();
     if (pf.pin() !== pf.repeat()) throw new Error(t('Die PINs stimmen nicht überein'));
     await call('setPin', { current: null, next: pf.pin() });
-    st = await call('state');
+    st = await fetchState();
     return pf.pin();
   };
 
@@ -3408,6 +3471,7 @@ async function personalWizard() {
       content = s.mode === 'create' ? [
         h('p', {}, t('Das Masterpasswort verschlüsselt den Tresor. Wähle es lang und einzigartig (mindestens 12 Zeichen) – du brauchst es auf neuen Geräten und zum Ändern der PIN.')),
         h('div', { class: 'grid2' }, field(t('Masterpasswort'), pw), field(t('Wiederholen'), pw2)),
+        strengthMeter(pw),
         h('p', { class: 'muted small' }, st.pinSet ? t('Deine App-PIN entsperrt den Tresor auf diesem Gerät.') : t('Lege eine App-PIN fest – sie entsperrt den Tresor auf diesem Gerät.')),
         pf.el,
         buttons(btn(t('Zurück'), () => go(1)), btn(t('Tresor erstellen'), async () => {
@@ -3463,7 +3527,7 @@ async function personalWizard() {
 async function firstStartWizards({ always = false } = {}) {
   await personalWizard();
   await call('syncSettings').catch(() => null);
-  st = await call('state');
+  st = await fetchState();
   if (document.querySelector('dialog[open]')) return render();
   if (!always && (st.containers.some((c) => c.kind === 'keyvault') || st.settings.containers.length)) return render();
   await vaultWizard();
@@ -3777,6 +3841,7 @@ async function vaultWizard({ intro = true } = {}) {
   const s = { step: intro ? 0 : st.signedIn ? 2 : 1, subs: null, done: null };
   const body = h('div', { class: 'wizard vault-wizard' });
   const { dialog, close } = modal(t('Tresor einrichten'), body, []);
+  dialog.classList.add('wizard-modal');
   const steps = [t('Start'), t('Anmelden'), t('Ort'), t('Zugriff'), t('Notfallzugang'), t('Erstellen')];
   const header = () => h('ol', { class: 'wizard-steps' }, ...steps.map((label, i) => h('li', { class: i === s.step ? 'on' : i < s.step ? 'done' : '' }, h('span', {}, String(i + 1)), label)));
   const buttons = (...b) => h('div', { class: 'wizard-buttons' }, ...b);
@@ -4043,7 +4108,7 @@ async function vaultWizard({ intro = true } = {}) {
           if (!st.signedIn) {
             try {
               await call('signIn');
-              st = await call('state');
+              st = await fetchState();
             } catch (e) {
               toast(e.message, 'error');
             }
@@ -4066,7 +4131,7 @@ async function vaultWizard({ intro = true } = {}) {
             : btn(t('Mit Microsoft anmelden'), async () => {
               const r = await call('signIn');
               if (r.discoverError) toast(t('Tresor-Suche: {message}', { message: r.discoverError }), 'error');
-              st = await call('state');
+              st = await fetchState();
               await go(2);
             }, { primary: true })),
       ];
@@ -4078,14 +4143,12 @@ async function vaultWizard({ intro = true } = {}) {
       ] : [
         explain(t('Der Tresor ist ein Azure Key Vault in einer Ressourcengruppe deines Abonnements. Keevault legt ihn mit RBAC und Soft Delete an und gibt dir Bearbeiten- und Verwalten-Rechte.'),
           t('Nötig: Besitzer (oder Mitwirkender + Benutzerzugriffsadministrator) auf der Ressourcengruppe. Der Anzeigename ist nur für die App, der Key-Vault-Name muss weltweit eindeutig sein.')),
-        field(t('Anzeigename'), display),
+        // Two columns: where (subscription, group), what (new or existing, region), names – fits without scrolling.
         h('div', { class: 'grid2' }, field(t('Abonnement'), sub), field(t('Ressourcengruppe'), rg)),
         subNotice,
-        field(t('Key Vault'), mode),
+        h('div', { class: 'grid2' }, field(t('Key Vault'), mode), regionField),
         rgNotice,
-        newFields,
-        existingFields,
-        regionField,
+        h('div', { class: 'grid2' }, field(t('Anzeigename'), display), h('div', {}, newFields, existingFields)),
         purgeLabel,
         buttons(btn(t('Zurück'), () => go(1)), btn(t('Weiter'), () => { checkWhere(); return go(3); }, { primary: true })),
       ];
@@ -4674,6 +4737,7 @@ function settingsDialog() {
           } }, t('Bei Windows registrieren')),
           h('button', { type: 'button', class: 'btn small', onclick: () => call('openWindowsPasskeySettings') }, t('Windows-Einstellungen öffnen')))),
     ] },
+    { label: t('Ansicht'), content: [h('div', { class: 'view-settings' }, ...viewSettings())] },
     { label: t('KI-Agenten'), content: [
       section(t('KI-Agenten (MCP)'),
         h('label', { class: 'inline' }, mcpEnabled, t('KI-Agenten wie Claude oder GitHub Copilot anbinden (Model Context Protocol)')),

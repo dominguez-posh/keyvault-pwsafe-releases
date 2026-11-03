@@ -14,19 +14,45 @@ export async function featureChecks(ctx) {
   const { js, sleep, errors, win, api, vault, config, changed, clipboardHas } = ctx;
   const fail = (area, message) => errors.push(`features/${area}: ${message}`);
   const closeDialogs = () => js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); document.querySelector(".context-menu, .main-menu")?.remove(); true');
-  // Admin mode the way a person switches it: menu → "Activate admin mode …" → app PIN; "End admin mode" without.
+  // Settings → View (all view settings since #18): menu → Settings → tab "View".
+  const openViewSettings = async () => {
+    // Up to three tries: right after unlocking the window may still be drawing its menu button.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await closeDialogs();
+      for (let i = 0; i < 10 && !(await js('!!document.querySelector(".menu-btn")')); i++) await sleep(300);
+      await js('document.querySelector(".menu-btn")?.click()');
+      await sleep(300);
+      await js('document.querySelector(".main-menu [data-action=settings]")?.click()');
+      await sleep(500);
+      await js('[...document.querySelectorAll("dialog[open] .tabs button")].find((b) => /^(Ansicht|View)$/.test(b.textContent.trim()))?.click()');
+      await sleep(200);
+      if (await js('!!document.querySelector("dialog[open] .view-settings .view-row")?.offsetParent')) return;
+    }
+  };
+  // Admin mode the way a person switches it (#23): offered under Settings → View, then the switch next to Help → app
+  // PIN; switching off without.
   const setAdmin = async (on) => {
     const pin = on ? await ctx.ensurePin() : '';
-    await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=main]")?.click()');
-    await sleep(300);
-    await js(`document.querySelector(".main-menu [data-action=${on ? 'admin-on' : 'admin-off'}]")?.click()`);
-    await sleep(400);
-    if (on) {
-      await js(`(() => { const p = document.querySelector("dialog[open] .admin-pin"); if (p) { p.value = ${JSON.stringify(pin)}; } document.querySelector("dialog[open] .modal-footer .btn.primary")?.click(); })()`);
+    if (!config.get().adminOffered) {
+      config.update({ adminOffered: true });
+      changed();
+      for (let i = 0; i < 10 && !(await js('!!document.querySelector(".sidebar-foot .admin-foot")')); i++) await sleep(300);
     }
-    for (let i = 0; i < 10 && config.get().adminTools !== on; i++) await sleep(300);
+    // Up to three clicks: the sidebar may be redrawn right as the switch is clicked (a save just before).
+    for (let attempt = 0; attempt < 3 && config.get().adminTools !== on; attempt++) {
+      await js('document.querySelector(".main-menu")?.remove()');
+      await js(`document.querySelector(".sidebar-foot [data-action=${on ? 'admin-on' : 'admin-off'}]")?.click()`);
+      await sleep(400);
+      if (on) {
+        await js(`(() => { const p = document.querySelector("dialog[open] .admin-pin"); if (p) { p.value = ${JSON.stringify(pin)}; } document.querySelector("dialog[open] .modal-footer .btn.primary")?.click(); })()`);
+      }
+      for (let i = 0; i < 10 && config.get().adminTools !== on; i++) await sleep(300);
+    }
     await sleep(600);
-    if (config.get().adminTools !== on) fail('admin', `menu did not switch admin mode ${on ? 'on' : 'off'}`);
+    if (config.get().adminTools !== on) {
+      const why = await js('JSON.stringify({ foot: document.querySelector(".sidebar-foot")?.innerHTML.slice(0, 300), dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => d.innerText.slice(0, 80)), offered: !!document.querySelector(".admin-foot") })');
+      fail('admin', `switch next to Help did not switch admin mode ${on ? 'on' : 'off'} (${why}, offered=${config.get().adminOffered})`);
+    }
   };
   // Always the same demo vault (the order of unlocked vaults varies between runs); the UI is opened on it.
   const open = (await vault.containers()).filter((c) => c.kind === 'keyvault' && !c.error && !c.locked);
@@ -52,7 +78,8 @@ export async function featureChecks(ctx) {
   };
   // Each area at most 45 s: a step that hangs is reported and the run goes on (never a smoke test without an end).
   const cleanUp = async () => {
-    for (const id of created.splice(0)) await vault.deleteItem(kvc.id, id).catch(() => {});
+    // Newest first: assets and linked logins go before the logins they use (those cannot be deleted while in use).
+    for (const id of created.splice(0).reverse()) await vault.deleteItem(kvc.id, id).catch(() => {});
     changed();
     await sleep(400);
   };
@@ -63,6 +90,21 @@ export async function featureChecks(ctx) {
       await sleep(250);
     }
     if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log('[features] UI not ready:', await js('JSON.stringify({ dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => d.innerText.slice(0, 200)), body: document.body.innerText.slice(0, 300) })'));
+  };
+  // Window size of the run: steps that resize return to it; set until window and page agree (late resizes on Windows).
+  const baseSize = win.getSize();
+  const baseView = String(await js('innerWidth + "x" + innerHeight'));
+  const resizeTo = async (w, h, area = '') => {
+    for (let i = 0; i < 5; i++) {
+      const [cw, ch] = win.getSize();
+      const view = String(await js('innerWidth + "x" + innerHeight'));
+      const want = w === baseSize[0] && h === baseSize[1] ? baseView.split('x').map(Number) : null;
+      const [vw, vh] = view.split('x').map(Number);
+      if (Math.abs(cw - w) <= 4 && Math.abs(ch - h) <= 4 && (!want || (Math.abs(vw - want[0]) <= 8 && Math.abs(vh - want[1]) <= 8))) return;
+      if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[features] ${area} window ${cw}x${ch} (page ${view}) → ${w}x${h}`);
+      win.setSize(w, h);
+      await sleep(700);
+    }
   };
   const step = async (area, fn) => {
     const started = Date.now();
@@ -75,6 +117,9 @@ export async function featureChecks(ctx) {
     if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[features] ${area} ${Date.now() - started} ms`);
     await closeDialogs();
     await cleanUp();
+    // A step that resized the window must not leave the next ones in a small one: back to the size of the start,
+    // checked on the page too (Windows sometimes applies a late resize after the restore).
+    await resizeTo(...baseSize, area);
   };
 
   try {
@@ -117,18 +162,28 @@ export async function featureChecks(ctx) {
       };
       await openMenu();
       const actions = await js('[...document.querySelectorAll(".main-menu [data-action]")].map((b) => b.dataset.action).join(",")');
-      for (const a of ['reload', 'settings', 'generator', 'health', 'view-reset', 'lock']) if (!String(actions).split(',').includes(a)) fail('mainmenu', `entry "${a}" missing`);
+      for (const a of ['reload', 'settings', 'generator', 'health', 'lock']) if (!String(actions).split(',').includes(a)) fail('mainmenu', `entry "${a}" missing`);
       if (await js('[...document.querySelectorAll(".main-menu .view-row, .main-menu label, .main-menu span")].some((e) => /Leiste unten|Bottom bar/.test(e.textContent))')) fail('mainmenu', 'removed "bottom bar" setting is back');
-      // Two tabs: "Menu" shows the actions, "View" the view switches – never both at once.
-      const tabState = () => js('JSON.stringify({ tabs: [...document.querySelectorAll(".main-menu [data-tab]")].map((b) => b.dataset.tab), settings: !!document.querySelector(".main-menu [data-action=settings]")?.offsetParent, zoom: !!document.querySelector(".main-menu .view-pane .view-row")?.offsetParent })');
-      await js('document.querySelector(".main-menu [data-tab=main]")?.click()');
-      let ts = JSON.parse(await tabState());
-      if (ts.tabs.join() !== 'main,view') fail('mainmenu', `tabs: ${ts.tabs.join()}`);
-      if (!ts.settings || ts.zoom) fail('mainmenu', 'tab "Menu" does not show only the actions');
-      await js('document.querySelector(".main-menu [data-tab=view]")?.click()');
-      ts = JSON.parse(await tabState());
-      if (ts.settings || !ts.zoom) fail('mainmenu', 'tab "View" does not show only the view switches');
-      await js('document.querySelector(".main-menu [data-tab=main]")?.click()');
+      // One menu (#18): no tabs; design and zoom on top, the admin mode as a switch, all other view settings in the settings.
+      const menuState = JSON.parse(await js('JSON.stringify({ tabs: document.querySelectorAll(".main-menu [data-tab]").length, rows: [...document.querySelectorAll(".main-menu .view-row .grow")].map((e) => e.textContent), adminSwitch: document.querySelector(".main-menu .admin-switch")?.getAttribute("aria-checked"), settings: !!document.querySelector(".main-menu [data-action=settings]")?.offsetParent })'));
+      if (menuState.tabs || !menuState.settings) fail('mainmenu', `menu still has tabs or lacks the settings: ${JSON.stringify(menuState)}`);
+      if (menuState.rows.join() !== 'Design,Zoom') fail('mainmenu', `menu view settings: ${menuState.rows.join()}`);
+      // Admin mode (#23): never in the menu, next to Help only once offered under Settings → View.
+      if (menuState.adminSwitch !== undefined) fail('mainmenu', 'admin mode switch in the menu');
+      await js('document.querySelector(".main-menu")?.remove()');
+      if (config.get().adminOffered || (await js('!!document.querySelector(".sidebar-foot .admin-foot")'))) fail('mainmenu', 'admin mode offered without being switched on');
+      await openViewSettings();
+      await js('document.querySelector("dialog[open] .view-settings .seg[aria-label=\'Admin-Modus anbieten\'] button")?.click()');
+      await closeDialogs();
+      let foot = '';
+      for (let i = 0; i < 10 && !foot; i++) {
+        await sleep(300);
+        foot = String(await js('(() => { const f = document.querySelector(".sidebar-foot"); const a = f?.querySelector(".admin-foot"), help = f?.querySelector(".help-btn"); return a && help && Math.abs(a.getBoundingClientRect().top - help.getBoundingClientRect().top) < 4 ? a.getAttribute("aria-checked") : ""; })()'));
+      }
+      if (foot !== 'false') fail('mainmenu', `no admin switch next to Help after offering it (${foot})`);
+      config.update({ adminOffered: false });
+      changed();
+      await sleep(400);
       for (const { action, what } of [{ action: 'settings', what: 'settings dialog' }, { action: 'generator', what: 'password generator' }, { action: 'health', what: 'password check' }]) {
         await openMenu();
         await js(`document.querySelector(".main-menu [data-action=${action}]")?.click()`);
@@ -138,12 +193,23 @@ export async function featureChecks(ctx) {
         await closeDialogs();
         await sleep(200);
       }
+      // Design in the menu; transparency only under Settings → View.
       const segClick = async (label, text) => {
-        await openMenu();
-        await js('document.querySelector(".main-menu [data-tab=view]")?.click()');
-        await js(`[...document.querySelectorAll('.main-menu .seg[aria-label="${label}"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
+        if (label === 'Design') {
+          await openMenu();
+          await js(`[...document.querySelectorAll('.main-menu .seg[aria-label="${label}"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
+        } else {
+          await openViewSettings();
+          await js(`[...document.querySelectorAll('dialog[open] .view-settings .seg[aria-label="${label}"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
+        }
         await sleep(400);
+        await closeDialogs();
       };
+      await openViewSettings();
+      const viewRows = await js('[...document.querySelectorAll("dialog[open] .view-settings .view-row .grow")].map((e) => e.textContent).join()');
+      for (const r of ['Zoom', 'Design', 'Transparenz', 'Speicherort', 'PIM beim Entsperren', 'PIM-Knopf im Admin-Modus']) if (!String(viewRows).split(',').includes(r)) fail('mainmenu', `Settings → View without "${r}"`);
+      if (!(await js('!!document.querySelector("dialog[open] .view-settings [data-action=view-reset]")'))) fail('mainmenu', 'Settings → View without "reset"');
+      await closeDialogs();
       // The update window (Keevault-Update.exe) gets the app's own theme, not Windows' app mode.
       const updaterTheme = () => { const a = ctx.updaterArgs(); return a[a.indexOf('--theme') + 1]; };
       await segClick('Design', 'Dunkel');
@@ -166,7 +232,7 @@ export async function featureChecks(ctx) {
       const fits = await js('(() => { const m = document.querySelector(".main-menu"); return !!m && m.getBoundingClientRect().bottom <= innerHeight + 1 && getComputedStyle(m).overflowY === "auto"; })()');
       if (!fits) fail('mainmenu', 'menu cut off or not scrollable in a small window');
       await js('document.querySelector(".main-menu")?.remove()');
-      win.setSize(w, h);
+      await resizeTo(w, h, "mainmenu");
       // The resize event arrives late and closes open context menus – wait until it is through.
       await sleep(1000);
     });
@@ -209,7 +275,14 @@ export async function featureChecks(ctx) {
       const visible = () => js('[...document.querySelectorAll(".sidebar-vaults .nav-row, .sidebar-vaults > *")].filter((r) => !r.hidden && r.offsetParent !== null).map((r) => r.textContent.trim()).join("|")');
       const all = String(await visible());
       await js('document.querySelector(".vault-find .icon-btn").click(); const q = document.querySelector(".vault-find input"); q.value = "Team-Datei"; q.dispatchEvent(new Event("input"))');
-      await sleep(200);
+      await sleep(300);
+      // Open, the field spans the header from its left edge up to the magnifier (not a stub over a cut label).
+      const box = JSON.parse(await js(`JSON.stringify((() => {
+        const r = (el) => el.getBoundingClientRect();
+        const sec = r(document.querySelector(".vault-find").closest(".nav-section")), q = r(document.querySelector(".vault-find input")), b = r(document.querySelector(".vault-find .icon-btn"));
+        return { left: Math.round(q.left - sec.left), gap: Math.round(b.left - q.right), width: Math.round(q.width), section: Math.round(sec.width) };
+      })())`));
+      if (box.left > 8 || box.gap < 0 || box.gap > 8 || box.width < box.section - 80) fail('vaultsearch', `search field not full width: ${JSON.stringify(box)}`);
       const hit = String(await visible());
       if (!hit.includes('Team-Datei') || hit.includes('Team Infrastruktur')) fail('vaultsearch', `filter shows: ${hit}`);
       await js('document.querySelector(".vault-find input").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))');
@@ -394,6 +467,9 @@ export async function featureChecks(ctx) {
       await sleep(300);
       const stored = await vault.getItem(kvc.id, intranet.id);
       if (stored.password || stored.username || stored.loginLink !== `${kvc.id}/${domain.id}`) fail('loginlink', 'linked login stores its own values');
+      // In use by another entry (#34): the domain login cannot be deleted until the link is gone.
+      const refused = await api.delete(kvc.id, domain.id).then(() => '', (e) => e.message);
+      if (!/Smoke Intranet/.test(refused)) fail('loginlink', `login in use was deleted or without naming its user (${refused})`);
       // Microsoft link: opening the website starts the one-click sign-in for exactly that Microsoft account.
       ctx.clearSignIns();
       await api.openWithMicrosoft({ containerId: kvc.id, id: partner.id, url: 'https://partner.contoso.com' });
@@ -472,17 +548,29 @@ export async function featureChecks(ctx) {
       const at = () => js('document.querySelector("dialog[open] .vault-wizard .wizard-steps li.on")?.textContent || ""');
       if (!/Ort|Location/.test(await at())) fail('vaultwizard', `wizard does not start at the location: "${await at()}"`);
       if (!(await js('!!document.querySelector("dialog[open] .vault-wizard .wizard-explain")'))) fail('vaultwizard', 'no explanation in the step');
+      // No scrollbars in a normal window (#17): the dialog body neither scrolls sideways nor down.
+      const scrolls = async (where) => {
+        const o = JSON.parse(await js('JSON.stringify((() => { const b = document.querySelector("dialog[open].wizard-modal .modal-body"); return b ? { x: b.scrollWidth - b.clientWidth, y: b.scrollHeight - b.clientHeight, win: innerWidth + "x" + innerHeight } : { missing: true }; })())'));
+        if (o.missing || o.x > 1 || o.y > 1) fail('vaultwizard', `scrollbars at ${where}: ${JSON.stringify(o)}`);
+      };
+      await scrolls('location');
       const next = () => js('[...document.querySelectorAll("dialog[open] .wizard-buttons .btn.primary")].at(-1)?.click()');
       // An invalid name stops at the location step.
       await js('(() => { const n = [...document.querySelectorAll("dialog[open] .vault-wizard input")].find((i) => /kv-pws/.test(i.placeholder)); n.value = "1"; n.dispatchEvent(new Event("input")); })()');
       await next();
       await sleep(400);
       if (!/Ort|Location/.test(await at())) fail('vaultwizard', 'went on with an invalid Key Vault name');
+      // The error message of a dialog is in front of it, not hidden behind (#21).
+      const onTop = await js(`(() => { const el = document.getElementById("toast"); if (!el || !el.classList.contains("show")) return "no message";
+        const r = el.getBoundingClientRect(); el.style.pointerEvents = "auto"; const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); el.style.pointerEvents = "";
+        return hit?.closest("#toast") ? "ok" : "behind " + (hit?.closest("dialog") ? "the dialog" : hit?.tagName); })()`);
+      if (onTop !== 'ok') fail('vaultwizard', `error message not in front of the dialog: ${onTop}`);
       await js('(() => { const n = [...document.querySelectorAll("dialog[open] .vault-wizard input")].find((i) => /kv-pws/.test(i.placeholder)); n.value = "kv-pws-smoke"; n.dispatchEvent(new Event("input")); })()');
       for (const label of [/Zugriff|Access/, /Notfall|Emergency/, /Erstellen|Create/]) {
         await next();
         await sleep(400);
         if (!label.test(await at())) fail('vaultwizard', `expected step ${label}, at "${await at()}"`);
+        await scrolls(String(label));
       }
       const summary = await js('document.querySelector("dialog[open] .wizard-summary")?.textContent || ""');
       if (!summary.includes('kv-pws-smoke')) fail('vaultwizard', `summary without the Key Vault: ${summary.slice(0, 200)}`);
@@ -522,8 +610,8 @@ export async function featureChecks(ctx) {
         sp.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
         return JSON.stringify(out);
       })()`));
-      if (r.side > 240) fail('narrowsidebar', );
-      if (r.side > 240) fail('narrowsidebar', `dragging the splitter did not narrow the sidebar (${r.side}px)`);
+      // Narrowest is the minimum width (#19): 280 px, room for longer vault names.
+      if (r.side > 285 || r.side < 280) fail('narrowsidebar', `narrowest sidebar is ${r.side}px instead of 280px`);
       const inside = (b) => b && b.w >= 24 && b.r <= r.right + 1;
       if (!inside(r.menu) || !inside(r.lock)) fail('narrowsidebar', `menu/lock button cut off at the narrowest sidebar (${JSON.stringify(r)})`);
       await setAdmin(false);
@@ -697,6 +785,72 @@ export async function featureChecks(ctx) {
     });
 
     // ---- passkey: drag it from the entry onto another login in the list – it moves there (after one confirmation)
+    // ---- a short entry shows no scrollbar in the detail pane (#25); the access report needs no sideways scrolling (#24)
+    await step('noscroll', async () => {
+      await save({ type: 'login', title: 'Smoke Kurz', username: 'kurz', password: 'x' });
+      let pane = null;
+      for (let i = 0; i < 3 && !pane?.title; i++) {
+        await openItem('Smoke Kurz');
+        pane = JSON.parse(await js('JSON.stringify((() => { const p = document.querySelector(".detail-pane"); return { title: /Smoke Kurz/.test(p?.innerText || ""), over: p.scrollHeight - p.clientHeight }; })())'));
+      }
+      if (!pane?.title) fail('noscroll', 'short entry did not open');
+      else if (pane.over > 1) fail('noscroll', `detail pane scrolls by ${pane.over}px for a short entry`);
+      await js('document.querySelector(".menu-btn")?.click()');
+      await sleep(300);
+      await js('document.querySelector(".main-menu [data-action=access]")?.click()');
+      let report = null;
+      for (let i = 0; i < 20 && !report?.rows; i++) {
+        await sleep(300);
+        report = JSON.parse(await js('JSON.stringify((() => { const d = document.querySelector("dialog[open].report-modal"); const tb = d?.querySelector(".table"); const b = d?.querySelector(".modal-body"); return d ? { rows: d.querySelectorAll(".table tbody tr").length, tableX: tb ? tb.scrollWidth - tb.clientWidth : 0, bodyX: b.scrollWidth - b.clientWidth, tableY: tb ? tb.scrollHeight - tb.clientHeight : 0 } : null; })())'));
+      }
+      if (!report?.rows) fail('noscroll', `access report did not show its table (${JSON.stringify(report)})`);
+      else if (report.tableX > 1 || report.bodyX > 1 || report.tableY > 1) fail('noscroll', `access report scrolls: ${JSON.stringify(report)}`);
+      await closeDialogs();
+      // Password check (#26): a login on a website of the passkey directory without a passkey is recommended one.
+      process.env.KVPWSAFE_TEST_PASSKEY_DIRECTORY = JSON.stringify({ 'smoke-passkey.example': { passwordless: 'allowed', documentation: 'https://smoke-passkey.example/help' } });
+      await save({ type: 'login', title: 'Smoke Passkey-Seite', username: 'pk', password: 'Pk-Smoke-1', urls: ['https://login.smoke-passkey.example'] });
+      const hr = await api.healthReport({ containerIds: [kvc.id] });
+      if (!hr.passkeys?.some((p) => p.title === 'Smoke Passkey-Seite' && p.kind === 'passwordless')) fail('noscroll', `password check without the passkey recommendation (${JSON.stringify(hr.passkeys)})`);
+      await js('document.querySelector(".menu-btn")?.click()');
+      await sleep(300);
+      await js('document.querySelector(".main-menu [data-action=health]")?.click()');
+      let rec = '';
+      for (let i = 0; i < 20 && !rec; i++) {
+        await sleep(300);
+        rec = String(await js('document.querySelector("dialog[open] .passkey-recommend")?.textContent || ""'));
+      }
+      if (!/Smoke Passkey-Seite/.test(rec)) fail('noscroll', 'password check does not show the passkey recommendation');
+      delete process.env.KVPWSAFE_TEST_PASSKEY_DIRECTORY;
+      await closeDialogs();
+    });
+
+    // ---- narrow window: the passkey sits flush in its field (no box inside the field box) and its name is not broken
+    await step('passkeynarrow', async () => {
+      await save({ type: 'login', title: 'Smoke Passkey schmal', username: 'unique@contoso-fabrikam.de', urls: ['https://login.microsoft.com'],
+        passkeys: [{ credentialId: 'c21va2UtbmFycm93', rpId: 'login.microsoft.com', userName: 'unique@contoso-fabrikam.de', userHandle: 'dQ', privateKey: '', created: '2026-11-01T18:47:00Z' }] });
+      // The entry is drawn after the list caught up with the save: wait for it, open it again if needed.
+      for (let i = 0; i < 3 && !(await js('!!document.querySelector(".detail-pane .passkey-row")')); i++) {
+        await openItem('Smoke Passkey schmal');
+        for (let j = 0; j < 10 && !(await js('!!document.querySelector(".detail-pane .passkey-row")')); j++) await sleep(300);
+      }
+      const [w, h] = win.getSize();
+      win.setSize(1000, 700);
+      await sleep(900);
+      const m = JSON.parse(await js(`JSON.stringify((() => {
+        const row = document.querySelector(".detail-pane .field-card .passkey-row");
+        const label = row?.closest(".field")?.querySelector("label");
+        if (!row || !label) return { missing: true };
+        const text = row.querySelector(".passkey-text > div");
+        return { indent: Math.round(row.getBoundingClientRect().left - label.getBoundingClientRect().left), border: getComputedStyle(row).borderTopWidth,
+          pane: Math.round(document.querySelector(".detail-pane").clientWidth), lines: Math.round(text.getBoundingClientRect().height / parseFloat(getComputedStyle(text).lineHeight || "20")) };
+      })())`));
+      await resizeTo(w, h, "passkeynarrow");
+      await sleep(1000);
+      if (m.missing) fail('passkeynarrow', `passkey row not shown: ${String(await js('document.querySelector(".detail-pane")?.innerText.slice(0, 160) || "no detail pane"')).replace(/\s+/g, ' ')}`);
+      else if (m.pane > 520) fail('passkeynarrow', `detail pane not narrow in the small window: ${JSON.stringify(m)}`);
+      else if (m.indent > 2 || m.border !== '0px') fail('passkeynarrow', `passkey indented in a narrow window: ${JSON.stringify(m)}`);
+    });
+
     await step('passkeydrag', async () => {
       const grafana = (await vault.summaries()).find((x) => x.containerId === kvc.id && x.title === 'Grafana' && x.rpIds?.length);
       if (!grafana) return;
@@ -822,6 +976,11 @@ export async function featureChecks(ctx) {
       const az = await save({ type: 'server', title: 'Smoke AZ', server: { kind: 'azurevm', host: 'az', bastionUrl: 'https://portal.azure.com/#@contoso.com/resource/x/connect' } });
       const methods = async (id) => (await vault.summaries()).find((x) => x.id === id)?.methods || [];
       if (!(await methods(win1.id)).includes('rdp')) fail('devices', 'Windows server without RDP');
+      // Credential Guard (#29): no saved credential for mstsc, the linked account's password goes to the clipboard.
+      process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD = '1';
+      const cg = await api.connectServer({ containerId: kvc.id, id: win1.id, method: 'rdp' }).catch((e) => ({ error: e.message }));
+      delete process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD;
+      if (fw && (!cg.credentialGuard || !cg.copied)) fail('devices', `RDP with Credential Guard does not hand over the password: ${JSON.stringify(cg)}`);
       if (!(await methods(lnx.id)).includes('ssh') || (await methods(lnx.id)).includes('rdp')) fail('devices', 'Linux server: SSH instead of RDP expected');
       if (!(await methods(vmw.id)).includes('mgmt')) fail('devices', 'VMware VM without vSphere client');
       if ((await vault.getItem(kvc.id, lnx.id)).server.port !== 22) fail('devices', 'Linux server: default port not 22');
@@ -892,24 +1051,75 @@ export async function featureChecks(ctx) {
     await step('bastionfqdn', async () => {
       const adLogin = await save({ type: 'login', title: 'Smoke AD', username: 'CONTOSO\\admin', password: 'Ad-1',
         fields: [{ name: 'Domäne (NT)', value: 'CONTOSO' }, { name: 'Domäne (FQDN)', value: 'contoso.local' }] });
-      const vm = await save({ type: 'server', title: 'Smoke BASTION', server: { kind: 'azurevm', host: '10.9.0.9', bastionUrl: 'https://portal.azure.com/#@contoso.com/resource/vm/bastionHost', bastionVmLink: `${kvc.id}/${adLogin.id}` } });
+      // Tenant of the VM (#30): the portal link opens in that directory, not in the one the link was copied from.
+      const vm = await save({ type: 'server', title: 'Smoke BASTION', server: { kind: 'azurevm', host: '10.9.0.9', bastionUrl: 'https://portal.azure.com/#@contoso.com/resource/vm/bastionHost', bastionVmLink: `${kvc.id}/${adLogin.id}`, bastionTenant: 'Fabrikam.com' } });
       ctx.clearSignIns();
-      await api.connectServer({ containerId: kvc.id, id: vm.id, method: 'bastion' });
+      const r = await api.connectServer({ containerId: kvc.id, id: vm.id, method: 'bastion' });
+      if (r.url !== 'https://portal.azure.com/#@fabrikam.com/resource/vm/bastionHost') fail('bastionfqdn', `Bastion link not in the VM's tenant: ${r.url}`);
       const job = await ctx.signInFor('x.bastion.azure.com');
       if (job?.username !== 'admin@contoso.local') fail('bastionfqdn', `Bastion gets "${job?.username}" instead of admin@contoso.local`);
+      // The extension fills the form and presses "Connect" for this job (#31).
+      if (job?.mode !== 'bastion') fail('bastionfqdn', `Bastion job without connecting (mode ${job?.mode})`);
       ctx.clearSignIns();
     });
 
-    // ---- PIM on the unlock screen: off by default, switched on in the menu (View), then shown when locked
+    // ---- sidebar and admin PIM (#19): the sidebar is never narrower than 280 px; in admin mode an optional PIM button
+    // sits between the brand and the lock (Settings → View), off by default and gone outside admin mode
+    await step('adminpim', async () => {
+      await js('localStorage.setItem("paneWidths", JSON.stringify({ sidebar: 200 })); window.dispatchEvent(new Event("resize")); true');
+      changed();
+      await sleep(800);
+      const width = await js('Math.round(document.querySelector(".sidebar").getBoundingClientRect().width)');
+      if (Number(width) < 280) fail('adminpim', `sidebar narrower than 280 px (${width})`);
+      await js('localStorage.removeItem("paneWidths"); true');
+      await setAdmin(true);
+      if (await js('!!document.querySelector(".sidebar .pim-head")')) fail('adminpim', 'PIM button in the sidebar without being switched on');
+      await openViewSettings();
+      await js('document.querySelector("dialog[open] .view-settings .seg[aria-label=\'PIM-Knopf im Admin-Modus\'] button")?.click()');
+      for (let i = 0; i < 10 && !config.get().adminPim; i++) await sleep(200);
+      await closeDialogs();
+      await sleep(400);
+      const order = await js('(() => { const head = document.querySelector(".pim-head")?.parentElement; if (!head) return "missing"; const kids = [...head.children]; const i = (el) => kids.indexOf(el); return [i(head.querySelector(".brand-name")), i(head.querySelector(".pim-head")), i([...head.querySelectorAll(".icon-btn")].find((b) => b.querySelector(".icon-lock")))].join(","); })()');
+      const [brand, pim, lock] = String(order).split(',').map(Number);
+      if (order === 'missing' || !(brand < pim && pim < lock)) fail('adminpim', `PIM button not between brand and lock (${order})`);
+      await setAdmin(false);
+      if (await js('!!document.querySelector(".sidebar .pim-head")')) fail('adminpim', 'PIM button outside admin mode');
+      config.update({ adminPim: false });
+    });
+
+    // ---- Windows locked (#28): the app locks too and asks for the PIN again (Windows' lock state is simulated)
+    await step('winlock', async () => {
+      process.env.KVPWSAFE_TEST_WINDOWS_LOCKED = '0';
+      if (await ctx.lockIfWindowsLocked()) fail('winlock', 'locked although Windows is not locked');
+      process.env.KVPWSAFE_TEST_WINDOWS_LOCKED = '1';
+      if (!(await ctx.lockIfWindowsLocked())) fail('winlock', 'not locked while Windows is locked');
+      let pinAsked = false;
+      for (let i = 0; i < 10 && !pinAsked; i++) {
+        await sleep(300);
+        pinAsked = await js('!!document.querySelector(".pin-input")');
+      }
+      if (!pinAsked) fail('winlock', 'unlock screen without PIN after Windows was locked');
+      delete process.env.KVPWSAFE_TEST_WINDOWS_LOCKED;
+      const back = await (async () => {
+        await api.verifyPin(await ctx.ensurePin());
+        return api.unlock({ entra: true });
+      })().catch((e) => ({ error: e.message }));
+      if (!back?.opened) fail('winlock', `not unlocked again with the PIN (${back?.error || 'locked'})`);
+      changed();
+      await sleep(800);
+      await js(`[...document.querySelectorAll(".sidebar .nav")].find((n) => n.textContent.includes(${JSON.stringify(kvc.name)}))?.click()`);
+      await sleep(500);
+    });
+
+    // ---- PIM on the unlock screen: off by default, switched on in Settings → View, then shown when locked
     // (last check: it locks the app and unlocks it again with the PIN)
     await step('pimlock', async () => {
       if (config.get().pimOnLock) fail('pimlock', 'PIM on the unlock screen is on by default');
-      await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=view]")?.click()');
-      await sleep(300);
-      await js('[...document.querySelectorAll(".main-menu .seg")].find((x) => /PIM/.test(x.getAttribute("aria-label")))?.querySelector("button")?.click()');
+      await openViewSettings();
+      await js('document.querySelector("dialog[open] .view-settings .seg[aria-label=\'PIM beim Entsperren\'] button")?.click()');
       for (let i = 0; i < 10 && !config.get().pimOnLock; i++) await sleep(200);
-      if (!config.get().pimOnLock) fail('pimlock', 'menu did not switch it on');
-      await js('document.querySelector(".main-menu")?.remove()');
+      if (!config.get().pimOnLock) fail('pimlock', `Settings → View did not switch it on (${await js('JSON.stringify({ dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => d.querySelector("h3")?.textContent), rows: [...document.querySelectorAll("dialog[open] .view-settings .seg")].map((s) => s.getAttribute("aria-label")), menu: !!document.querySelector(".menu-btn"), opened: !!document.querySelector(".shell") })')})`);
+      await closeDialogs();
       await api.lock();
       let shown = false;
       for (let i = 0; i < 15 && !shown; i++) {

@@ -483,3 +483,19 @@ test('folder symbols of a Key Vault container: kept with the folder list, surviv
   assert.deepEqual(await session.folderIcons(cid), { Intern: 'lock' });
   await assert.rejects(session.setFolderIcons(cid, Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`F${i}`, `data:image/png;base64,${'A'.repeat(5800)}`]))), /Zu viele eigene Ordner-Bilder/);
 });
+
+test('a login used by an asset or a linked login cannot be deleted or moved away until the link is gone (#34)', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  const login = await session.saveItem(cid, { type: 'login', title: 'Domain', username: 'CONTOSO\a', password: 'x' });
+  const server = await session.saveItem(cid, { type: 'server', title: 'DC01', server: { kind: 'windows', host: '10.0.0.1', rdpLink: `${cid}/${login.id}` } });
+  const portal = await session.saveItem(cid, { type: 'login', title: 'Intranet', loginLink: `${cid}/${login.id}` });
+  await assert.rejects(session.deleteItem(cid, login.id), /DC01, Intranet|Intranet, DC01/);
+  await session.deleteItem(cid, server.id);
+  await assert.rejects(session.deleteItem(cid, login.id), /Intranet/);
+  await session.deleteItem(cid, portal.id);
+  await session.deleteItem(cid, login.id);
+  // Restoring the asset from the trash later keeps its link (shown as "not available") – no error.
+  await session.restore(cid, server.id);
+  assert.equal((await session.getItem(cid, server.id)).server.rdpLink, `${cid}/${login.id}`);
+});
