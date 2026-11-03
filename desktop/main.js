@@ -859,7 +859,7 @@ async function launchSsh(host, port, username, password) {
 async function launchRdp(host, port, username, password) {
   if (smokeTest) {
     // Smoke: KVPWSAFE_TEST_CREDENTIAL_GUARD=1 takes the Credential Guard way (nothing is started).
-    if (process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD === '1' && password) return { prompt: true, copied: true, credentialGuard: true };
+    if (process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD === '1' && password) return { prompt: true, autoType: true, credentialGuard: true };
     return { prompt: !password };
   }
   if (process.platform !== 'win32') throw new Error(t('Remotedesktop gibt es nur unter Windows.'));
@@ -872,8 +872,13 @@ async function launchRdp(host, port, username, password) {
     await fs.writeFile(file, [`full address:s:${target}`, `username:s:${username}`, 'prompt for credentials:i:1', ''].join('\r\n'), 'utf8');
     spawn('mstsc.exe', [file], { detached: true, stdio: 'ignore' }).unref();
     setTimeout(() => fs.rm(file, { force: true }).catch(() => {}), 60_000).unref?.();
-    await copyToClipboard(password);
-    return { prompt: true, copied: true, credentialGuard: true };
+    // Signed in without a click (#189): the password is typed into Windows' dialog once it is in front, Enter sends
+    // it. The dialog never came (or typing was refused): the password goes to the clipboard and the window says so.
+    typeIntoCredentialDialog(password).catch(async () => {
+      await copyToClipboard(password).catch(() => {});
+      send({ type: 'rdp-type-failed' });
+    });
+    return { prompt: true, autoType: true, credentialGuard: true };
   }
   const exe = helperExe();
   if (!exe || !password) {
@@ -909,6 +914,18 @@ async function passkeyDirectory() {
     if (saved) return saved;
     throw e;
   }
+}
+
+/** Types text + Enter into Windows' credential dialog ("Windows-Sicherheit") once it is in front (helper, up to 30 s). */
+function typeIntoCredentialDialog(password) {
+  const exe = helperExe();
+  if (!exe) return Promise.reject(new Error('no helper'));
+  return new Promise((resolve, reject) => {
+    const child = spawn(exe, ['--type', '--wait-window', 'Windows-Sicherheit|Windows Security|Sécurité Windows|Seguridad de Windows'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    child.on('error', reject);
+    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+    child.stdin.end(Buffer.from(`${password}\n`, 'utf8'));
+  });
 }
 
 /** Is Windows Defender Credential Guard running (Win32_DeviceGuard: security service 1)? Asked once per start. */

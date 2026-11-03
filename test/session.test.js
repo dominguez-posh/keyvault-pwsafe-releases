@@ -499,3 +499,12 @@ test('a login used by an asset or a linked login cannot be deleted or moved away
   await session.restore(cid, server.id);
   assert.equal((await session.getItem(cid, server.id)).server.rdpLink, `${cid}/${login.id}`);
 });
+
+test('an existing entry keeps its type (#263)', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  const server = await session.saveItem(cid, { type: 'server', title: 'SRV', server: { kind: 'azurevm' } });
+  await assert.rejects(session.saveItem(cid, { ...server, type: 'login' }), /Typ lässt sich nach dem Anlegen nicht mehr ändern/);
+  const saved = await session.saveItem(cid, { ...server, title: 'SRV 2' });
+  assert.equal(saved.type, 'server');
+});

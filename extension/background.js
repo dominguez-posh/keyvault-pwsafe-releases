@@ -7,7 +7,7 @@
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
 import { hostFromUrl, itemMatchesHost, rankCandidates } from './core/match.js';
-import { itemHosts, sophosFillPassword, resolveLogin, fqdnUserName } from './core/model.js';
+import { itemHosts, sophosFillPassword, resolveLogin, fqdnUserName, normalizeTenant } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
@@ -263,6 +263,9 @@ function contentStrings() {
     bastionSave: t('Als Asset speichern (mit diesem Konto verknüpft)'),
     bastionAsset: t('Asset „{title}“ ({vault})'),
     bastionConnecting: t('Melde an als {name} …'),
+    bastionSaveOnly: t('Speichern'),
+    bastionSaveOnlyHint: t('Nur als Asset speichern (mit diesem Konto, ohne anzumelden)'),
+    bastionSaved: t('Als Asset „{title}“ gespeichert – Microsoft-Anmeldung und Tenant sind hinterlegt, soweit erkennbar.'),
     folderPlaceholder: t('Ordner (optional), z. B. Kunde/Azure'),
     update: t('Aktualisieren'),
     save: t('Speichern'),
@@ -962,7 +965,7 @@ const contentCommands = {
    * Account chosen for the VM: its sign-in (user name in the FQDN form) for Bastion's form; with save, the VM becomes
    * an asset linked to it (or the existing asset gets the link) – in the account's vault, links stay in one vault.
    */
-  'cs:bastionAccount': async ({ containerId, id, save = false }, sender) => {
+  'cs:bastionAccount': async ({ containerId, id, save = false, signIn = true }, sender) => {
     const bastion = await bastionContext(sender);
     if (!bastion) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const item = await usableItem(containerId, id);
@@ -970,15 +973,26 @@ const contentCommands = {
     let saved = null;
     if (save) {
       const key = `${containerId}/${id}`;
-      const asset = (await vault.summaries()).find((x) => x.type === 'server' && x.containerId === containerId && x.title.toLowerCase() === bastion.vmName.toLowerCase());
+      // Found by themselves (#306): the tenant from the portal address (#@tenant), the Microsoft sign-in as the account
+      // Keevault last signed in to Microsoft with – else one whose domain is the tenant's; both in this vault only.
+      const tenant = normalizeTenant(/#@([^/]+)/.exec(decodeURIComponent(bastion.bastionUrl))?.[1] || '');
+      const summaries = await vault.summaries();
+      const { msLast } = await chrome.storage.local.get('msLast');
+      const msLogins = summaries.filter((s) => s.containerId === containerId && msAccount(s));
+      const ms = msLogins.find((s) => s.key === msLast) || (tenant ? msLogins.find((s) => String(s.username || '').toLowerCase().endsWith(`@${tenant}`)) : null);
+      const links = { bastionVmLink: key, ...(ms ? { bastionLoginLink: ms.key } : {}), ...(tenant ? { bastionTenant: tenant } : {}) };
+      const asset = summaries.find((x) => x.type === 'server' && x.containerId === containerId && x.title.toLowerCase() === bastion.vmName.toLowerCase());
       if (asset) {
         const a = await vault.getItem(asset.containerId, asset.id, { fresh: true });
-        saved = await vault.saveItem(asset.containerId, { ...a, server: { ...a.server, kind: a.server?.kind || 'azurevm', bastionUrl: a.server?.bastionUrl || bastion.bastionUrl, bastionVmLink: key } }, { expectedVersion: a.version });
+        const s = a.server || {};
+        saved = await vault.saveItem(asset.containerId, { ...a, server: { ...s, kind: s.kind || 'azurevm', bastionUrl: s.bastionUrl || bastion.bastionUrl,
+          bastionVmLink: key, bastionLoginLink: s.bastionLoginLink || links.bastionLoginLink || '', bastionTenant: s.bastionTenant || links.bastionTenant || '' } }, { expectedVersion: a.version });
       } else {
-        saved = await vault.saveItem(containerId, { type: 'server', title: bastion.vmName, server: { kind: 'azurevm', bastionUrl: bastion.bastionUrl, bastionVmLink: key } });
+        saved = await vault.saveItem(containerId, { type: 'server', title: bastion.vmName, server: { kind: 'azurevm', bastionUrl: bastion.bastionUrl, ...links } });
       }
       await broadcast({ type: 'state:changed' });
     }
+    if (!signIn) return { saved: saved ? { title: saved.title } : null };
     // The form is sent by Keevault: no "save this sign-in?" afterwards for this tab.
     await chrome.storage.session.set({ [`bastionPicked:${sender.tab.id}`]: Date.now() });
     return { job: { mode: 'bastion', username: fqdnUserName(item), password: item.password || '' }, saved: saved ? { title: saved.title } : null };
@@ -1005,6 +1019,8 @@ const contentCommands = {
     // Chosen (or started as the remembered one): the passkey prompt that may follow takes this account's passkey;
     // a sign-out pause ends here.
     await chrome.storage.session.set({ msJob: { username: item.username || '', until: Date.now() + MS_JOB_MS }, msSignedOut: false });
+    // The Microsoft account last used: a Bastion VM saved from the browser gets it as its Microsoft sign-in (#306).
+    await chrome.storage.local.set({ msLast: `${containerId}/${id}` });
     return { mode: 'microsoft', username: item.username, password: item.password, totp: item.totp ? (await totpCode(item.totp)).code : '', passkey: !!item.passkeys?.length };
   },
   /** Signed out on Microsoft's page: open sign-ins end, the remembered account waits until one is chosen again. */

@@ -209,6 +209,15 @@ export async function featureChecks(ctx) {
       const viewRows = await js('[...document.querySelectorAll("dialog[open] .view-settings .view-row .grow")].map((e) => e.textContent).join()');
       for (const r of ['Zoom', 'Design', 'Transparenz', 'Speicherort', 'PIM beim Entsperren', 'PIM-Knopf im Admin-Modus']) if (!String(viewRows).split(',').includes(r)) fail('mainmenu', `Settings → View without "${r}"`);
       if (!(await js('!!document.querySelector("dialog[open] .view-settings [data-action=view-reset]")'))) fail('mainmenu', 'Settings → View without "reset"');
+      // Settings keep one size on every tab, navigation on the left (#211).
+      const sizes = JSON.parse(await js(`JSON.stringify((() => {
+        const d = document.querySelector("dialog[open].settings-modal"); if (!d) return null;
+        const tabs = [...d.querySelectorAll(".tabs button")];
+        const out = tabs.map((b) => { b.click(); const r = d.getBoundingClientRect(); return Math.round(r.width) + "x" + Math.round(r.height); });
+        const [a, b] = tabs.map((x) => x.getBoundingClientRect());
+        return { sizes: out, vertical: b.top > a.top + 4 && Math.abs(b.left - a.left) < 4 };
+      })())`));
+      if (!sizes || new Set(sizes.sizes).size !== 1 || !sizes.vertical) fail('mainmenu', `settings dialog changes size or has no side navigation: ${JSON.stringify(sizes)}`);
       await closeDialogs();
       // The update window (Keevault-Update.exe) gets the app's own theme, not Windows' app mode.
       const updaterTheme = () => { const a = ctx.updaterArgs(); return a[a.indexOf('--theme') + 1]; };
@@ -463,6 +472,8 @@ export async function featureChecks(ctx) {
       await sleep(500);
       const ed = JSON.parse(await js('JSON.stringify({ own: !!document.querySelector(".detail-pane .own-login")?.hidden, pick: document.querySelector(".detail-pane .login-link .link-pick-text")?.textContent || "" })'));
       if (!ed.own || ed.pick !== 'Smoke Domain') fail('loginlink', `editor of a linked login: ${JSON.stringify(ed)}`);
+      // The type of an existing entry is fixed (#263).
+      if (!(await js('!!document.querySelector(".detail-pane select[name=type]")?.disabled'))) fail('loginlink', 'type of an existing entry can be changed');
       await js('[...document.querySelectorAll(".detail-pane button")].find((b) => /^(Abbrechen|Cancel)$/.test(b.textContent.trim()))?.click()');
       await sleep(300);
       const stored = await vault.getItem(kvc.id, intranet.id);
@@ -980,7 +991,7 @@ export async function featureChecks(ctx) {
       process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD = '1';
       const cg = await api.connectServer({ containerId: kvc.id, id: win1.id, method: 'rdp' }).catch((e) => ({ error: e.message }));
       delete process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD;
-      if (fw && (!cg.credentialGuard || !cg.copied)) fail('devices', `RDP with Credential Guard does not hand over the password: ${JSON.stringify(cg)}`);
+      if (fw && (!cg.credentialGuard || !cg.autoType)) fail('devices', `RDP with Credential Guard does not sign in by itself: ${JSON.stringify(cg)}`);
       if (!(await methods(lnx.id)).includes('ssh') || (await methods(lnx.id)).includes('rdp')) fail('devices', 'Linux server: SSH instead of RDP expected');
       if (!(await methods(vmw.id)).includes('mgmt')) fail('devices', 'VMware VM without vSphere client');
       if ((await vault.getItem(kvc.id, lnx.id)).server.port !== 22) fail('devices', 'Linux server: default port not 22');
