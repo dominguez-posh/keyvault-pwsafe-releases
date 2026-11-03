@@ -4,6 +4,18 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.17 – 2026-11-03
+- KI-Agenten (MCP): Ist Keevault gesperrt, kommt das Fenster mit dem Entsperren nach vorne (über allen Fenstern, Taskleiste blinkt) und die Anfrage wartet bis zu 2 Minuten, statt sofort abgelehnt zu werden. Nach dem Entsperren läuft sie normal weiter.
+- Import von KeePass-Datenbanken (.kdbx, KeePass 2 und KeePassXC, Format 3.1 und 4): mit Master-Passwort, Schlüsseldatei oder beidem. Ordner, Zusatzfelder (versteckte bleiben versteckt) und KeePassXC-Passkeys werden übernommen; entschlüsselt wird nur lokal in der App. Twofish-verschlüsselte Datenbanken und der Windows-Benutzerkonto-Schlüssel werden nicht unterstützt.
+- Import aus Chrome, Edge und Firefox: Der Import-Dialog zeigt jetzt die genauen Klicks für den CSV-Export des jeweiligen Browsers. Einen passwortlosen Direktimport gibt es nicht – Browser verschlüsseln ihre Passwörter mit einem an das Windows-Konto gebundenen Schlüssel, nicht mit einem eingebbaren Passwort.
+- Neuer Eintragstyp „Sophos-Login“ (Admin-Modus → Neu): Logo, frei benennbare Portale mit eigener Adresse (VPN-Portal, Admin-Portal, User-Portal, beliebig erweiterbar) und je ein Button „… öffnen“. Mit Einmalcode (MFA) trägt Keevault beim Ausfüllen im Browser Passwort und aktuellen Code direkt hintereinander ins Passwortfeld ein, wie es das Sophos-Portal verlangt. Kopieren in der App liefert weiterhin nur das Passwort.
+
+### English
+- AI agents (MCP): if Keevault is locked, the window comes to the front with the unlock screen (above all windows, taskbar flashing) and the request waits up to 2 minutes instead of being refused at once. After unlocking it continues normally.
+- Import of KeePass databases (.kdbx, KeePass 2 and KeePassXC, format 3.1 and 4): with master password, key file or both. Folders, custom fields (hidden ones stay hidden) and KeePassXC passkeys are taken over; decryption happens only locally in the app. Twofish-encrypted databases and the Windows user account key are not supported.
+- Import from Chrome, Edge and Firefox: the import dialog now shows the exact clicks for each browser's CSV export. There is no password-based direct import – browsers encrypt their passwords with a key bound to the Windows account, not with a password you could type.
+- New entry type "Sophos login" (admin mode → New): logo, freely named portals with their own address (VPN portal, admin portal, user portal, extendable) and an "Open …" button for each. With a one-time code (MFA), Keevault types the password and the current code right after each other into the password field when filling in the browser, as the Sophos portal requires. Copying in the app still gives the password only.
+
 ## 0.9.16 – 2026-11-03
 - Tresordatei, die beim Import mit 0.9.13/0.9.14 beschädigt wurde („Die Datei ist kein Keevault-Tresor“, „Kein Zugriff“): Keevault öffnet sie wieder mit dem letzten vollständigen Stand, und der nächste Speichervorgang schreibt die Datei sauber neu.
 
