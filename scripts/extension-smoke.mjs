@@ -601,12 +601,28 @@ try {
   check(sophosFull?.password === 'Vpn-Pass-1' && sophosFull?.portals?.[0]?.label === 'VPN-Portal', 'Sophos: Eintrag (Passwort oder Portal) verändert');
   pageErrors(sop.sessionId, 'sophos');
 
+  // Linked login: an entry that signs in with another login (here the domain login) fills that one's user name and
+  // password into the page – the entry itself stores none.
+  const domainItem = await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'login', title: 'Domain-Login', username: 'CONTOSO\\smoke', password: 'Dom-Smoke-1' } });
+  const linkedItem = await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'login', title: 'Intranet', urls: [`${origin}/linked`], loginLink: `${personal.id}/${domainItem?.id}` } });
+  const lk = await open(`${origin}/linked`);
+  await sleep(1000);
+  const lkTab = await evaluate(options.sessionId, 'chrome.tabs.query({}).then((ts) => ts.find((x) => (x.url || "").includes("/linked"))?.id)');
+  await sw(options.sessionId, 'fill', { tabId: lkTab, containerId: personal.id, id: linkedItem?.id });
+  const lv = await waitFor(async () => { const r = await evaluate(lk.sessionId, '({ user: document.querySelector("input[autocomplete=username]").value, pw: document.querySelector("input[type=password]").value })'); return r.pw && r; }, 5000);
+  check(lv?.user === 'CONTOSO\\smoke' && lv?.pw === 'Dom-Smoke-1', `Verknüpfter Login: nicht mit dem Domain-Login ausgefüllt (${lv?.user})`);
+  const linkedFull = await sw(options.sessionId, 'item', { containerId: personal.id, id: linkedItem?.id });
+  check(!linkedFull?.password && !linkedFull?.username, 'Verknüpfter Login: eigene Anmeldedaten gespeichert');
+  pageErrors(lk.sessionId, 'linked-login');
+  // The demo vault has the free limit of 10 entries: the test entries go again before the import below.
+  for (const it of [sophosItem, domainItem, linkedItem]) if (it?.id) await sw(options.sessionId, 'delete', { containerId: personal.id, id: it.id });
+
   // Import of the sample CSV.
   const before = (await sw(options.sessionId, 'items')).length;
   const imported = await evaluate(options.sessionId, `Promise.all([import('/core/importer.js'), import('/core/import-sample.js')])
     .then(([imp, sample]) => imp.parseImport({ name: 'sample.csv', text: sample.SAMPLE_CSV }))
     .then((r) => chrome.runtime.sendMessage({ cmd: 'import', containerId: ${JSON.stringify(personal.id)}, items: r.items }))
-    .then((r) => r.result.imported)`);
+    .then((r) => (r.result.imported || JSON.stringify(r.result.errors || r.error || r).slice(0, 300)))`);
   check(imported === 4, `Import: ${imported}`);
   check((await sw(options.sessionId, 'items')).length === before + 4, 'Importierte Einträge fehlen');
 

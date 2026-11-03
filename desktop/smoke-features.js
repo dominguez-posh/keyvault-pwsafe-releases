@@ -372,6 +372,37 @@ export async function featureChecks(ctx) {
       await closeDialogs();
     });
 
+    // ---- linked login: an entry signs in with another login (domain login / Microsoft login) – shown with the linked
+    // values, edited without own user and password; a Microsoft link opens the website with a one-click sign-in
+    await step('loginlink', async () => {
+      const domain = await save({ type: 'login', title: 'Smoke Domain', username: 'CONTOSO\\smoke', password: 'Dom-Smoke-1' });
+      const ms = await save({ type: 'login', title: 'Smoke MS Link', username: 'smoke-link@contoso.onmicrosoft.com', password: 'Ms-Link-1', msAdmin: true, urls: ['https://login.microsoftonline.com'] });
+      const intranet = await save({ type: 'login', title: 'Smoke Intranet', urls: ['https://intranet.contoso.com'], loginLink: `${kvc.id}/${domain.id}` });
+      const partner = await save({ type: 'login', title: 'Smoke Partner', urls: ['https://partner.contoso.com'], loginLink: `${kvc.id}/${ms.id}` });
+      await openItem('Smoke Intranet');
+      const shown = await js('document.querySelector(".detail-pane")?.innerText || ""');
+      if (!/Anmeldung über|Signs in with/.test(shown) || !shown.includes('Smoke Domain') || !shown.includes('CONTOSO\\smoke')) fail('loginlink', `linked login not shown: ${shown.slice(0, 200)}`);
+      if (!(await js('[...document.querySelectorAll(".detail-pane .field label")].some((l) => /^(Passwort|Password)$/.test(l.textContent.trim()))'))) fail('loginlink', 'password of the linked login missing in the detail view');
+      // Editor: the link is chosen, own user name and password are hidden; the stored entry keeps no copy.
+      await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
+      await sleep(300);
+      await js('document.querySelector(".context-menu [data-action=edit]")?.click()');
+      await sleep(500);
+      const ed = JSON.parse(await js('JSON.stringify({ own: !!document.querySelector(".detail-pane .own-login")?.hidden, pick: document.querySelector(".detail-pane .login-link .link-pick-text")?.textContent || "" })'));
+      if (!ed.own || ed.pick !== 'Smoke Domain') fail('loginlink', `editor of a linked login: ${JSON.stringify(ed)}`);
+      await js('[...document.querySelectorAll(".detail-pane button")].find((b) => /^(Abbrechen|Cancel)$/.test(b.textContent.trim()))?.click()');
+      await sleep(300);
+      const stored = await vault.getItem(kvc.id, intranet.id);
+      if (stored.password || stored.username || stored.loginLink !== `${kvc.id}/${domain.id}`) fail('loginlink', 'linked login stores its own values');
+      // Microsoft link: opening the website starts the one-click sign-in for exactly that Microsoft account.
+      ctx.clearSignIns();
+      await api.openWithMicrosoft({ containerId: kvc.id, id: partner.id, url: 'https://partner.contoso.com' });
+      const job = await ctx.signInFor('login.microsoftonline.com');
+      if (job?.username !== 'smoke-link@contoso.onmicrosoft.com' || ctx.lastAdminUrl() !== 'https://partner.contoso.com') fail('loginlink', `Microsoft link: sign-in job ${job?.username}, opened ${ctx.lastAdminUrl()}`);
+      if (await api.openWithMicrosoft({ containerId: kvc.id, id: intranet.id, url: 'https://intranet.contoso.com' }).then(() => true, () => false)) fail('loginlink', 'one-click Microsoft sign-in for a domain-linked login');
+      ctx.clearSignIns();
+    });
+
     // ---- import guide for browsers: the import dialog shows per-browser CSV-export steps (Chrome, Edge, Firefox)
     await step('browserimport', async () => {
       await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => r.textContent.includes(${JSON.stringify(kvc.name)})); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); })()`);

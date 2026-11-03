@@ -58,6 +58,14 @@ export function itemDetail(item, ctx) {
       h('div', { class: 'field-row portal-buttons' }, ...item.portals.map((p) => h('button', { type: 'button', class: 'btn small portal-open', title: p.url,
         onclick: () => ctx.openUrl(p.url) }, icon('link', 14), t('{name} öffnen', { name: p.label || hostFromUrl(p.url) || p.url }))))));
   }
+  // Login linked to another login: where the sign-in comes from (user name and password below are read from there –
+  // the caller resolves them, see resolveLogin).
+  if (item.type === 'login' && item.loginLink) {
+    const l = item.linked;
+    rows.push(h('div', { class: 'field login-linked' }, h('label', {}, t('Anmeldung über')),
+      h('div', { class: 'field-row' }, h('span', { class: 'value linked' }, icon('link', 14), ' ',
+        l && !l.missing ? [l.title, l.username].filter(Boolean).join(' · ') : t('Verknüpfter Eintrag (nicht verfügbar)')))));
+  }
   if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
   if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
   if (item.totp) rows.push(totpField(item.totp, ctx));
@@ -613,9 +621,21 @@ export function itemForm(item, ctx) {
     bastionBox,
     h('p', { class: 'muted small' }, t('Verknüpfte Einträge bleiben, wo sie sind – Keevault liest sie erst beim Verbinden.')));
 
-  const loginOnly = h('div', { class: 'login-only' },
+  // Login: user name and password from another login of this vault (domain login, Microsoft login for a portal that
+  // signs in with Microsoft) instead of own ones. Not the entry itself, not a login that is linked itself (one level).
+  const loginOptions = ctx.linkOptions && ctx.linkOptions.filter((o) => o.key !== `${item.containerId}/${item.id}` && !o.loginLinked)
+    .sort((a, b) => Number(!!b.msAdmin) - Number(!!a.msAdmin));
+  const loginLink = linkSelect('loginLink', it.loginLink, t('Eigener Benutzername und eigenes Passwort'), loginOptions);
+  const ownLogin = h('div', { class: 'own-login' },
     row(t('Benutzername'), username),
-    h('div', { class: 'field' }, h('label', {}, t('Passwort')), h('div', { class: 'field-row' }, password, reveal, genButton), meter, generator),
+    h('div', { class: 'field' }, h('label', {}, t('Passwort')), h('div', { class: 'field-row' }, password, reveal, genButton), meter, generator));
+  const syncLoginLink = () => { ownLogin.hidden = !!loginLink.value; };
+  loginLink.addEventListener('change', syncLoginLink);
+  syncLoginLink();
+  const loginOnly = h('div', { class: 'login-only' },
+    loginOptions || it.loginLink ? h('div', { class: 'field login-link' }, h('label', {}, t('Anmeldung')), loginLink,
+      h('div', { class: 'muted small' }, t('Z. B. den Domain-Login oder bei Portalen mit Microsoft-Anmeldung den Microsoft-Login wählen – Benutzername und Passwort kommen dann von dort.'))) : null,
+    ownLogin,
     urlsRow,
     row(t('Einmalcode (TOTP)'), h('div', { class: 'field-row' }, totp, revealTotp, scanTotp)),
     h('label', { class: 'inline' }, msAdmin, t('Microsoft-Admin-Konto (für Admin Center und Bastion)')),
@@ -722,8 +742,10 @@ export function itemForm(item, ctx) {
       ...item,
       type,
       title: title.value,
-      username: login ? username.value : type === 'server' && !srvRdpLink.value ? srvUser.value : '',
-      password: login ? password.value : type === 'certificate' ? certPassword.value : type === 'server' && !srvRdpLink.value ? srvPass.value : '',
+      // A linked login keeps no own user name and password (they come from the linked entry when used).
+      username: login ? (loginLink.value ? '' : username.value) : type === 'server' && !srvRdpLink.value ? srvUser.value : '',
+      password: login ? (loginLink.value ? '' : password.value) : type === 'certificate' ? certPassword.value : type === 'server' && !srvRdpLink.value ? srvPass.value : '',
+      loginLink: login ? loginLink.value : '',
       urls: login && !sophos.checked ? urls.value.split(/\r?\n/) : [],
       totp: login ? totp.value : '',
       card: type === 'card' ? { holder: cardHolder.value, number: cardNumber.value, expiry: cardExpiry.value, cvc: cardCvc.value, pin: cardPin.value } : undefined,

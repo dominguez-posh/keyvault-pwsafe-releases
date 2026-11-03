@@ -4,6 +4,12 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.18 – 2026-11-03
+- Verknüpfte Logins: Ein Login kann statt eigenem Benutzernamen und Passwort einen anderen Login desselben Tresors verwenden – z. B. den Domain-Login oder bei Portalen mit Microsoft-Anmeldung den Microsoft-Login (Bearbeiten → „Anmeldung“). Gespeichert wird nur der Verweis; Ausfüllen im Browser, Kopieren und Anzeigen nehmen die Werte des verknüpften Eintrags, Änderungen dort gelten sofort überall. Ein eigener Einmalcode (z. B. Sophos-MFA) hat Vorrang. Bei einem verknüpften Microsoft-Login öffnet „Website öffnen“ das Portal mit Ein-Klick-Anmeldung für genau dieses Konto. KI-Agenten erhalten nur den Verweis und müssen den verknüpften Eintrag mit eigener Rückfrage lesen.
+
+### English
+- Linked logins: instead of its own user name and password, a login can use another login of the same vault – e.g. the domain login, or for portals that sign in with Microsoft the Microsoft login (Edit → "Sign-in"). Only the reference is stored; filling in the browser, copying and showing use the linked entry's values, changes there apply everywhere at once. An own one-time code (e.g. Sophos MFA) takes precedence. With a linked Microsoft login, "Open website" opens the portal with a one-click sign-in for exactly that account. AI agents only get the reference and have to read the linked entry with its own confirmation.
+
 ## 0.9.17 – 2026-11-03
 - KI-Agenten (MCP): Ist Keevault gesperrt, kommt das Fenster mit dem Entsperren nach vorne (über allen Fenstern, Taskleiste blinkt) und die Anfrage wartet bis zu 2 Minuten, statt sofort abgelehnt zu werden. Nach dem Entsperren läuft sie normal weiter.
 - Import von KeePass-Datenbanken (.kdbx, KeePass 2 und KeePassXC, Format 3.1 und 4): mit Master-Passwort, Schlüsseldatei oder beidem. Ordner, Zusatzfelder (versteckte bleiben versteckt) und KeePassXC-Passkeys werden übernommen; entschlüsselt wird nur lokal in der App. Twofish-verschlüsselte Datenbanken und der Windows-Benutzerkonto-Schlüssel werden nicht unterstützt.

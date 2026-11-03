@@ -1741,4 +1741,11 @@ export default {
   'User-Portal': 'User portal',
   'VPN-Portal': 'VPN portal',
   '{name} öffnen': 'Open {name}',
+  'Anmeldung über': 'Signs in with',
+  'Der Eintrag ist mit keinem Microsoft-Login verknüpft': 'The entry is not linked to a Microsoft login',
+  'Eigener Benutzername und eigenes Passwort': 'Own user name and password',
+  'Geöffnet – die Browser-Erweiterung meldet dich mit dem Microsoft-Login an': 'Opened – the browser extension signs you in with the Microsoft login',
+  'Geöffnet – ohne Browser-Erweiterung bitte selbst anmelden': 'Opened – without the browser extension please sign in yourself',
+  'Keine gültige Adresse': 'Not a valid address',
+  'Z. B. den Domain-Login oder bei Portalen mit Microsoft-Anmeldung den Microsoft-Login wählen – Benutzername und Passwort kommen dann von dort.': 'E.g. choose the domain login, or for portals that sign in with Microsoft the Microsoft login – user name and password then come from there.',
 };

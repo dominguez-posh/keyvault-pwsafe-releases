@@ -3,10 +3,13 @@ import { itemDetail, itemForm, generatorPanel } from '../core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../core/generator.js';
 import { itemMatchesHost, urlScore } from '../core/match.js';
 import { faviconToDataUrl } from '../core/image.js';
-import { itemHosts } from '../core/model.js';
+import { itemHosts, resolveLogin } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call, copy } from '../lib/api.js';
 import { buildItemLink } from '../core/links.js';
+
+/** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
+const usableItem = async (containerId, id) => resolveLogin(await call('item', { containerId, id }), (c, i) => call('item', { containerId: c, id: i }));
 
 const view = document.getElementById('view');
 const topActions = document.getElementById('top-actions');
@@ -157,9 +160,9 @@ function renderList() {
         h('div', { class: 'row-sub' }, [s.username, containerName(s.containerId)].filter(Boolean).join(' · '))),
       h('div', { class: 'row-actions', onclick: (e) => e.stopPropagation() },
         matchesSite(s) ? iconButton('fill', t('Ausfüllen'), () => fillItem(s)) : null,
-        s.username ? iconButton('user', t('Benutzername kopieren'), () => copy(s.username, t('Benutzername'))) : null,
+        s.username || s.loginLinked ? iconButton('user', t('Benutzername kopieren'), async () => copy(s.loginLinked ? (await usableItem(s.containerId, s.id)).username : s.username, t('Benutzername'))) : null,
         s.type === 'login' ? iconButton('copy', t('Passwort kopieren'), async () => {
-          const item = await call('item', { containerId: s.containerId, id: s.id });
+          const item = await usableItem(s.containerId, s.id);
           if (item.password) copy(item.password, t('Passwort'));
           else toast(t('Kein Passwort gespeichert'));
         }) : null))));
@@ -238,9 +241,9 @@ function entryMenu(e, s) {
       }
     }),
     matchesSite(s) ? entry('fill', t('Ausfüllen'), () => fillItem(s)) : null,
-    s.username ? entry('user', t('Benutzername kopieren'), () => copy(s.username, t('Benutzername'))) : null,
+    s.username || s.loginLinked ? entry('user', t('Benutzername kopieren'), async () => copy(s.loginLinked ? (await usableItem(s.containerId, s.id)).username : s.username, t('Benutzername'))) : null,
     s.type === 'login' ? entry('copy', t('Passwort kopieren'), async () => {
-      const item = await load().catch(() => null);
+      const item = await usableItem(s.containerId, s.id).catch(() => null);
       if (item?.password) copy(item.password, t('Passwort'));
       else toast(t('Kein Passwort gespeichert'));
     }) : null,
@@ -277,7 +280,9 @@ async function renderDetail(s, fresh = false) {
     return renderList();
   }
   const canFill = tab && item.type === 'login' && host && itemMatchesHost(itemHosts(item), host);
-  const detail = itemDetail(item, {
+  // Linked login: shown and copied with the linked entry's values; edited as stored.
+  const shown = await resolveLogin(item, (c, i) => call('item', { containerId: c, id: i }));
+  const detail = itemDetail(shown, {
     copy,
     openUrl: (url) => chrome.tabs.create({ url }),
     // Attachments and certificates: saved through the browser's download (base64 → file).
