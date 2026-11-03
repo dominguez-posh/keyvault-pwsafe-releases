@@ -153,11 +153,21 @@ let toastTimer;
 export function toast(message, kind = 'info') {
   let el = document.getElementById('toast');
   if (!el) {
-    el = h('div', { id: 'toast', role: 'status' });
+    el = h('div', { id: 'toast', role: 'status', popover: 'manual' });
     document.body.append(el);
   }
   el.textContent = message;
   el.className = `toast show ${kind}`;
+  // Open dialogs sit in the top layer and make the rest of the page inert: the message goes into the newest one and
+  // is shown again as a popover, so it lands in front of it (and screen readers still reach it).
+  const host = [...document.querySelectorAll('dialog[open]')].at(-1) || document.body;
+  if (el.parentElement !== host) host.append(el);
+  try {
+    if (el.matches(':popover-open')) el.hidePopover();
+    el.showPopover();
+  } catch {
+    // No popover support: shown in the page as before.
+  }
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), kind === 'error' ? 6000 : 2500);
 }
@@ -166,7 +176,18 @@ export function toast(message, kind = 'info') {
 export function modal(title, content, buttons = [{ label: t('Schließen') }]) {
   const dialog = h('dialog', { class: 'modal' });
   const close = () => {
+    // A message shown in this dialog stays visible after it closes ("Saved").
+    const message = dialog.querySelector('#toast');
     dialog.close();
+    if (message) {
+      ([...document.querySelectorAll('dialog[open]')].at(-1) || document.body).append(message);
+      try {
+        if (message.matches(':popover-open')) message.hidePopover();
+        message.showPopover();
+      } catch {
+        // No popover support.
+      }
+    }
     dialog.remove();
   };
   const footer = h('div', { class: 'modal-footer' }, ...buttons.map((b) => h('button', {

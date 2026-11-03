@@ -67,6 +67,10 @@ const DEFAULTS = {
   pimButton: false,
   // View: "PIM" button on the unlock screen (activate a role before signing in) – off until turned on in the menu.
   pimOnLock: false,
+  // View: PIM button in the sidebar head while admin mode is on (between the brand and the lock) – off by default.
+  adminPim: false,
+  // Admin mode offered (Settings → View): only then its switch sits next to Help – off, nobody sees it.
+  adminOffered: false,
   // View: admin tools top right – PIM, Microsoft 365 admin centers, servers (replaces the single PIM button).
   adminTools: false,
   // Break-glass accounts per tenant ({ [tenantId]: [{ id, type, displayName, detail }] }): preset when creating a vault.
@@ -92,7 +96,7 @@ const DEFAULTS = {
 // (browser integration, passkey provider, autostart), admin mode and the approvals for AI agents.
 export const SYNC_KEYS = ['containers', 'hiddenContainers', 'containerOrder', 'defaultContainer', 'tenantId', 'clientId', 'autoLockMinutes',
   'clipboardSeconds', 'unlockPrompt', 'language', 'zoom', 'transparency', 'theme', 'sourceBadges', 'autoTypeKeys', 'updateMode',
-  'updateChannel', 'breakGlass', 'autoDiscover', 'signInWindows', 'pimOnLock'];
+  'updateChannel', 'breakGlass', 'autoDiscover', 'signInWindows', 'pimOnLock', 'adminPim', 'adminOffered'];
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'updateChannel', 'mcpEnabled', 'offlineMirror',
   'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];
 

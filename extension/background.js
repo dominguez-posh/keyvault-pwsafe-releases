@@ -7,7 +7,7 @@
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
 import { hostFromUrl, itemMatchesHost, rankCandidates } from './core/match.js';
-import { itemHosts, sophosFillPassword, resolveLogin } from './core/model.js';
+import { itemHosts, sophosFillPassword, resolveLogin, fqdnUserName } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
@@ -259,6 +259,10 @@ function contentStrings() {
     bastionTitle: t('Bastion-Zugang speichern?'),
     bastionHint: t('Als Asset (Azure-VM) mit Bastion-Link – im Eintrag verbindet „Bastion“ direkt.'),
     bastionExisting: t('Die VM ist schon als Asset da – der Zugang wird dort hinterlegt.'),
+    bastionPickTitle: t('Mit Keevault an der VM anmelden'),
+    bastionSave: t('Als Asset speichern (mit diesem Konto verknüpft)'),
+    bastionAsset: t('Asset „{title}“ ({vault})'),
+    bastionConnecting: t('Melde an als {name} …'),
     folderPlaceholder: t('Ordner (optional), z. B. Kunde/Azure'),
     update: t('Aktualisieren'),
     save: t('Speichern'),
@@ -368,6 +372,9 @@ async function capture({ username = '', password = '' }, sender) {
   // login goes into it (unless it already holds exactly this account).
   const bastion = await bastionContext(sender);
   if (bastion) {
+    // Sent by Keevault itself from its account bar (#27): nothing to offer.
+    const picked = (await chrome.storage.session.get(`bastionPicked:${sender.tab.id}`))[`bastionPicked:${sender.tab.id}`];
+    if (picked && Date.now() - picked < 120_000) return { action: 'none' };
     const writable = await writableContainers();
     if (!writable.length) return { action: 'none' };
     const known = (await vault.summaries()).find((x) => x.type === 'server' && x.title.toLowerCase() === bastion.vmName.toLowerCase()
@@ -911,8 +918,70 @@ const contentCommands = {
   /** One-time sign-in: the page filled its last step (password, or one-time code if the entry has one). */
   'cs:signInDone': async (_msg, sender) => {
     const host = signInHost(sender);
+    // Bastion's form filled by Keevault (started in the app): no "save this sign-in?" afterwards (#33).
+    if (host && BASTION_HOSTS.test(host) && sender.tab?.id != null) await chrome.storage.session.set({ [`bastionPicked:${sender.tab.id}`]: Date.now() });
     if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
     return app.signInDone?.(host);
+  },
+  /**
+   * Keevault pressed Bastion's "Connect": Bastion opens the session in a new tab – the tab with the form is then of
+   * no use and is closed (#33). Without a new tab within 20 s (session in the same tab) nothing is closed.
+   */
+  'cs:bastionConnected': async (_msg, sender) => {
+    const host = signInHost(sender);
+    const tabId = sender.tab?.id;
+    if (!host || !BASTION_HOSTS.test(host) || tabId == null) return false;
+    return new Promise((resolve) => {
+      const onCreated = (tab) => {
+        if (tab.openerTabId !== tabId) return;
+        finish();
+        setTimeout(() => chrome.tabs.remove(tabId).catch(() => {}), 1500);
+        resolve(true);
+      };
+      const finish = () => { chrome.tabs.onCreated.removeListener(onCreated); clearTimeout(timer); };
+      const timer = setTimeout(() => { finish(); resolve(false); }, 20_000);
+      chrome.tabs.onCreated.addListener(onCreated);
+    });
+  },
+  // Bastion sign-in to a VM in the browser (#27): the logins to choose from, and the VM's asset if it is one already
+  // (its linked account first).
+  'cs:bastionAccounts': async (_msg, sender) => {
+    const bastion = await bastionContext(sender);
+    if (!bastion || !(await isOpen())) return null;
+    const names = await containerNames();
+    const summaries = await vault.summaries();
+    const asset = summaries.find((x) => x.type === 'server' && x.title.toLowerCase() === bastion.vmName.toLowerCase());
+    const linked = asset ? (await vault.getItem(asset.containerId, asset.id).catch(() => null))?.server?.bastionVmLink || '' : '';
+    const accounts = summaries.filter((s) => s.type === 'login')
+      .sort((a, b) => Number(b.key === linked) - Number(a.key === linked) || a.title.localeCompare(b.title))
+      .map((s) => ({ key: s.key, containerId: s.containerId, id: s.id, title: s.title, username: s.username, container: names.get(s.containerId) || '' }));
+    if (!accounts.length) return null;
+    return { vmName: bastion.vmName, accounts, linkedKey: linked, asset: asset ? { title: asset.title, container: names.get(asset.containerId) || '' } : null, ui: contentStrings() };
+  },
+  /**
+   * Account chosen for the VM: its sign-in (user name in the FQDN form) for Bastion's form; with save, the VM becomes
+   * an asset linked to it (or the existing asset gets the link) – in the account's vault, links stay in one vault.
+   */
+  'cs:bastionAccount': async ({ containerId, id, save = false }, sender) => {
+    const bastion = await bastionContext(sender);
+    if (!bastion) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
+    const item = await usableItem(containerId, id);
+    if (item.type !== 'login') throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
+    let saved = null;
+    if (save) {
+      const key = `${containerId}/${id}`;
+      const asset = (await vault.summaries()).find((x) => x.type === 'server' && x.containerId === containerId && x.title.toLowerCase() === bastion.vmName.toLowerCase());
+      if (asset) {
+        const a = await vault.getItem(asset.containerId, asset.id, { fresh: true });
+        saved = await vault.saveItem(asset.containerId, { ...a, server: { ...a.server, kind: a.server?.kind || 'azurevm', bastionUrl: a.server?.bastionUrl || bastion.bastionUrl, bastionVmLink: key } }, { expectedVersion: a.version });
+      } else {
+        saved = await vault.saveItem(containerId, { type: 'server', title: bastion.vmName, server: { kind: 'azurevm', bastionUrl: bastion.bastionUrl, bastionVmLink: key } });
+      }
+      await broadcast({ type: 'state:changed' });
+    }
+    // The form is sent by Keevault: no "save this sign-in?" afterwards for this tab.
+    await chrome.storage.session.set({ [`bastionPicked:${sender.tab.id}`]: Date.now() });
+    return { job: { mode: 'bastion', username: fqdnUserName(item), password: item.password || '' }, saved: saved ? { title: saved.title } : null };
   },
   // Microsoft sign-in page: the Microsoft accounts from the vaults (admin accounts first) and the remembered one.
   'cs:msAccounts': async (_msg, sender) => {

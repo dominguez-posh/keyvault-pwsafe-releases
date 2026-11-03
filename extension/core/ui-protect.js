@@ -31,18 +31,26 @@ function busy(button, label, fn) {
   };
 }
 
+/** Strength bar under a new password field – red, yellow, green while typing (empty field: no bar). */
+export function strengthMeter(input) {
+  const meter = h('div', { class: 'strength' }, h('span'), h('em'));
+  const draw = () => {
+    const s = passwordStrength(input.value);
+    meter.dataset.level = input.value ? String(s.level) : '';
+    meter.querySelector('em').textContent = input.value ? s.label : '';
+  };
+  input.addEventListener('input', draw);
+  draw();
+  return meter;
+}
+
 /** Form part for choosing master password and/or passkey. read() → { password, passkeyLabel } or throws. */
 export function methodsForm(ctx, { requirePasskeyHint = false } = {}) {
   const usePassword = h('input', { type: 'checkbox', checked: !ctx.passkeyAvailable });
   const usePasskey = h('input', { type: 'checkbox', checked: !!ctx.passkeyAvailable, disabled: !ctx.passkeyAvailable });
   const pw1 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: t('mindestens 8 Zeichen') });
   const pw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: t('wiederholen') });
-  const meter = h('div', { class: 'strength' }, h('span'), h('em'));
-  pw1.addEventListener('input', () => {
-    const s = passwordStrength(pw1.value);
-    meter.dataset.level = String(s.level);
-    meter.querySelector('em').textContent = s.label;
-  });
+  const meter = strengthMeter(pw1);
   const label = h('input', { value: ctx.defaultLabel || '', placeholder: t('z. B. Alex – YubiKey') });
   const pwBox = h('div', { class: 'indent' }, h('div', { class: 'grid2' }, pw1, pw2), meter);
   const pkBox = h('div', { class: 'indent' }, h('div', { class: 'field' }, h('label', {}, t('Bezeichnung des Passkeys')), label),
@@ -245,7 +253,7 @@ export async function manageDialog(container, ctx, onChange) {
       const pw1 = h('input', { type: 'password', autocomplete: 'new-password' });
       const pw2 = h('input', { type: 'password', autocomplete: 'new-password' });
       modal(m.password ? t('Masterpasswort ändern') : t('Masterpasswort festlegen'), h('div', {},
-        h('div', { class: 'field' }, h('label', {}, t('Neues Masterpasswort')), pw1),
+        h('div', { class: 'field' }, h('label', {}, t('Neues Masterpasswort')), pw1, strengthMeter(pw1)),
         h('div', { class: 'field' }, h('label', {}, t('Wiederholen')), pw2)), [
         { label: t('Abbrechen') },
         { label: t('Speichern'), primary: true, onClick: async () => {

@@ -53,10 +53,11 @@ export async function healthDialog(ctx) {
   }
   const hibp = h('input', { type: 'checkbox', checked: remembered });
   const scopeLabel = ctx.containerId ? ctx.containerName(ctx.containerId) : t('alle Tresore');
-  const { close } = modal(t('Passwort-Check'), h('div', {},
+  const { dialog, close } = modal(t('Passwort-Check'), h('div', {},
     h('p', { class: 'muted small' }, t('Prüft {scope}: schwache, mehrfach verwendete und seit über einem Jahr unveränderte Passwörter. Notizen und Einträge ohne Passwort bleiben außen vor.', { scope: scopeLabel })),
     h('label', { class: 'inline' }, hibp, t('Auch gegen bekannte Datenlecks prüfen (Have I Been Pwned) – nur die ersten 5 Zeichen des Hashes verlassen den PC')),
     body), [{ label: t('Schließen') }]);
+  dialog.classList.add('report-modal');
   const run = async () => {
     try {
       localStorage.setItem('hibp', hibp.checked ? '1' : '0');
@@ -96,18 +97,46 @@ export async function healthDialog(ctx) {
           } }, t('Öffnen')))))))) : h('p', { class: 'notice ok' }, icon('shield', 16), ' ', t('Keine Auffälligkeiten – alle geprüften Passwörter sind in Ordnung.')),
       r.items.length ? exportButtons(`Keevault-Passwort-Check-${new Date().toISOString().slice(0, 10)}`, t('Passwort-Check'), t('{scope} · erstellt {date}', { scope: scopeLabel, date: new Date().toLocaleString() }),
         [t('Tresor'), t('Ordner'), t('Eintrag'), t('Benutzername'), t('Befund')], rows, ctx.call) : null,
+      passkeySection(r, ctx, close),
     );
   };
   hibp.addEventListener('change', run);
   await run();
 }
 
+/**
+ * Recommendation after the password findings (#26): logins whose website supports passkeys but that hold none yet –
+ * from the public directory passkeys.2fa.directory (downloaded, compared on this PC).
+ */
+function passkeySection(r, ctx, close) {
+  if (!r.passkeyDirectory) return h('p', { class: 'muted small' }, t('Passkey-Empfehlungen nicht verfügbar – die öffentliche Liste (passkeys.2fa.directory) war nicht erreichbar.'));
+  if (!r.passkeys?.length) return null;
+  const kind = (k) => (k === 'passwordless' ? t('Anmeldung ohne Passwort') : t('als zweiter Faktor'));
+  return h('div', { class: 'passkey-recommend' },
+    h('h3', {}, icon('key', 16), ' ', t('Empfehlung: Passkey einrichten ({n})', { n: r.passkeys.length })),
+    h('p', { class: 'muted small' }, t('Diese Websites unterstützen Passkeys – sicherer als jedes Passwort und nicht abfangbar. Richte dort einen Passkey ein, Keevault speichert ihn im Eintrag. Quelle: öffentliche Liste passkeys.2fa.directory.')),
+    h('div', { class: 'table' }, h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, t('Eintrag')), h('th', {}, t('Website')), h('th', {}, t('Passkey')), h('th', {}))),
+      h('tbody', {}, ...r.passkeys.map((p) => h('tr', {},
+        h('td', {}, h('b', {}, p.title), p.username ? h('div', { class: 'muted small' }, p.username) : null),
+        h('td', {}, p.site),
+        h('td', {}, h('span', { class: 'badge accent' }, kind(p.kind))),
+        h('td', { class: 'row-actions' },
+          p.documentation ? h('button', { type: 'button', class: 'btn small', onclick: () => ctx.call('openExternal', p.documentation) }, t('Anleitung')) : null,
+          h('button', { type: 'button', class: 'btn small', onclick: () => {
+            close();
+            ctx.openItem(p);
+          } }, t('Öffnen')))))))));
+}
+
 /** Access report: every role assignment on the Key Vault vaults (incl. inherited ones), as table, CSV and PDF. */
 export async function accessReportDialog(ctx) {
   const body = h('div', {}, h('p', {}, h('span', { class: 'spinner' }), ' ', t('Rollenzuweisungen werden gelesen …')));
-  modal(t('Zugriffsbericht'), h('div', {},
+  const { dialog } = modal(t('Zugriffsbericht'), h('div', {},
     h('p', { class: 'muted small' }, t('Wer darf was in deinen Key-Vault-Tresoren – aus Azure RBAC gelesen, inklusive vererbter Rollen aus Ressourcengruppe und Subscription. Für Audits (z. B. ISO 27001) als CSV oder PDF speichern.')),
     body), [{ label: t('Schließen') }]);
+  // Wide, the table wraps long names and accounts: no sideways scrolling, only the dialog scrolls for many rows (#24).
+  dialog.classList.add('report-modal');
   let r;
   try {
     r = await ctx.call('accessReport');

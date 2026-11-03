@@ -135,7 +135,7 @@ const portalBastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</
 <button type="button" id="connect">Connect</button>`;
 // Imitation of a Bastion sign-in to a VM (served as bst-smoke.bastion.azure.com, the VM in the address like the portal).
 const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
-<form onsubmit="return false"><input name="username" autocomplete="username"><input name="password" type="password">
+<form onsubmit="window.connected = true; return false"><input name="username" autocomplete="username"><input name="password" type="password">
 <button type="submit">Connect</button></form>`;
 // Imitation of the Sophos VPN/user portal sign-in (same fields as the real page: name="username", name="password").
 const sophosPage = `<!doctype html><meta charset="utf-8"><title>VPN Portal</title>
@@ -505,6 +505,33 @@ try {
     pageErrors(portal.sessionId, 'portal-bastion');
   }
 
+  // Bastion opened in the browser (#27): the bar offers the logins; the chosen one is filled in, "Connect" is pressed and
+  // the VM is kept as an asset linked to that login.
+  {
+    const vmPick = '/subscriptions/s-smoke/resourceGroups/rg-smoke/providers/Microsoft.Compute/virtualMachines/vm-smoke-05/bastionHost';
+    const bp = await open(`http://bst-smoke.bastion.azure.com:${server.address().port}${vmPick}`);
+    await sleep(2500);
+    const acc = await waitFor(() => barPoint(bp.sessionId, firstAccount), 6000);
+    check(!!acc, 'Bastion-Leiste: keine Konten angeboten');
+    if (acc) {
+      for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: acc.x, y: acc.y, button: 'left', clickCount: 1 }, bp.sessionId);
+      const done = await waitFor(async () => { const r = await evaluate(bp.sessionId, '({ connected: !!window.connected, user: document.forms[0].username.value, pw: !!document.forms[0].password.value })'); return r.connected && r; }, 8000);
+      check(done?.pw && done?.user, `Bastion-Leiste: nicht ausgefüllt und verbunden (${JSON.stringify(done)})`);
+      // Sent by Keevault itself: no "save this Bastion sign-in?" afterwards (#33).
+      await sleep(1500);
+      const asked = await evaluate(options.sessionId, 'chrome.storage.session.get(null).then((all) => Object.values(all).some((p) => p?.action === "bastion" && p?.bastion?.vmName === "vm-smoke-05"))');
+      check(!asked, 'Bastion-Leiste: danach trotzdem „Bastion-Zugang speichern?“ angeboten');
+      const asset = await waitFor(async () => {
+        const all = await sw(options.sessionId, 'items', {});
+        const s = (all || []).find((x) => x.type === 'server' && x.title === 'vm-smoke-05');
+        return s ? sw(options.sessionId, 'item', { containerId: s.containerId, id: s.id }) : null;
+      }, 6000);
+      check(!!asset?.server?.bastionVmLink && /vm-smoke-05\/bastionHost$/.test(asset?.server?.bastionUrl || ''), `Bastion-Leiste: Asset nicht mit dem Konto angelegt (${JSON.stringify(asset?.server || null)})`);
+      if (asset) await sw(options.sessionId, 'delete', { containerId: asset.containerId, id: asset.id }).catch(() => {});
+    }
+    pageErrors(bp.sessionId, 'bastion-pick');
+  }
+
   // "Remember": tick the box, choose the account – the next Microsoft sign-in starts by itself after the countdown.
   const ms2 = await open(`http://login.microsoftonline.com:${server.address().port}/ms?2`);
   await sleep(2500);
@@ -615,7 +642,7 @@ try {
   check(!linkedFull?.password && !linkedFull?.username, 'Verknüpfter Login: eigene Anmeldedaten gespeichert');
   pageErrors(lk.sessionId, 'linked-login');
   // The demo vault has the free limit of 10 entries: the test entries go again before the import below.
-  for (const it of [sophosItem, domainItem, linkedItem]) if (it?.id) await sw(options.sessionId, 'delete', { containerId: personal.id, id: it.id });
+  for (const it of [sophosItem, linkedItem, domainItem]) if (it?.id) await sw(options.sessionId, 'delete', { containerId: personal.id, id: it.id });
 
   // Import of the sample CSV.
   const before = (await sw(options.sessionId, 'items')).length;
