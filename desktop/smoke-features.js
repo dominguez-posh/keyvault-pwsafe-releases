@@ -525,6 +525,9 @@ export async function featureChecks(ctx) {
       await sleep(400);
       const deviceItems = (await newMenu()).filter((a) => a.startsWith('new-') && a !== 'new-folder' && a !== 'new-subfolder');
       if (deviceItems.join() !== 'new-server') fail('admin', `"Devices" offers ${deviceItems.join()}`);
+      // No entry selected: the empty detail pane does not scroll (no scrollbar without content to scroll).
+      const empty = JSON.parse(await js('JSON.stringify((() => { const p = document.querySelector(".detail-pane"); return { placeholder: !!p?.querySelector(":scope > .placeholder"), overflow: p ? p.scrollHeight - p.clientHeight : -1 }; })())'));
+      if (!empty.placeholder || empty.overflow > 0) fail('admin', `empty detail pane scrolls: ${JSON.stringify(empty)}`);
       if (await js('!!document.querySelector(".sidebar .nav[data-view=passkeys], .sidebar [data-nav=passkeys]")')) fail('admin', 'passkey view among devices');
       await js('document.querySelector(".context-menu")?.remove(); document.querySelector(".mode-switch [data-mode=items]")?.click()');
       await sleep(400);
