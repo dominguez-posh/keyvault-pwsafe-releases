@@ -4,6 +4,12 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.16 – 2026-11-03
+- Tresordatei, die beim Import mit 0.9.13/0.9.14 beschädigt wurde („Die Datei ist kein Keevault-Tresor“, „Kein Zugriff“): Keevault öffnet sie wieder mit dem letzten vollständigen Stand, und der nächste Speichervorgang schreibt die Datei sauber neu.
+
+### English
+- Vault file damaged by an import with 0.9.13/0.9.14 ("The file is not a Keevault vault", "No access"): Keevault opens it again with the last complete state, and the next save writes the file cleanly.
+
 ## 0.9.15 – 2026-11-02
 - Import (CSV aus Edge, KeePass und anderen) in eine Tresordatei, z. B. in OneDrive: Die Einträge werden jetzt nacheinander gespeichert. Bisher kamen sich die gleichzeitigen Speichervorgänge in die Quere („EPERM: operation not permitted, rename“, „EBUSY“, „Die Datei ist kein Keevault-Tresor“). Hält OneDrive oder der Virenscanner die Datei kurz fest, versucht Keevault es einige Sekunden lang erneut.
 - Ohne ausgewählten Eintrag zeigt die rechte Seite keinen Scrollbalken mehr.
