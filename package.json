@@ -35,7 +35,7 @@
     "electron-builder": "^26.15.3",
     "jsqr": "1.4.0",
     "kdbxweb": "2.1.1",
-    "qrcode-generator": "^1.4.4",
+    "qrcode-generator": "^2.0.4",
     "ssh2": "^1.16.0"
   },
   "build": {
