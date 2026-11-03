@@ -463,3 +463,23 @@ test('fast index: a deleted entry does not come back when refreshing right after
   const index = await session.refreshIndexFast([cid]);
   assert.deepEqual(index[cid].items.map((i) => i.title), ['Beta']);
 });
+
+test('folder symbols of a Key Vault container: kept with the folder list, survive adding folders, dropped with the folder', async () => {
+  const { kv, session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  await session.addFolder(cid, 'Kunden/Contoso');
+  await session.setFolderIcons(cid, { Kunden: 'users', 'Kunden/Contoso': PNG, Fremd: 'nope' });
+  assert.deepEqual(await session.folderIcons(cid), { Kunden: 'users', 'Kunden/Contoso': PNG }, 'invalid symbols are not stored');
+  await session.addFolder(cid, 'Intern');
+  assert.equal((await session.folderIcons(cid)).Kunden, 'users', 'adding a folder keeps the symbols');
+  assert.deepEqual(await session.folders(cid), ['Intern', 'Kunden/Contoso']);
+  await session.setFolderIcons(cid, { Kunden: '' });
+  assert.equal((await session.folderIcons(cid)).Kunden, undefined, "'' puts the plain folder back");
+  await session.enableProtection(cid, { password: 'master-password-1' });
+  await session.setFolderIcons(cid, { Intern: 'lock' });
+  assert.equal(kv.secrets.get('pws-folders').at(-1).value.includes('lock'), false, 'symbols are sealed like the folder names');
+  assert.equal((await session.folderIcons(cid)).Intern, 'lock');
+  await session.removeFolder(cid, 'Kunden');
+  assert.deepEqual(await session.folderIcons(cid), { Intern: 'lock' });
+  await assert.rejects(session.setFolderIcons(cid, Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`F${i}`, `data:image/png;base64,${'A'.repeat(5800)}`]))), /Zu viele eigene Ordner-Bilder/);
+});

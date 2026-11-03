@@ -32,6 +32,34 @@ const SOPHOS_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAA
 // Sophos login: a login flavour (own 'New' entry, logo, portal buttons). With MFA (a TOTP set) the Sophos portals
 // want the password and the one-time code typed together into the password field – see cs:fill (browser only).
 export const isSophosLogin = (item) => item.type === 'login' && !!item.sophos;
+/**
+ * A login linked to another login (loginLink): user name and password from the linked entry, the one-time code from
+ * the entry itself if it has one (e.g. a Sophos portal's own MFA), else from the linked one. Only within the same
+ * vault and one level deep. getItem(containerId, id) reads the linked entry. Returns the item with these values and
+ * linked = { key, title, username, msAdmin, microsoft, passkey } – or { key, missing: true } when it is not available.
+ */
+export async function resolveLogin(item, getItem) {
+  if (item?.type !== 'login' || !item.loginLink) return item;
+  const [containerId, id] = item.loginLink.split('/');
+  let source = null;
+  if (containerId === item.containerId && id !== item.id) {
+    try {
+      const l = await getItem(containerId, id);
+      if (l?.type === 'login') source = l;
+    } catch {
+      // deleted or no access: shown as "not available"
+    }
+  }
+  if (!source) return { ...item, username: '', password: '', linked: { key: item.loginLink, missing: true } };
+  return {
+    ...item,
+    username: source.username,
+    password: source.password,
+    totp: item.totp || source.totp,
+    linked: { key: item.loginLink, title: source.title, username: source.username, msAdmin: !!source.msAdmin, microsoft: isMicrosoftLogin(source), passkey: !!source.passkeys?.length },
+  };
+}
+
 /** Password as the Sophos portal expects it on autofill: password immediately followed by the current TOTP (MFA). */
 export const sophosFillPassword = (item, code) => (item.sophos && item.totp && code ? item.password + code : item.password);
 
@@ -184,6 +212,9 @@ export function normalizeItem(input = {}) {
     msAdmin: !!input.msAdmin,
     // Sophos login flavour and its named portals (VPN/Admin/User portal, each a free URL) – see isSophosLogin.
     sophos: !!input.sophos,
+    // Sign-in from another login of the same vault (domain login, Microsoft login): user name and password are read
+    // from there when used – see resolveLogin. Only a reference is stored, never a copy of the secret.
+    loginLink: input.type === 'login' || input.type == null ? linkKey(input.loginLink) : '',
     portals: normalizePortals(input.portals),
     created: input.created || '',
     createdBy: input.createdBy || '',
@@ -287,6 +318,7 @@ export function serializeItem(input, actor = '') {
     msAdmin: item.type === 'login' && item.msAdmin ? true : undefined,
     sophos: item.type === 'login' && item.sophos ? true : undefined,
     portals: item.type === 'login' && item.portals.length ? item.portals : undefined,
+    loginLink: item.type === 'login' && item.loginLink ? item.loginLink : undefined,
     folder: item.folder,
     favorite: item.favorite,
     expires: item.expires || undefined,
@@ -321,6 +353,7 @@ export function serializeItem(input, actor = '') {
   if (item.expires) tags.exp = item.expires;
   if (item.type === 'login' && item.msAdmin) tags.adm = '1';
   if (item.type === 'login' && item.sophos) tags.sop = '1';
+  if (item.type === 'login' && item.loginLink) tags.ln = '1';
   if (item.type === 'server' && serverMethods(item).length) tags.sv = serverMethods(item).join(' ');
   return { value, contentType: CONTENT_TYPE, tags, doc };
 }
@@ -346,6 +379,7 @@ export function summaryFromSecret(secret, containerId) {
     expires: /^\d{4}-\d{2}-\d{2}$/.test(t.exp || '') ? t.exp : '',
     msAdmin: t.adm === '1',
     sophos: t.sop === '1',
+    loginLinked: t.ln === '1',
     methods: split(t.sv),
     updated: (secret.attributes?.updated || 0) * 1000,
   };

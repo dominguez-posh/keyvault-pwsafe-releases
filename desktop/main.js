@@ -4,13 +4,13 @@
 import { app, BrowserWindow, ipcMain, shell, clipboard, dialog, powerMonitor, protocol, net, nativeTheme, session, Tray, Menu, nativeImage, globalShortcut, Notification, safeStorage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { statSync, readFileSync, rmSync } from 'node:fs';
+import { statSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
 import { spawn, execFile as execFileCb } from 'node:child_process';
 import crypto from 'node:crypto';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Auth, LockedError, entraSettings } from './auth.js';
-import { Config } from './config.js';
+import { Config, SYNC_KEYS } from './config.js';
 import { FileContainers } from './files.js';
 import { hashPin, verifyPin, PinGuard, MIN_PIN_LENGTH } from './pin.js';
 import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.js';
@@ -33,7 +33,8 @@ import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
 import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
-import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder, fqdnUserName } from '../extension/core/model.js';
+import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder, fqdnUserName, resolveLogin } from '../extension/core/model.js';
+import { moveFolderIcons } from '../extension/core/folder-icons.js';
 import { itemsToCsv } from '../extension/core/export.js';
 import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, removeProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
 
@@ -269,6 +270,56 @@ function changed() {
   send({ type: 'changed' });
   bridge?.broadcast('changed');
   if (config.get().windowsProvider) windows?.scheduleSync();
+  // A personal vault opened or changed: settings may have come from another device.
+  scheduleSettingsSync();
+}
+
+// ---------------------------------------------------------------- settings in the personal vault
+
+let settingsTimer = null;
+function scheduleSettingsSync() {
+  if (demo || smokeTest || !config?.get().settingsSync) return;
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => syncSettings().catch((e) => diag(`SETTINGS sync failed: ${e.message}`)), 1500);
+}
+
+/**
+ * Settings ↔ personal vault: changed there (another device) and not here → taken over here; changed here → written
+ * there (on top of what is there). A device that never synced takes the vault's state first – so a new device does
+ * not overwrite the vaults of the others. settingsLocalAt ≠ 0 marks a change here (no clock comparison between
+ * devices). Returns 'pulled', 'pushed' or null.
+ */
+async function syncSettings() {
+  const s = config.get();
+  if (!s.settingsSync) return null;
+  const entry = personalEntries().find((e) => e.vault && !e.vault.locked && e.vault.ck);
+  if (!entry) return null;
+  const remote = await files.appSettings(entry.id);
+  const dirty = !!s.settingsLocalAt;
+  if (remote && (!s.settingsSyncedAt || (!dirty && remote.updated !== s.settingsSyncedAt))) {
+    const patch = Object.fromEntries(Object.entries(remote.value || {}).filter(([k]) => SYNC_KEYS.includes(k)));
+    const before = config.get();
+    config.update({ ...patch, settingsSyncedAt: remote.updated, settingsLocalAt: 0 }, { synced: true });
+    const after = config.get();
+    applyLanguage();
+    if (before.autoTypeKeys !== after.autoTypeKeys) applyShortcuts();
+    if (before.zoom !== after.zoom || before.transparency !== after.transparency || before.theme !== after.theme) applyView();
+    if (before.updateMode !== after.updateMode || before.updateChannel !== after.updateChannel) updater?.applyMode();
+    diag('SETTINGS taken from the personal vault');
+    if (opened && signedIn()) await refreshAll();
+    send({ type: 'changed' });
+    return 'pulled';
+  }
+  if (remote && !dirty) return null;
+  const value = { ...(remote?.value || {}), ...config.syncSnapshot() };
+  if (remote && JSON.stringify(remote.value) === JSON.stringify(value)) {
+    config.update({ settingsLocalAt: 0 }, { synced: true });
+    return null;
+  }
+  const at = Math.max(Date.now(), (remote?.updated || 0) + 1);
+  await files.setAppSettings(entry.id, value, at);
+  config.update({ settingsSyncedAt: at, settingsLocalAt: 0 }, { synced: true });
+  return 'pushed';
 }
 
 function requireOpen() {
@@ -381,7 +432,9 @@ function configuredContainers() {
 async function refreshAll({ quick = false } = {}) {
   await files.load();
   if (!signedIn()) return null;
-  const options = { configured: configuredContainers(), hidden: config.get().hiddenContainers };
+  // Marked Key Vaults connect by themselves only when the user turned that on (demo and smoke: always).
+  const discover = !!(config.get().autoDiscover || demo || smokeTest);
+  const options = { configured: configuredContainers(), hidden: config.get().hiddenContainers, discover };
   const { discoverError } = await vault.refreshContainers(quick ? { ...options, tenants: false, access: false } : options);
   if (mirrorWanted()) offlineMirror().setContainers(await vault.containers());
   // Index secrets first (a few GETs however big the vault); the full listing reconciles in the background.
@@ -496,6 +549,8 @@ let recentPin = null; // { pin, at } after a correct PIN – used once to bind /
 function locate(target) {
   // Smoke tests: a temporary folder stands in for a network drive (never the user's real OneDrive).
   if (smokeTest && process.env.KVPWSAFE_TEST_REMOTE && path.resolve(target).startsWith(path.resolve(process.env.KVPWSAFE_TEST_REMOTE))) return Promise.resolve(process.env.KVPWSAFE_TEST_PROVIDER ? { kind: 'cloud', provider: process.env.KVPWSAFE_TEST_PROVIDER, providerStatus: 'idle', inSync: true } : { kind: 'network', file: false });
+  // Demo: its own OneDrive stand-in in the demo profile (the personal vault wizard never touches the real one).
+  if (demo && path.resolve(target).startsWith(demoOneDrive())) return Promise.resolve({ kind: 'cloud', provider: 'OneDrive (Demo)', providerStatus: 'idle', inSync: true });
   const exe = helperExe();
   if (!exe || process.platform !== 'win32') return Promise.resolve(null);
   return new Promise((resolve) => {
@@ -522,7 +577,12 @@ async function refreshFileLocations() {
   return changedAny;
 }
 
-const defaultPersonalFolder = () => process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer || null;
+const demoOneDrive = () => {
+  const dir = path.join(app.getPath('userData'), 'OneDrive - Demo');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+};
+const defaultPersonalFolder = () => (demo ? demoOneDrive() : process.env.OneDriveCommercial || process.env.OneDrive || process.env.OneDriveConsumer || null);
 const personalPaths = () => config.get().personalVaults || [];
 
 /**
@@ -702,7 +762,7 @@ async function signInFor(host) {
   signInJobs = signInJobs.filter((j) => j.until > now);
   const job = signInJobs.find((j) => hostIn(String(host || '').toLowerCase(), j.hosts));
   if (!job) return null;
-  const item = typeof job.source === 'string' ? await vault.getItem(...splitEntryKey(job.source)) : job.source;
+  const item = typeof job.source === 'string' ? await usableItem(...splitEntryKey(job.source)) : job.source;
   // Bastion's sign-in on the VM always gets the FQDN form (user@contoso.local) when the account knows its domain.
   const username = job.mode === 'form' ? fqdnUserName(item) : item.username || '';
   // passkey: the account has one – the extension prefers it to the password and answers Microsoft's prompt by itself.
@@ -723,10 +783,13 @@ function checkDeviceLinks(containerId, s) {
   }
 }
 
+/** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
+const usableItem = async (containerId, id) => resolveLogin(await vault.getItem(containerId, id), (c, i) => vault.getItem(c, i));
+
 async function serverAccount(item, link) {
   if (link) {
     try {
-      return await vault.getItem(...splitEntryKey(link));
+      return await usableItem(...splitEntryKey(link));
     } catch {
       throw new Error(t('Der verknüpfte Eintrag ist nicht verfügbar (gelöscht oder kein Zugriff auf seinen Tresor).'));
     }
@@ -1533,7 +1596,17 @@ const api = {
     if (before.browserIntegration !== s.browserIntegration || before.windowsProvider !== s.windowsProvider
       || JSON.stringify(before.extensionIds) !== JSON.stringify(s.extensionIds) || before.mcpEnabled !== s.mcpEnabled) await applyBrowserIntegration();
     if (before.mcpEnabled && !s.mcpEnabled) mcp?.revoke();
-    return s;
+    if (!!before.autoDiscover !== !!s.autoDiscover && opened) {
+      // Off: the vaults connected so far stay (as added by hand), only new ones no longer appear by themselves.
+      if (!s.autoDiscover) {
+        const known = new Set(s.containers.map((c) => vaultHost(c.vaultUrl)));
+        const keep = (await vault.containers()).filter((c) => c.kind === 'keyvault' && c.sources?.includes('discovered') && !c.sources.includes('policy') && !known.has(c.id))
+          .map((c) => ({ name: c.name, vaultUrl: c.vaultUrl, ...(c.tenantId ? { tenantId: c.tenantId } : {}) }));
+        if (keep.length) config.update({ containers: [...s.containers, ...keep] });
+      }
+      if (signedIn()) refreshAll().then(() => changed()).catch(() => {});
+    }
+    return config.get();
   },
   /** entra: also sign in to Microsoft Entra ID (Key Vault containers). */
   async verifyPin(pin) {
@@ -2297,6 +2370,16 @@ const api = {
     await vault.removeFolder(containerId, folderPath);
     changed();
   },
+  folderIcons: (containerId) => vault.folderIcons(containerId),
+  /** Settings ↔ personal vault right now (the first-start wizard waits for the settings of another device). */
+  syncSettings: () => syncSettings(),
+  /** icon: a symbol name or a small image (data URL); '' = the plain folder again. */
+  async setFolderIcon(containerId, folderPath, icon) {
+    requireOpen();
+    await requireFeature(containerId, 'folders');
+    await vault.setFolderIcons(containerId, { [String(folderPath || '')]: icon || '' });
+    changed();
+  },
   /**
    * Renames a folder incl. subfolders and moves its entries along. to = '' moves everything one level up
    * (used when deleting a folder that still has content). Returns { moved, errors }.
@@ -2317,6 +2400,7 @@ const api = {
     const ns = scope === 'assets' ? 'assets:' : '';
     const ownSide = (s) => (scope === 'assets' ? s.type === 'server' : scope === 'secrets' ? s.type !== 'server' : true);
     const explicit = (await vault.folders(containerId)).filter((f) => !scope || f.startsWith('assets:') === (scope === 'assets')).map((f) => f.slice(ns.length));
+    const icons = await vault.folderIcons(containerId).catch(() => ({}));
     const entries = (await vault.summaries()).filter((s) => s.containerId === containerId && ownSide(s));
     for (const p of [...explicit, ...entries.map((s) => s.folder || '')].filter(inTree)) requireFolderDepth(map(p));
     // Explicit (possibly empty) folders: add the new paths, then drop the old tree.
@@ -2324,6 +2408,9 @@ const api = {
       if (inTree(f) && map(f)) await vault.addFolder(containerId, ns + map(f));
     }
     await vault.removeFolder(containerId, ns + src);
+    // Symbols move along with the folder (removeFolder dropped them with the old tree).
+    const iconPatch = Object.fromEntries(Object.entries(moveFolderIcons(icons, ns + src, dst ? ns + dst : '')).filter(([, v]) => v));
+    if (Object.keys(iconPatch).length) await vault.setFolderIcons(containerId, iconPatch).catch((e) => diag(`FOLDER icons not moved: ${e.message}`));
     const errors = [];
     let moved = 0;
     const affected = entries.filter((s) => inTree(s.folder || ''));
@@ -2385,6 +2472,20 @@ const api = {
   openAppsSettings: () => shell.openExternal('ms-settings:appsfeatures'),
   openExternal: (url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  },
+  /**
+   * Website of a login linked to a Microsoft login (external portal with "Sign in with Microsoft"): opened in the browser
+   * with a one-click sign-in for exactly that Microsoft account (like the admin tiles, see signInFor).
+   */
+  async openWithMicrosoft({ containerId, id, url }) {
+    requireOpen();
+    if (!/^https?:\/\//i.test(url || '')) throw new Error(t('Keine gültige Adresse'));
+    const item = await usableItem(containerId, id);
+    if (!item.linked?.microsoft) throw new Error(t('Der Eintrag ist mit keinem Microsoft-Login verknüpft'));
+    addSignInJob(MS_LOGIN_HOSTS, item.linked.key, 'microsoft');
+    lastAdminUrl = url;
+    if (!smokeTest) await shell.openExternal(url);
+    return { signIn: !!bridge?.clients?.size };
   },
   /** Admin center in the browser; with an account the extension signs in with it (one-click, see signInFor). */
   async openAdminCenter({ url, key }) {
@@ -2473,11 +2574,23 @@ const api = {
     requireOpen();
     return decryptKdbx(Buffer.from(bytes), { password: String(password || ''), keyFile: keyFile ? Buffer.from(keyFile) : null });
   },
-  async importItems(containerId, items) {
+  async importItems(containerId, items, { folderIcons = {} } = {}) {
     requireOpen();
     await requireFeature(containerId, 'import');
     // At most three folder levels: deeper source folders are cut ("A/B/C/D" → "A/B/C").
     items = items.map((i) => ({ ...i, folder: limitFolderDepth(i.folder) }));
+    // Folder symbols of the source (e.g. KeePass group icons): set where no symbol is chosen yet, deeper ones dropped.
+    const icons = Object.entries(folderIcons || {}).map(([p, v]) => [normalizeFolder(p), v]).filter(([p, v]) => p && v && p === limitFolderDepth(p));
+    if (icons.length) {
+      const have = await vault.folderIcons(containerId).catch(() => ({}));
+      const patch = Object.fromEntries(icons.filter(([p]) => !have[p]));
+      try {
+        if (Object.keys(patch).length) await vault.setFolderIcons(containerId, patch);
+      } catch {
+        // Too many own images for the vault: the standard symbols at least.
+        await vault.setFolderIcons(containerId, Object.fromEntries(Object.entries(patch).filter(([, v]) => !v.startsWith('data:')))).catch(() => {});
+      }
+    }
     const errors = [];
     let done = 0;
     await mapLimit(items, 4, async (item) => {
@@ -2777,6 +2890,7 @@ function startInNormalMode() {
 
 app.whenReady().then(async () => {
   config = new Config();
+  config.onSyncChange = () => scheduleSettingsSync();
   startInNormalMode();
   pinGuard.restore(config.get().pinGuard);
   applyLanguage();
@@ -3508,6 +3622,20 @@ function runSmokeTest() {
           if (await createPersonal({ folder: dir, password: 'Zweiter-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: a second personal vault was created');
           if (await usePersonal({ folder: dir }).then(() => true, () => false)) errors.push('personal: a second personal vault was added');
           if (config.get().personalVaults.length !== 1) errors.push(`personal: ${config.get().personalVaults.length} personal vaults listed`);
+          // Settings travel in the personal vault: a change here is written there, a newer state there (another device)
+          // is taken over here; the PIN and device keys never go along; switched off, nothing moves.
+          const clip = config.get().clipboardSeconds;
+          config.update({ clipboardSeconds: 37 });
+          if (await syncSettings() !== 'pushed' || (await files.appSettings(r.id))?.value?.clipboardSeconds !== 37) errors.push('settings sync: change not written to the personal vault');
+          const stored = (await files.appSettings(r.id)).value;
+          if ('appPin' in stored || 'personalDeviceKeys' in stored || 'mcpEnabled' in stored) errors.push('settings sync: device-bound settings in the personal vault');
+          await files.setAppSettings(r.id, { ...stored, clipboardSeconds: 41 }, Date.now() + 1000);
+          if (await syncSettings() !== 'pulled' || config.get().clipboardSeconds !== 41) errors.push(`settings sync: newer settings not taken over (${config.get().clipboardSeconds})`);
+          config.update({ settingsSync: false });
+          config.update({ clipboardSeconds: 43 });
+          if (await syncSettings() !== null || (await files.appSettings(r.id)).value.clipboardSeconds !== 41) errors.push('settings sync: written although switched off');
+          config.update({ settingsSync: true, clipboardSeconds: clip });
+          await syncSettings();
           changed();
           let shown = 0;
           for (let i = 0; i < 10 && shown !== 1; i++) { await sleep(300); shown = await js('document.querySelectorAll(".personal-slot .nav-label").length'); }

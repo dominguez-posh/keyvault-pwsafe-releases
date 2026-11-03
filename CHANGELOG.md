@@ -4,6 +4,30 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.19 – 2026-11-03
+- Erster Start auf einem neuen Gerät: Kein Tresor wird mehr von selbst verbunden. Es öffnet sich der Assistent für den persönlichen Tresor, danach ein Einrichtungs-Assistent für einen Team-Tresor, der jeden Schritt erklärt: was ein Tresor ist, Anmeldung, Ort (Abonnement, Ressourcengruppe, neuer oder vorhandener leerer Key Vault), Zugriff, Notfallkonten, Prüfen und Erstellen. Er ersetzt auch den bisherigen Dialog „Neuen Key-Vault-Tresor erstellen“. Bestehende Installationen behalten ihre Tresore.
+- Gefundene Keevault-Tresore verbindet die App nur noch, wenn „Gefundene Keevault-Tresore automatisch verbinden“ (Einstellungen → Anmeldung) an ist – bei neuen Installationen ist es aus; vorhandene Tresore wählst du unter „Vorhandenen Key Vault hinzufügen“ aus der Liste.
+- Einstellungen im persönlichen Tresor: Verbundene Tresore, Ansicht und Verhalten liegen verschlüsselt im persönlichen Tresor; ein neues Gerät übernimmt sie, sobald du dort den persönlichen Tresor öffnest. PIN, Geräteschlüssel, Installationen auf dem Gerät und Freigaben für KI-Agenten bleiben auf dem Gerät. Abschaltbar unter Einstellungen → Allgemein.
+- Ordner-Symbole: Rechtsklick auf einen Ordner → „Symbol ändern …“ – über 30 Symbole oder ein eigenes Bild. Beim KeePass-Import (KDBX und XML) übernimmt Keevault die Gruppensymbole, auch eigene Bilder; beim Umbenennen wandert das Symbol mit.
+- PIM im Entsperren-Fenster: Menü → Ansicht → „PIM beim Entsperren“ zeigt dort einen Button, um vorher eine Rolle zu aktivieren (standardmäßig aus).
+- Demo-Modus: Beispiel-Ressourcen in Azure (Ressourcengruppen, Regionen, ein leerer Key Vault) und ein eigener OneDrive-Ordner – beide Assistenten laufen dort mit allen Optionen, inklusive eigener PIN.
+- Behoben: Nach dem Entsperren fehlten bei Servern die Verbindungsarten (RDP, SSH, Verwaltung) und die Kennzeichen von Microsoft-, Sophos- und verknüpften Logins, bis der Abgleich im Hintergrund fertig war. Der Assistent für den persönlichen Tresor öffnete sich nach der Einrichtung nie von selbst.
+
+### English
+- First start on a new device: no vault is connected by itself anymore. The personal vault wizard opens, then a setup wizard for a team vault that explains every step: what a vault is, sign-in, location (subscription, resource group, new or existing empty Key Vault), access, break-glass accounts, check and create. It also replaces the former "Create new Key Vault vault" dialog. Existing installations keep their vaults.
+- The app connects found Keevault vaults only when "Connect Keevault vaults found automatically" (Settings → Sign-in) is on – off for new installations; pick existing vaults from the list under "Add existing Key Vault".
+- Settings in the personal vault: connected vaults, view and behaviour are stored encrypted in the personal vault; a new device takes them over as soon as you open the personal vault there. PIN, device keys, installations on the device and approvals for AI agents stay on the device. Can be turned off under Settings → General.
+- Folder symbols: right-click a folder → "Change symbol …" – over 30 symbols or an own image. The KeePass import (KDBX and XML) takes over the group icons, own images included; renaming moves the symbol along.
+- PIM on the unlock screen: Menu → View → "PIM when unlocking" shows a button there to activate a role first (off by default).
+- Demo mode: example Azure resources (resource groups, regions, an empty Key Vault) and an own OneDrive folder – both wizards run there with all options, including an own PIN.
+- Fixed: after unlocking, servers lacked their connection methods (RDP, SSH, management) and Microsoft, Sophos and linked logins their marks until the background reconcile finished. The personal vault wizard never opened by itself after setting up.
+
+## 0.9.18 – 2026-11-03
+- Verknüpfte Logins: Ein Login kann statt eigenem Benutzernamen und Passwort einen anderen Login desselben Tresors verwenden – z. B. den Domain-Login oder bei Portalen mit Microsoft-Anmeldung den Microsoft-Login (Bearbeiten → „Anmeldung“). Gespeichert wird nur der Verweis; Ausfüllen im Browser, Kopieren und Anzeigen nehmen die Werte des verknüpften Eintrags, Änderungen dort gelten sofort überall. Ein eigener Einmalcode (z. B. Sophos-MFA) hat Vorrang. Bei einem verknüpften Microsoft-Login öffnet „Website öffnen“ das Portal mit Ein-Klick-Anmeldung für genau dieses Konto. KI-Agenten erhalten nur den Verweis und müssen den verknüpften Eintrag mit eigener Rückfrage lesen.
+
+### English
+- Linked logins: instead of its own user name and password, a login can use another login of the same vault – e.g. the domain login, or for portals that sign in with Microsoft the Microsoft login (Edit → "Sign-in"). Only the reference is stored; filling in the browser, copying and showing use the linked entry's values, changes there apply everywhere at once. An own one-time code (e.g. Sophos MFA) takes precedence. With a linked Microsoft login, "Open website" opens the portal with a one-click sign-in for exactly that account. AI agents only get the reference and have to read the linked entry with its own confirmation.
+
 ## 0.9.17 – 2026-11-03
 - KI-Agenten (MCP): Ist Keevault gesperrt, kommt das Fenster mit dem Entsperren nach vorne (über allen Fenstern, Taskleiste blinkt) und die Anfrage wartet bis zu 2 Minuten, statt sofort abgelehnt zu werden. Nach dem Entsperren läuft sie normal weiter.
 - Import von KeePass-Datenbanken (.kdbx, KeePass 2 und KeePassXC, Format 3.1 und 4): mit Master-Passwort, Schlüsseldatei oder beidem. Ordner, Zusatzfelder (versteckte bleiben versteckt) und KeePassXC-Passkeys werden übernommen; entschlüsselt wird nur lokal in der App. Twofish-verschlüsselte Datenbanken und der Windows-Benutzerkonto-Schlüssel werden nicht unterstützt.

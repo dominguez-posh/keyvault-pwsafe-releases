@@ -65,6 +65,8 @@ const DEFAULTS = {
   sourceBadges: true,
   // View: "PIM" button top right (opens aka.ms/pim to activate an eligible Azure role).
   pimButton: false,
+  // View: "PIM" button on the unlock screen (activate a role before signing in) – off until turned on in the menu.
+  pimOnLock: false,
   // View: admin tools top right – PIM, Microsoft 365 admin centers, servers (replaces the single PIM button).
   adminTools: false,
   // Break-glass accounts per tenant ({ [tenantId]: [{ id, type, displayName, detail }] }): preset when creating a vault.
@@ -78,7 +80,19 @@ const DEFAULTS = {
   containerOrder: [],
   personalDeviceKeys: {},
   personalOffered: false, // the wizard opened once by itself
+  setupOffered: false, // the setup wizard for a team vault opened once by itself (first start on this device)
+  // Connect every Key Vault marked as a Keevault vault after signing in (off: only vaults added by hand or policy).
+  autoDiscover: false,
+  // Settings of this app saved in the personal vault: a new device takes them over (vaults, view, behaviour).
+  settingsSync: true,
+  settingsSyncedAt: 0, // time of the settings last taken from or written to the personal vault
+  settingsLocalAt: 0, // time of the last change here to a setting that travels with the personal vault
 };
+// Travel with the personal vault to the user's other devices. Not: PIN, device keys, what is installed on this device
+// (browser integration, passkey provider, autostart), admin mode and the approvals for AI agents.
+export const SYNC_KEYS = ['containers', 'hiddenContainers', 'containerOrder', 'defaultContainer', 'tenantId', 'clientId', 'autoLockMinutes',
+  'clipboardSeconds', 'unlockPrompt', 'language', 'zoom', 'transparency', 'theme', 'sourceBadges', 'autoTypeKeys', 'updateMode',
+  'updateChannel', 'breakGlass', 'autoDiscover', 'signInWindows', 'pimOnLock'];
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'updateChannel', 'mcpEnabled', 'offlineMirror',
   'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];
 
@@ -101,6 +115,8 @@ export class Config {
     }
     delete this.user.personalVault;
     delete this.user.personalDeviceKey;
+    // Up to 0.9.18 every marked Key Vault was connected by itself: installations that signed in keep that.
+    if (this.user.entraUsed && !Object.hasOwn(this.user, 'autoDiscover')) this.user.autoDiscover = true;
     const candidates = [
       path.join(path.dirname(process.execPath), 'kvpwsafe.config.json'),
       process.env.ProgramData && path.join(process.env.ProgramData, 'Keevault', 'kvpwsafe.config.json'),
@@ -140,13 +156,22 @@ export class Config {
     return Object.hasOwn(this.user, key);
   }
 
-  update(patch) {
-    const enforced = this.get().enforced;
+  /** synced: the values come from the personal vault (not a change here that has to go there). */
+  update(patch, { synced = false } = {}) {
+    const before = this.get();
     for (const [k, v] of Object.entries(patch || {})) {
-      if (k in DEFAULTS && !enforced.includes(k)) this.user[k] = v;
+      if (k in DEFAULTS && !before.enforced.includes(k)) this.user[k] = v;
     }
+    const travels = !synced && SYNC_KEYS.some((k) => Object.hasOwn(patch || {}, k) && JSON.stringify(before[k]) !== JSON.stringify(this.user[k]));
+    if (travels) this.user.settingsLocalAt = Date.now();
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify(this.user, null, 2));
+    if (travels) this.onSyncChange?.();
     return this.get();
+  }
+
+  /** The travelling settings the user set here (defaults stay out, so another device keeps its own). */
+  syncSnapshot() {
+    return Object.fromEntries(SYNC_KEYS.filter((k) => Object.hasOwn(this.user, k)).map((k) => [k, this.user[k]]));
   }
 }

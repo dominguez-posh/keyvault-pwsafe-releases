@@ -58,6 +58,12 @@ body { overflow: hidden; }
 .folder-crumb { display: flex; align-items: center; gap: 6px; padding: 6px 10px; color: var(--muted); }
 .folder-crumb b { color: var(--text); font-weight: 600; }
 .folder-row .folder-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); flex: none; }
+/* Folder symbols: picker grid and own images (KeePass custom icons). */
+.folder-img { border-radius: 4px; object-fit: contain; flex: none; }
+.icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 6px; }
+.icon-choice { display: grid; place-items: center; height: 44px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); cursor: pointer; }
+.icon-choice:hover { border-color: var(--accent); color: var(--accent); }
+.icon-choice.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .folder-row .icon-btn { margin-left: auto; }
 .member-row { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .member-row .grow, .log-list .grow { flex: 1; min-width: 0; }
@@ -506,6 +512,12 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .wizard-path { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); overflow-wrap: anywhere; }
 .wizard-choice { display: grid; gap: 6px; }
 .wizard-buttons { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+/* Setup wizard for a team vault: what the step means above its fields, and the check before creating. */
+.vault-wizard { width: min(640px, 86vw); }
+.wizard-explain { display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); line-height: 1.45; }
+.wizard-explain p { margin: 0; }
+.wizard-summary { display: grid; gap: 6px; }
+.summary-row { display: grid; grid-template-columns: minmax(120px, 30%) 1fr; gap: 10px; overflow-wrap: anywhere; }
 /* The personal vault: its own place right below the views, a hairline above it. */
 .personal-slot { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
 /* Organisation of the signed-in account next to "Help". */
