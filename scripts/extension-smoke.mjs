@@ -137,7 +137,11 @@ const portalBastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</
 const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
 <form onsubmit="return false"><input name="username" autocomplete="username"><input name="password" type="password">
 <button type="submit">Connect</button></form>`;
-const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
+// Imitation of the Sophos VPN/user portal sign-in (same fields as the real page: name="username", name="password").
+const sophosPage = `<!doctype html><meta charset="utf-8"><title>VPN Portal</title>
+<form onsubmit="return false" method="post"><input name="username" type="text" id="username"><input name="password" type="password" id="password" autocomplete="off">
+<input class="blue_btn" name="loginbutton" value="Login" type="submit"></form>`;
+const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 
@@ -582,6 +586,20 @@ try {
   if (backAcc) await tap(back.sessionId, backAcc.x, backAcc.y);
   check(await waitFor(async () => (await evaluate(back.sessionId, 'signedIn')).password, 8000), 'Nach dem Abmelden: Anmeldung per Klick in der Leiste geht nicht');
   pageErrors(back.sessionId, 'ms-after-logout');
+
+  // Sophos login with MFA: filling in the browser types the password followed by the current one-time code into the
+  // password field (the portal wants both in one); the entry's own password stays unchanged.
+  const sophosItem = await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'login', title: 'Sophos VPN', username: 'vpnuser',
+    password: 'Vpn-Pass-1', totp: 'JBSWY3DPEHPK3PXP', sophos: true, portals: [{ label: 'VPN-Portal', url: `${origin}/sophos` }] } });
+  const sop = await open(`${origin}/sophos`);
+  await sleep(1000);
+  const sopTab = await evaluate(options.sessionId, 'chrome.tabs.query({}).then((ts) => ts.find((x) => (x.url || "").includes("/sophos"))?.id)');
+  await sw(options.sessionId, 'fill', { tabId: sopTab, containerId: personal.id, id: sophosItem?.id });
+  const sv = await waitFor(async () => { const r = await evaluate(sop.sessionId, '({ user: document.getElementById("username").value, pw: document.getElementById("password").value })'); return r.pw && r; }, 5000);
+  check(sv?.user === 'vpnuser' && /^Vpn-Pass-1\d{6}$/.test(sv?.pw || ''), `Sophos: Passwort und Einmalcode nicht zusammen eingetragen (${sv?.user} / ${(sv?.pw || '').replace(/\d{6}$/, '······')})`);
+  const sophosFull = await sw(options.sessionId, 'item', { containerId: personal.id, id: sophosItem?.id });
+  check(sophosFull?.password === 'Vpn-Pass-1' && sophosFull?.portals?.[0]?.label === 'VPN-Portal', 'Sophos: Eintrag (Passwort oder Portal) verändert');
+  pageErrors(sop.sessionId, 'sophos');
 
   // Import of the sample CSV.
   const before = (await sw(options.sessionId, 'items')).length;

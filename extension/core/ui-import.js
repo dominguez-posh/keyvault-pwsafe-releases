@@ -1,6 +1,7 @@
 // Import wizard shared by the extension options page and the desktop app.
 // ctx: { containers: [{ id, name }] (writable, unlocked), defaultContainer, existing(containerId) → summaries,
-//        save(containerId, items, onProgress(done, total)) → { imported, errors }, download(filename, text) }
+//        save(containerId, items, onProgress(done, total)) → { imported, errors }, download(filename, text),
+//        openKdbx(bytes, { password, keyFile }) → KeePass XML (desktop app only: decrypts a .kdbx database) }
 
 import { h, icon, modal, toast, setChildren } from './dom.js';
 import { parseImport, applyCsvMapping, CSV_TARGETS, CSV_TARGET_LABELS, duplicateKey } from './importer.js';
@@ -10,10 +11,35 @@ import { t } from './i18n.js';
 const FORMATS = [
   'Bitwarden: JSON (unverschlüsselt, inkl. Passkeys) oder CSV',
   '1Password: 1PUX oder CSV',
-  'KeePass / KeePassXC: XML oder CSV (inkl. KeePassXC-Passkeys)',
+  'KeePass / KeePassXC: Datenbank (.kdbx, mit Master-Passwort und/oder Schlüsseldatei), XML oder CSV (inkl. KeePassXC-Passkeys)',
   'Edge, Chrome, Firefox: CSV',
   'Allgemein: CSV mit frei zuordenbaren Spalten',
 ];
+
+// Browsers keep their saved passwords encrypted with a key bound to the Windows/macOS account, not with a password
+// the user could type – so there is nothing to enter and no way to read the file directly. The one safe route that
+// works for every browser is its own CSV export; Keevault only shows the exact clicks, then reads the file here.
+// adr: path to the browser's own password page; it opens only from inside the browser, so it stays as text to copy.
+const BROWSER_GUIDES = [
+  { id: 'chrome', name: 'Chrome', adr: 'chrome://password-manager/passwords', steps: [
+    'Menü ⋮ oben rechts → „Passwörter und automatisches Ausfüllen“ → „Google Passwortmanager“.',
+    'Links „Einstellungen“ → bei „Passwörter exportieren“ auf „Herunterladen“.',
+    'Mit dem Windows-Login bestätigen – es entsteht eine CSV-Datei.',
+  ] },
+  { id: 'edge', name: 'Edge', adr: 'edge://wallet/passwords', steps: [
+    'Menü ⋯ oben rechts → „Einstellungen“ → „Profile“ → „Passwörter“.',
+    'Rechts bei „Gespeicherte Passwörter“ auf ⋯ → „Passwörter exportieren“.',
+    'Mit dem Windows-Login bestätigen – es entsteht eine CSV-Datei.',
+  ] },
+  { id: 'firefox', name: 'Firefox', adr: 'about:logins', steps: [
+    'Menü ☰ oben rechts → „Passwörter“.',
+    'Oben rechts ⋯ → „Zugangsdaten exportieren…“ → bestätigen.',
+    'Gibt es ein Hauptpasswort, einmal eingeben – es entsteht eine CSV-Datei.',
+  ] },
+];
+
+/** KeePass database signatures (0x9AA2D903, 0xB54BFB67, little endian). */
+const isKdbxBytes = (b) => b.length > 12 && b[0] === 0x03 && b[1] === 0xd9 && b[2] === 0xa2 && b[3] === 0x9a && b[4] === 0x67 && b[5] === 0xfb && b[6] === 0x4b && b[7] === 0xb5;
 
 export function downloadSample(ctx) {
   ctx.download('kvpwsafe-import-sample.csv', SAMPLE_CSV);
@@ -25,7 +51,7 @@ export function importDialog(ctx) {
     return;
   }
   const body = h('div', {});
-  const fileInput = h('input', { type: 'file', accept: '.csv,.json,.xml,.1pux,.txt,.zip' });
+  const fileInput = h('input', { type: 'file', accept: '.csv,.json,.xml,.1pux,.txt,.zip,.kdbx' });
   let parsed = null;
   let mapping = null;
   let items = [];
@@ -36,6 +62,7 @@ export function importDialog(ctx) {
   const summary = h('div', {});
   const preview = h('div', { class: 'import-preview' });
   const mappingBox = h('div', {});
+  const kdbxBox = h('div', {});
 
   const renderPreview = () => {
     items = parsed.csv ? applyCsvMapping(parsed.csv.columns, parsed.csv.rows, mapping) : parsed.items;
@@ -64,20 +91,69 @@ export function importDialog(ctx) {
             target === 'bwfields' ? t('Zusatzfelder (Bitwarden)') : t(CSV_TARGET_LABELS[target]))))))));
   };
 
+  const showError = (e) => {
+    parsed = null;
+    importButton.disabled = true;
+    setChildren(summary, h('div', { class: 'notice error' }, e.message));
+    setChildren(preview);
+    setChildren(mappingBox);
+  };
+
+  // KeePass database: master password and/or key file, then decrypted by the app and read like KeePass XML.
+  const askKdbx = (bytes) => {
+    if (!ctx.openKdbx) throw new Error(t('KeePass-Datenbanken (.kdbx) lassen sich in der Desktop-App importieren'));
+    const password = h('input', { type: 'password', autocomplete: 'off', class: 'kdbx-password' });
+    const keyFile = h('input', { type: 'file', class: 'kdbx-keyfile' });
+    const open = h('button', { type: 'button', class: 'btn primary small kdbx-open' }, icon('key', 14), t('Öffnen'));
+    const status = h('div', {});
+    const run = async () => {
+      open.disabled = true;
+      setChildren(status, h('div', { class: 'muted small' }, t('Wird entschlüsselt …')));
+      try {
+        const kf = keyFile.files?.[0] ? new Uint8Array(await keyFile.files[0].arrayBuffer()) : null;
+        const xml = await ctx.openKdbx(bytes, { password: password.value, keyFile: kf });
+        parsed = { ...(await parseImport({ name: 'keepass.xml', text: xml })), label: 'KeePass (KDBX)' };
+        mapping = null;
+        setChildren(kdbxBox);
+        renderMapping();
+        renderPreview();
+      } catch (e) {
+        setChildren(status, h('div', { class: 'notice error' }, e.message));
+        open.disabled = false;
+      }
+    };
+    open.addEventListener('click', run);
+    password.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+    setChildren(kdbxBox, h('h3', {}, t('KeePass-Datenbank öffnen')),
+      h('p', { class: 'muted small' }, t('Wie in KeePass: Master-Passwort, Schlüsseldatei oder beides.')),
+      h('div', { class: 'grid2' },
+        h('div', { class: 'field' }, h('label', {}, t('Master-Passwort')), password),
+        h('div', { class: 'field' }, h('label', {}, t('Schlüsseldatei (optional)')), keyFile)),
+      h('div', { class: 'field-row' }, open), status);
+    password.focus();
+  };
+
   fileInput.addEventListener('change', async () => {
     const file = fileInput.files?.[0];
     if (!file) return;
+    setChildren(kdbxBox);
     try {
-      parsed = await parseImport({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (isKdbxBytes(bytes)) {
+        parsed = null;
+        importButton.disabled = true;
+        setChildren(summary);
+        setChildren(preview);
+        setChildren(mappingBox);
+        askKdbx(bytes);
+        return;
+      }
+      parsed = await parseImport({ name: file.name, bytes });
       mapping = parsed.csv ? [...parsed.csv.mapping] : null;
       renderMapping();
       renderPreview();
     } catch (e) {
-      parsed = null;
-      importButton.disabled = true;
-      setChildren(summary, h('div', { class: 'notice error' }, e.message));
-      setChildren(preview);
-      setChildren(mappingBox);
+      showError(e);
     }
   });
 
@@ -104,12 +180,29 @@ export function importDialog(ctx) {
     }
   });
 
+  // Guide for Chrome/Edge/Firefox: the browser's own CSV export (no password to type – the browser's key is bound to
+  // the OS account), shown as exact clicks; the resulting file is then chosen below like any CSV.
+  const browserSteps = h('div', { class: 'browser-steps', hidden: true });
+  const showGuide = (g) => {
+    setChildren(browserSteps,
+      h('ol', { class: 'small' }, ...g.steps.map((s) => h('li', {}, t(s)))),
+      h('p', { class: 'muted small' }, t('Seite im Browser direkt:'), ' ', h('code', {}, g.adr)),
+      h('p', { class: 'muted small' }, t('Danach unten die heruntergeladene CSV-Datei auswählen.')));
+    browserSteps.hidden = false;
+  };
+  const browserBox = h('details', { class: 'browser-import' },
+    h('summary', {}, t('Direkt aus dem Browser (Chrome, Edge, Firefox)')),
+    h('div', { class: 'field-row', style: { marginTop: '8px' } },
+      ...BROWSER_GUIDES.map((g) => h('button', { type: 'button', class: `btn small browser-pick browser-${g.id}`, onclick: () => showGuide(g) }, g.name))),
+    browserSteps);
+
   setChildren(body,
     h('p', {}, t('Exportiere die Daten im alten Passwortmanager und wähle die Datei hier aus. Sie wird nur lokal gelesen.')),
     h('ul', { class: 'small muted' }, ...FORMATS.map((f) => h('li', {}, t(f)))),
+    browserBox,
     h('div', { class: 'field-row' }, fileInput,
       h('button', { type: 'button', class: 'btn small', onclick: () => downloadSample(ctx) }, icon('download', 14), t('Beispieldatei (CSV)'))),
-    summary, mappingBox, preview,
+    kdbxBox, summary, mappingBox, preview,
     h('div', { class: 'grid2', style: { marginTop: '12px' } },
       h('div', { class: 'field' }, h('label', {}, t('Ziel-Tresor')), container),
       h('div', { class: 'field' }, h('label', {}, ' '), h('label', { class: 'inline' }, skipDuplicates, t('Duplikate überspringen')))),

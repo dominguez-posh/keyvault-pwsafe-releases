@@ -180,6 +180,29 @@ test('mcp: locked app gives nothing', async () => {
   await assert.rejects(mcp.call(client, 'list_vaults'), /gesperrt/);
 });
 
+test('mcp: locked app – the request waits for the unlock (app comes to the front) and then continues', async () => {
+  const v = fakeVault();
+  let locked = true;
+  let waited = 0;
+  const mcp = new McpService({
+    vault: () => (locked ? null : v),
+    confirmRead: async () => 'once',
+    confirmWrite: async () => true,
+    audit: () => {},
+    waitUnlock: async () => { waited++; locked = false; return true; },
+  });
+  const client = { agent: 'claude-ai' };
+  mcp.connect(client);
+  assert.ok((await mcp.call(client, 'list_vaults')).length > 0);
+  assert.equal(waited, 1);
+  await mcp.call(client, 'list_vaults');
+  assert.equal(waited, 1, 'no waiting while unlocked');
+  // Nobody unlocks in time: refused as before.
+  locked = true;
+  mcp.waitUnlock = async () => false;
+  await assert.rejects(mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' }), /gesperrt/);
+});
+
 test('mcp host: agent ↔ host ↔ app (JSON-RPC over stdio, approval by client name)', async () => {
   const pipe = process.platform === 'win32' ? `\\\\.\\pipe\\kvpwsafe-mcp-test-${process.pid}` : join(mkdtempSync(join(tmpdir(), 'kv-mcp-')), 's.sock');
   const approved = [];

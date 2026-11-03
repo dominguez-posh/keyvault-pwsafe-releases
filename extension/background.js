@@ -7,7 +7,7 @@
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
 import { hostFromUrl, itemMatchesHost, rankCandidates } from './core/match.js';
-import { itemHosts } from './core/model.js';
+import { itemHosts, sophosFillPassword } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
@@ -176,9 +176,16 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   await chrome.offscreen?.closeDocument().catch(() => {});
 });
 
+/** The password as it is typed into the page: for a Sophos login with MFA the current TOTP is appended (browser only). */
+async function browserPassword(item) {
+  if (item.sophos && item.totp) { try { return sophosFillPassword(item, (await totpCode(item.totp)).code); } catch { return item.password; } }
+  return item.password;
+}
+
 async function copyTotpAfterFill(item) {
   const s = await getSettings();
-  if (!s.copyTotpOnFill || !item.totp) return false;
+  // A Sophos MFA login carries the code inside the password already – nothing extra to copy.
+  if ((item.sophos && item.totp) || !s.copyTotpOnFill || !item.totp) return false;
   try {
     const { code } = await totpCode(item.totp);
     await offscreen({ cmd: 'copy', text: code });
@@ -284,7 +291,7 @@ async function fillTab({ tabId, containerId, id, force = false }) {
   let filled = 0;
   for (const f of targets) {
     try {
-      const r = await chrome.tabs.sendMessage(tabId, { type: 'fill', username: item.username, password: item.password }, { frameId: f.frameId });
+      const r = await chrome.tabs.sendMessage(tabId, { type: 'fill', username: item.username, password: await browserPassword(item) }, { frameId: f.frameId });
       if (r?.filled) filled++;
     } catch {
       // Frame without content script (e.g. about:blank).
@@ -889,7 +896,7 @@ const contentCommands = {
     const item = await vault.getItem(containerId, id);
     if (!itemMatchesHost(itemHosts(item), senderHost(sender))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const totpCopied = await copyTotpAfterFill(item);
-    return { username: item.username, password: item.password, totpCopied };
+    return { username: item.username, password: await browserPassword(item), totpCopied };
   },
   // Admin tools: one-click sign-in started in the app (admin center, Bastion). Only sign-in hosts ask, and the app
   // answers only within two minutes of the click and only for the host it was started for.

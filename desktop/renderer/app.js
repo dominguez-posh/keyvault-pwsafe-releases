@@ -1663,6 +1663,7 @@ function newMenuItems(container) {
       '-',
       { action: 'new-microsoft', icon: 'globe', label: t('Neuer Microsoft-Login'), onClick: () => newItem('login', entryTemplate('microsoft', { msAdmin: true })) },
       { action: 'new-ad', icon: 'user', label: t('Neuer Active-Directory-Logon'), onClick: () => newItem('login', entryTemplate('ad')) },
+      { action: 'new-sophos', icon: 'shield', label: t('Neuer Sophos-Login'), onClick: () => newItem('login', entryTemplate('sophos')) },
     ] : []),
   ];
   return [
@@ -4093,6 +4094,7 @@ function openImport(container) {
       }
     },
     download: () => call('saveSampleCsv').then((p) => p && toast(t('Gespeichert'))),
+    openKdbx: (bytes, creds) => call('decryptKdbx', bytes, creds),
     onDone: () => reloadAll(),
   });
 }

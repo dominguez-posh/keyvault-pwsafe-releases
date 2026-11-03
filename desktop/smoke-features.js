@@ -8,6 +8,8 @@
 // with Electron, never restored: after the run it is empty. Nothing is typed (auto-type: the helper's mode with
 // empty input only).
 
+import { readFile } from 'node:fs/promises';
+
 export async function featureChecks(ctx) {
   const { js, sleep, errors, win, api, vault, config, changed, clipboardHas } = ctx;
   const fail = (area, message) => errors.push(`features/${area}: ${message}`);
@@ -260,7 +262,7 @@ export async function featureChecks(ctx) {
       const items = await newMenu();
       for (const a of ['new-login', 'new-note', 'new-card', 'new-certificate']) if (!items.includes(a)) fail('newmenu', `"${a}" missing`);
       // Without admin mode the menu stays simple: no devices, no admin templates.
-      for (const a of ['new-server', 'new-microsoft', 'new-ad']) if (items.includes(a)) fail('newmenu', `"${a}" offered without admin mode`);
+      for (const a of ['new-server', 'new-microsoft', 'new-ad', 'new-sophos']) if (items.includes(a)) fail('newmenu', `"${a}" offered without admin mode`);
       await js('document.querySelector(".context-menu")?.remove()');
       // The templates: in admin mode on the passwords side.
       await setAdmin(true);
@@ -280,6 +282,44 @@ export async function featureChecks(ctx) {
       const ad = await js('[...document.querySelectorAll(".detail-pane .custom-field input")].map((i) => i.value).join("|")');
       if (!/Domänencontroller|Domain controller/.test(ad)) fail('templates', `AD logon fields: ${ad}`);
       await cancelEditor();
+      // Sophos login: logo, named portal rows (free name + address) instead of the website box; saved, the entry shows
+      // one "… öffnen" button per portal.
+      await newMenu();
+      await js('document.querySelector(".context-menu")?.remove(); document.querySelector(".new-split .new-more")?.click(); document.querySelector(".context-menu [data-action=new-sophos]")?.click()');
+      await sleep(500);
+      const so = JSON.parse(await js(`JSON.stringify({
+        sophos: !!document.querySelector(".detail-pane input[name=sophos]")?.checked,
+        labels: [...document.querySelectorAll(".detail-pane .portal-row .portal-label")].map((i) => i.value).join("|"),
+        urlsHidden: !!document.querySelector(".detail-pane textarea[name=urls]")?.closest(".field")?.hidden,
+        logo: !!document.querySelector(".detail-pane img") })`));
+      if (!so.sophos || !/VPN-Portal/.test(so.labels) || !/Admin-Portal/.test(so.labels) || !so.urlsHidden || !so.logo) fail('templates', `Sophos login form: ${JSON.stringify(so)}`);
+      await js(`(() => { const set = (el, v) => { el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); };
+        set(document.querySelector(".detail-pane input[name=title]"), "Smoke Sophos");
+        set(document.querySelector(".detail-pane input[name=username]"), "vpnuser");
+        set(document.querySelector(".detail-pane input[name=password]"), "Vpn-Pass-1");
+        set(document.querySelector(".detail-pane .portal-row .portal-url"), "https://vpn.contoso.com");
+        set(document.querySelectorAll(".detail-pane .portal-row .portal-url")[1], "https://vpn.contoso.com:4444");
+        document.querySelector(".detail-pane .portal-add").click();
+        const rows = document.querySelectorAll(".detail-pane .portal-row");
+        set(rows[rows.length - 1].querySelector(".portal-label"), "Zweites Portal");
+        set(rows[rows.length - 1].querySelector(".portal-url"), "https://vpn2.contoso.com");
+        document.querySelector(".detail-pane form .actions .btn.primary").click(); return true; })()`);
+      let sophosSaved = null;
+      for (let i = 0; i < 20 && !sophosSaved; i++) {
+        await sleep(250);
+        sophosSaved = (await vault.summaries()).find((x) => x.containerId === kvc.id && x.title === 'Smoke Sophos');
+      }
+      if (!sophosSaved) fail('templates', 'Sophos login not saved');
+      else {
+        created.push(sophosSaved.id);
+        const full = await vault.getItem(kvc.id, sophosSaved.id);
+        if (!full.sophos || full.portals.map((p) => p.label).join('|') !== `${so.labels.split('|')[0]}|${so.labels.split('|')[1]}|Zweites Portal` || full.urls.length) {
+          fail('templates', `Sophos login stored: ${JSON.stringify({ sophos: full.sophos, portals: full.portals, urls: full.urls })}`);
+        }
+        await sleep(300);
+        const buttons = await js('[...document.querySelectorAll(".detail-pane .portal-open")].map((b) => b.textContent + "=" + b.title).join("|")');
+        if (!/VPN-Portal öffnen=https:\/\/vpn\.contoso\.com/.test(buttons) || !/Zweites Portal öffnen=https:\/\/vpn2\.contoso\.com/.test(buttons)) fail('templates', `Sophos portal buttons: ${buttons}`);
+      }
       await setAdmin(false);
     });
 
@@ -290,6 +330,61 @@ export async function featureChecks(ctx) {
       const r = JSON.parse(await js('JSON.stringify({ top: !!document.querySelector(".context-menu > [data-action=info], .context-menu > .context-group > [data-action=info]"), sub: !!document.querySelector(".context-sub [data-action=info]") })'));
       if (!r.top || r.sub) fail('vaultmenu', `"Infos" not at the top of the vault menu (${JSON.stringify(r)})`);
       await js('document.querySelector(".context-menu")?.remove()');
+    });
+
+    // ---- import of a KeePass database (.kdbx): vault menu → Import → file → master password + key file → import
+    await step('kdbximport', async () => {
+      const fixtures = new URL('../test/fixtures/', import.meta.url);
+      const [db, key] = await Promise.all([readFile(new URL('smoke.kdbx', fixtures)), readFile(new URL('smoke.keyx', fixtures))]);
+      const setFile = (selector, name, bytes) => js(`(() => { const input = document.querySelector(${JSON.stringify(selector)}); const dt = new DataTransfer();
+        dt.items.add(new File([new Uint8Array(${JSON.stringify([...bytes])})], ${JSON.stringify(name)})); input.files = dt.files; input.dispatchEvent(new Event("change")); return true; })()`);
+      await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => r.textContent.includes(${JSON.stringify(kvc.name)})); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); })()`);
+      await sleep(300);
+      await js('document.querySelector(".context-menu [data-action=import]")?.click()');
+      await sleep(400);
+      await setFile('dialog[open] input[type=file]:not(.kdbx-keyfile)', 'Smoke.kdbx', db);
+      await sleep(400);
+      if (!(await js('!!document.querySelector("dialog[open] .kdbx-password")'))) fail('kdbximport', 'no master password field for a .kdbx file');
+      const openWith = async (password) => {
+        await js(`(() => { const p = document.querySelector("dialog[open] .kdbx-password"); p.value = ${JSON.stringify(password)}; document.querySelector("dialog[open] .kdbx-open").click(); return true; })()`);
+        for (let i = 0; i < 30 && (await js('!!document.querySelector("dialog[open] .kdbx-open")?.disabled')); i++) await sleep(200);
+        await sleep(200);
+      };
+      // Without the key file the database does not open: the error is shown, the import stays off.
+      await openWith('Smoke-Master-1');
+      if (!/Master-Passwort|master password/i.test(await js('document.querySelector("dialog[open] .notice.error")?.textContent || ""'))) fail('kdbximport', `no wrong-key message without the key file: ${(await js('document.querySelector("dialog[open] .notice.error")?.textContent || ""'))}`);
+      await setFile('dialog[open] .kdbx-keyfile', 'smoke.keyx', key);
+      await openWith('Smoke-Master-1');
+      const summary = await js('document.querySelector("dialog[open]")?.textContent || ""');
+      if (!summary.includes('KeePass (KDBX)') || !summary.includes('Smoke KDBX')) fail('kdbximport', `database not read: ${summary.slice(0, 200)}`);
+      await js('[...document.querySelectorAll("dialog[open] .modal-footer .btn.primary")].find((b) => /Importieren|Import/.test(b.textContent))?.click()');
+      let imported = null;
+      for (let i = 0; i < 20 && !imported; i++) {
+        await sleep(300);
+        imported = (await vault.summaries()).find((x) => x.containerId === kvc.id && x.title === 'Smoke KDBX');
+      }
+      if (!imported) fail('kdbximport', 'entry not imported');
+      else {
+        created.push(imported.id);
+        const full = await vault.getItem(kvc.id, imported.id);
+        if (full.password !== 'Kdbx-Secret-1' || full.username !== 'kdbx@contoso.com' || full.folder !== 'KeePass') fail('kdbximport', `imported entry wrong: ${full.username} ${full.folder}`);
+      }
+      await closeDialogs();
+    });
+
+    // ---- import guide for browsers: the import dialog shows per-browser CSV-export steps (Chrome, Edge, Firefox)
+    await step('browserimport', async () => {
+      await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => r.textContent.includes(${JSON.stringify(kvc.name)})); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); })()`);
+      await sleep(300);
+      await js('document.querySelector(".context-menu [data-action=import]")?.click()');
+      await sleep(400);
+      if (!(await js('!!document.querySelector("dialog[open] .browser-import .browser-chrome")'))) fail('browserimport', 'browser import guide missing');
+      await js('document.querySelector("dialog[open] .browser-import").open = true; document.querySelector("dialog[open] .browser-firefox")?.click()');
+      await sleep(200);
+      const steps = await js('document.querySelectorAll("dialog[open] .browser-steps ol li").length');
+      const addr = await js('document.querySelector("dialog[open] .browser-steps code")?.textContent || ""');
+      if (Number(steps) < 2 || addr !== 'about:logins') fail('browserimport', `Firefox guide not shown (${steps} steps, "${addr}")`);
+      await closeDialogs();
     });
 
     // ---- start: admin mode is always off after a start (#8)
@@ -357,6 +452,33 @@ export async function featureChecks(ctx) {
       await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
       await sleep(300);
       if (!(await js('!!document.querySelector(".context-menu [data-action=edit]")'))) fail('list', '"⋯" menu without "Edit"');
+    });
+
+    // ---- AI agents: a request brings the hidden window to the front (above all windows) and lets go after the answer;
+    // while Keevault is locked the unlock screen comes to the front and the request waits instead of failing.
+    await step('agentfront', async () => {
+      const front = () => ({ visible: win.isVisible(), top: win.isAlwaysOnTop() });
+      win.hide();
+      const asked = ctx.confirmAgentRead({ agent: 'smoke-agent', title: 'Smoke Front', vault: 'Smoke' });
+      await sleep(600);
+      const during = front();
+      if (!during.visible || !during.top) fail('agentfront', `read request did not come to the front: ${JSON.stringify(during)}`);
+      if (!(await js('!!document.querySelector("dialog[open] .question.agent-read")'))) fail('agentfront', 'read request dialog not shown');
+      await js('[...document.querySelectorAll("dialog[open] button")].find((b) => b.closest("dialog").querySelector(".question") && /Ablehnen|Deny/.test(b.textContent))?.click()');
+      if ((await Promise.race([asked, sleep(3000).then(() => 'timeout')])) !== 'deny') fail('agentfront', 'deny did not answer the request');
+      await sleep(200);
+      if (win.isAlwaysOnTop()) fail('agentfront', 'window stays on top after the answer');
+      win.hide();
+      let open = false;
+      const waiting = ctx.waitForUnlock({ ms: 4000, isOpen: () => open });
+      await sleep(600);
+      const locked = front();
+      if (!locked.visible || !locked.top) fail('agentfront', `locked: unlock screen did not come to the front: ${JSON.stringify(locked)}`);
+      open = true;
+      if ((await waiting) !== true) fail('agentfront', 'locked: request did not continue after unlocking');
+      if (win.isAlwaysOnTop()) fail('agentfront', 'locked: window stays on top after unlocking');
+      if ((await ctx.waitForUnlock({ ms: 300, isOpen: () => false })) !== false) fail('agentfront', 'locked: no refusal when nobody unlocks');
+      if (win.isAlwaysOnTop()) fail('agentfront', 'locked: window stays on top after giving up');
     });
 
     // ---- AI agents: "never ask again" for one entry shows "Revoke AI approval" in its context menu, which removes it
