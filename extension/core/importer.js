@@ -7,7 +7,8 @@
 //   Keevault JSON export
 
 import { b64uEncode, b64uDecode, fromHex, fromUtf8, utf8 } from './util.js';
-import { normalizeItem } from './model.js';
+import { normalizeItem, normalizeFolder } from './model.js';
+import { keepassIcon, normalizeFolderIcon } from './folder-icons.js';
 import { hostFromUrl } from './match.js';
 import { parseXml, child, children, textOf } from './xml.js';
 import { isZip, readZip } from './zip.js';
@@ -252,9 +253,17 @@ function fromKeepassXml(text) {
   const file = child(doc, 'KeePassFile');
   if (!file) throw new Error(t('XML-Format nicht erkannt (KeePass-XML erwartet)'));
   const recycleBin = textOf(child(file, 'Meta'), 'RecycleBinUUID');
+  // Group symbols: an own image (Meta/CustomIcons, PNG) or one of KeePass' standard icons, by folder path.
+  const customIcons = new Map(children(child(child(file, 'Meta'), 'CustomIcons'), 'Icon')
+    .map((i) => [textOf(i, 'UUID'), `data:image/png;base64,${textOf(i, 'Data').replace(/s+/g, '')}`]));
+  const folderIcons = {};
   const items = [];
   const walk = (group, path) => {
     if (recycleBin && textOf(group, 'UUID') === recycleBin) return;
+    if (path.length) {
+      const icon = normalizeFolderIcon(customIcons.get(textOf(group, 'CustomIconUUID'))) || keepassIcon(textOf(group, 'IconID'));
+      if (icon) folderIcons[normalizeFolder(path.join('/'))] = icon;
+    }
     for (const entry of children(group, 'Entry')) {
       const strings = {};
       const protectedKeys = new Set();
@@ -294,7 +303,7 @@ function fromKeepassXml(text) {
   };
   const rootGroup = child(child(file, 'Root'), 'Group');
   if (rootGroup) walk(rootGroup, []);
-  return { format: 'keepass-xml', label: 'KeePass (XML)', items };
+  return { format: 'keepass-xml', label: 'KeePass (XML)', items, folderIcons };
 }
 
 // ---------------------------------------------------------------- 1Password 1PUX

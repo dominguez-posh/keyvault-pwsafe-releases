@@ -103,6 +103,8 @@ export function mergeDocs(disk, ours) {
     items,
     folders: mergeByUpdated(disk.folders, ours.folders),
     logo: (ours.logo?.updated || 0) >= (disk.logo?.updated || 0) ? ours.logo : disk.logo,
+    folderIcons: mergeByUpdated(disk.folderIcons, ours.folderIcons),
+    appSettings: (ours.appSettings?.updated || 0) >= (disk.appSettings?.updated || 0) ? ours.appSettings : disk.appSettings,
     license: ours.license || disk.license,
     ...(secure ? { log } : {}),
     updated: Math.max(disk.updated || 0, ours.updated || 0),
@@ -318,6 +320,17 @@ export class FileVault {
       }
     }
     this.folderList = list;
+    const icons = [];
+    for (const [fid, f] of Object.entries(this.doc.folderIcons || {})) {
+      if (f.deleted) continue;
+      try {
+        const { path, icon } = JSON.parse(await this.ck.decrypt(f.data, this.aad(`folder-icon/${fid}`)));
+        icons.push({ id: fid, path, icon, updated: f.updated || 0 });
+      } catch {
+        // Unreadable (other key version): ignore.
+      }
+    }
+    this.folderIconList = icons.sort((a, b) => a.updated - b.updated);
   }
 
   requireUnlocked() {
@@ -510,10 +523,32 @@ export class FileVault {
     await this.persist();
   }
 
+  /** Symbols of the folders: { [path]: symbol } (the newest record of a path wins). */
+  folderIcons() {
+    this.requireUnlocked();
+    return Object.fromEntries((this.folderIconList || []).map((f) => [f.path, f.icon]));
+  }
+
+  /** patch: { [path]: symbol | '' } (already checked by the caller). */
+  async setFolderIcons(patch) {
+    this.requireWrite();
+    this.doc.folderIcons = { ...(this.doc.folderIcons || {}) };
+    for (const [path, value] of Object.entries(patch)) {
+      for (const f of (this.folderIconList || []).filter((x) => x.path === path)) this.doc.folderIcons[f.id] = { deleted: true, updated: stamp(this.doc.folderIcons[f.id]) };
+      if (!value) continue;
+      const fid = rev();
+      this.doc.folderIcons[fid] = { updated: Date.now(), data: await this.ck.encrypt(JSON.stringify({ path, icon: value }), this.aad(`folder-icon/${fid}`)) };
+    }
+    await this.persist();
+  }
+
   async removeFolder(path) {
     this.requireWrite();
     const hit = this.folderList.filter((f) => f.path === path || f.path.startsWith(`${path}/`));
     for (const f of hit) this.doc.folders[f.id] = { deleted: true, updated: Date.now() };
+    for (const f of (this.folderIconList || []).filter((x) => x.path === path || x.path.startsWith(`${path}/`))) {
+      this.doc.folderIcons[f.id] = { deleted: true, updated: stamp(this.doc.folderIcons[f.id]) };
+    }
     await this.addLog({ action: 'folder-delete', folder: path });
     await this.persist();
   }
@@ -536,6 +571,26 @@ export class FileVault {
     if (dataUrl && !isImageDataUrl(dataUrl)) throw new Error(t('Das Bild ist zu groß'));
     this.doc.logo = { updated: Date.now(), data: dataUrl ? await this.ck.encrypt(dataUrl, this.aad('logo')) : null };
     await this.addLog({ action: dataUrl ? 'logo-set' : 'logo-remove' });
+    await this.persist();
+  }
+
+  // ---------------------------------------------------------------- app settings (personal vault)
+
+  /** Settings of the desktop app kept in this file: { updated, value } or null (none, or not readable). */
+  async appSettings() {
+    this.requireUnlocked();
+    const rec = this.doc.appSettings;
+    if (!rec?.data) return null;
+    try {
+      return { updated: rec.updated, value: JSON.parse(await this.ck.decrypt(rec.data, this.aad('app-settings'))) };
+    } catch {
+      return null;
+    }
+  }
+
+  async setAppSettings(value, updated = Date.now()) {
+    this.requireWrite();
+    this.doc.appSettings = { updated, data: await this.ck.encrypt(JSON.stringify(value), this.aad('app-settings')) };
     await this.persist();
   }
 
@@ -637,6 +692,11 @@ export class FileVault {
       f.updated = stamp(f);
     }
     if (this.doc.logo?.data) this.doc.logo = { data: await recrypt(this.doc.logo.data, this.aad('logo')), updated: stamp(this.doc.logo) };
+    if (this.doc.appSettings?.data) this.doc.appSettings = { data: await recrypt(this.doc.appSettings.data, this.aad('app-settings')), updated: stamp(this.doc.appSettings) };
+    for (const [fid, f] of Object.entries(this.doc.folderIcons || {})) {
+      if (f.data) f.data = await recrypt(f.data, this.aad(`folder-icon/${fid}`));
+      f.updated = stamp(f);
+    }
     this.doc.keyring = await rekeyMembers(this.doc.keyring, next);
     next.kv = this.doc.keyring.keyVersion;
     this.ck = next;
