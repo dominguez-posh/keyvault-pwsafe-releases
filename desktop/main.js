@@ -33,7 +33,7 @@ import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
 import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
-import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder, fqdnUserName } from '../extension/core/model.js';
+import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder, fqdnUserName, resolveLogin } from '../extension/core/model.js';
 import { itemsToCsv } from '../extension/core/export.js';
 import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, removeProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
 
@@ -702,7 +702,7 @@ async function signInFor(host) {
   signInJobs = signInJobs.filter((j) => j.until > now);
   const job = signInJobs.find((j) => hostIn(String(host || '').toLowerCase(), j.hosts));
   if (!job) return null;
-  const item = typeof job.source === 'string' ? await vault.getItem(...splitEntryKey(job.source)) : job.source;
+  const item = typeof job.source === 'string' ? await usableItem(...splitEntryKey(job.source)) : job.source;
   // Bastion's sign-in on the VM always gets the FQDN form (user@contoso.local) when the account knows its domain.
   const username = job.mode === 'form' ? fqdnUserName(item) : item.username || '';
   // passkey: the account has one – the extension prefers it to the password and answers Microsoft's prompt by itself.
@@ -723,10 +723,13 @@ function checkDeviceLinks(containerId, s) {
   }
 }
 
+/** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
+const usableItem = async (containerId, id) => resolveLogin(await vault.getItem(containerId, id), (c, i) => vault.getItem(c, i));
+
 async function serverAccount(item, link) {
   if (link) {
     try {
-      return await vault.getItem(...splitEntryKey(link));
+      return await usableItem(...splitEntryKey(link));
     } catch {
       throw new Error(t('Der verknüpfte Eintrag ist nicht verfügbar (gelöscht oder kein Zugriff auf seinen Tresor).'));
     }
@@ -2385,6 +2388,20 @@ const api = {
   openAppsSettings: () => shell.openExternal('ms-settings:appsfeatures'),
   openExternal: (url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+  },
+  /**
+   * Website of a login linked to a Microsoft login (external portal with "Sign in with Microsoft"): opened in the browser
+   * with a one-click sign-in for exactly that Microsoft account (like the admin tiles, see signInFor).
+   */
+  async openWithMicrosoft({ containerId, id, url }) {
+    requireOpen();
+    if (!/^https?:\/\//i.test(url || '')) throw new Error(t('Keine gültige Adresse'));
+    const item = await usableItem(containerId, id);
+    if (!item.linked?.microsoft) throw new Error(t('Der Eintrag ist mit keinem Microsoft-Login verknüpft'));
+    addSignInJob(MS_LOGIN_HOSTS, item.linked.key, 'microsoft');
+    lastAdminUrl = url;
+    if (!smokeTest) await shell.openExternal(url);
+    return { signIn: !!bridge?.clients?.size };
   },
   /** Admin center in the browser; with an account the extension signs in with it (one-click, see signInFor). */
   async openAdminCenter({ url, key }) {

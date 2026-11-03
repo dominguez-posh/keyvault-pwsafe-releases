@@ -256,3 +256,15 @@ test('mcp host: agent ↔ host ↔ app (JSON-RPC over stdio, approval by client 
   assert.ok(offline.result.isError && /not running/.test(offline.result.content[0].text));
   proc.kill();
 });
+
+test('mcp: a login that signs in with another entry gives only the reference, never that entry\'s password', async () => {
+  const { mcp, client, v } = service({ read: 'session' });
+  const original = v.getItem;
+  v.getItem = async (c, id) => (id === 'pws-3'
+    ? { id: 'pws-3', version: 'v1', type: 'login', title: 'Intranet', username: '', password: '', urls: [], totp: '', notes: '', folder: '', fields: [], passkeys: [], card: {}, cert: {}, loginLink: 'kv-team/pws-1' }
+    : original(c, id));
+  const e = await mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-3' });
+  assert.equal(e.password, '');
+  assert.deepEqual({ vaultId: e.signInFrom.vaultId, entryId: e.signInFrom.entryId }, { vaultId: 'kv-team', entryId: 'pws-1' });
+  assert.ok(!JSON.stringify(e).includes('S3cret!'), 'the linked password is not handed out with this entry');
+});

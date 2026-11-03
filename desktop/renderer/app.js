@@ -9,7 +9,7 @@ import { ACCESS_LEVELS } from '../../extension/core/azure.js';
 import { setLanguage, t, LANGUAGES, getLanguage, locale } from '../../extension/core/i18n.js';
 import { pickImage, LOGO_MAX_CHARS } from '../../extension/core/image.js';
 import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
-import { MAX_FOLDER_DEPTH, entryTemplate } from '../../extension/core/model.js';
+import { MAX_FOLDER_DEPTH, entryTemplate, resolveLogin } from '../../extension/core/model.js';
 import { expiryState, expiringEntries, daysUntil } from '../../extension/core/health.js';
 import { healthDialog, accessReportDialog } from './reports.js';
 import { releaseNotesSince } from '../../extension/core/release-notes.js';
@@ -2577,13 +2577,20 @@ function itemActions(i) {
   const c = st.containers.find((x) => x.id === containerId) || {};
   const canWrite = writable(c);
   const open = async () => call('item', containerId, id);
+  // Copying takes the sign-in the entry uses (a linked login: the linked entry's user name and password).
+  const usable = async () => resolveLogin(await open(), (c, x) => call('item', c, x));
+  const openSite = async () => {
+    const u = await usable();
+    if (u.linked?.microsoft) return call('openWithMicrosoft', { containerId, id, url: `https://${i.hosts[0]}` }).catch((e) => toast(e.message, 'error'));
+    return openUrl(`https://${i.hosts[0]}`);
+  };
   return [
     { action: 'favorite', icon: 'star', label: i.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), disabled: !canWrite, onClick: () => toggleFavorite(i) },
     '-',
-    i.username ? { action: 'copy-user', icon: 'copy', label: t('Benutzername kopieren'), onClick: async () => copy((await open()).username, t('Benutzername')) } : null,
-    i.type === 'login' || i.type === 'certificate' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copy((await open()).password, t('Passwort')) } : null,
+    i.username || i.loginLinked ? { action: 'copy-user', icon: 'copy', label: t('Benutzername kopieren'), onClick: async () => copy((await usable()).username, t('Benutzername')) } : null,
+    i.type === 'login' || i.type === 'certificate' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copy((await usable()).password, t('Passwort')) } : null,
     i.type === 'card' ? { action: 'copy-card', icon: 'copy', label: t('Kartennummer kopieren'), onClick: async () => copy((await open()).card.number, t('Kartennummer')) } : null,
-    i.hosts?.[0] ? { action: 'open', icon: 'external', label: t('Website öffnen'), onClick: () => openUrl(`https://${i.hosts[0]}`) } : null,
+    i.hosts?.[0] ? { action: 'open', icon: 'external', label: t('Website öffnen'), onClick: () => (i.loginLinked ? openSite() : openUrl(`https://${i.hosts[0]}`)) } : null,
     '-',
     { action: 'edit', icon: 'edit', label: t('Bearbeiten'), disabled: !canWrite, onClick: async () => {
       ui.selected = i.key;
@@ -2896,11 +2903,15 @@ async function renderDetail() {
     pane.replaceChildren(notice(e.message));
     return undefined;
   }
+  // Linked login (domain or Microsoft login): shown and copied with the linked values; edited as stored (no copy).
+  const shown = await resolveLogin(item, (c, i) => call('item', c, i));
   if (ui.selected !== key || ui.editing) return undefined;
   const canWrite = writable(st.containers.find((c) => c.id === containerId) || {});
-  pane.replaceChildren(itemDetail(item, {
+  pane.replaceChildren(itemDetail(shown, {
     copy,
-    openUrl,
+    // Linked to a Microsoft login: the website opens with a one-click sign-in for that account.
+    openUrl: shown.linked?.microsoft ? (u) => call('openWithMicrosoft', { containerId, id, url: u })
+      .then((r) => toast(r.signIn ? t('Geöffnet – die Browser-Erweiterung meldet dich mit dem Microsoft-Login an') : t('Geöffnet – ohne Browser-Erweiterung bitte selbst anmelden')), (e) => toast(e.message, 'error')) : openUrl,
     containerName,
     connect: (it, method) => connectServer(it.containerId, it.id, method),
     adminLinks: st.settings?.adminTools === true ? ADMIN_LINKS.map((l) => ({ ...l, open: (it) => openAdminLink(l, `${it.containerId}/${it.id}`) })) : null,
@@ -2972,7 +2983,7 @@ async function renderDetail() {
 
 /** Logins a server entry can link to (accounts for RDP, TeamViewer, Bastion); Microsoft admin accounts marked. */
 const linkOptions = () => items.filter((i) => i.type === 'login')
-  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin }))
+  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin, loginLinked: !!i.loginLinked }))
   .sort((a, b) => a.title.localeCompare(b.title));
 
 function linkTitle(key) {
