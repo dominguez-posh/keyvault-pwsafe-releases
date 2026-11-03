@@ -350,8 +350,11 @@ async function renderEdit(item) {
   // New entry from a website: its favicon becomes the icon (from the site itself, no icon service).
   const start = item || { type: 'login', urls: tab?.url && /^https?:/.test(tab.url) ? [new URL(tab.url).origin] : [], title: host || '',
     icon: /^https?:/.test(tab?.url || '') ? await faviconToDataUrl(tab.favIconUrl) : '' };
+  // An entry without an icon, opened on one of its sites: its favicon can be taken over (#314).
+  const onItsSite = item && !item.icon && /^https?:/.test(tab?.url || '') && itemMatchesHost(itemHosts(item), new URL(tab.url).hostname);
   const form = itemForm(start, {
     isNew,
+    siteIcon: onItsSite ? () => faviconToDataUrl(tab.favIconUrl) : null,
     scanQr: scanVisibleTab,
     containers: isNew ? writable : st.containers.map((c) => ({ id: c.id, name: c.name })),
     containerId: item?.containerId || (writable.some((c) => c.id === st.settings.defaultContainer) ? st.settings.defaultContainer : writable[0]?.id),

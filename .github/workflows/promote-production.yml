@@ -46,7 +46,7 @@ jobs:
           hours=$(( ( $(date +%s) - published ) / 3600 ))
           echo "Seit $hours Stunden im Praxistest"
           [ "$hours" -ge "${{ inputs.min_hours }}" ] || { echo "Erst $hours von ${{ inputs.min_hours }} Stunden im Praxistest"; exit 1; }
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0

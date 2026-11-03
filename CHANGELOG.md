@@ -4,6 +4,32 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.22 – 2026-11-04
+- Remotedesktop mit Credential Guard: Keevault erkennt den Windows-Anmeldedialog jetzt auch an seiner Fensterklasse (sein Titel ist oft leer) und trägt das Passwort ein. Zusätzlich tippt Strg+Umschalt+P bei einem ausgewählten Asset das Passwort des verknüpften RDP-Kontos (z. B. des AD-Kontos), Strg+Umschalt+U dessen Benutzernamen (#316).
+- Admin-Modus: „Verknüpfte Assets anzeigen“ bei einem Login listet alle Assets und verknüpften Logins, die ihn verwenden – mit einem Klick geöffnet (#307).
+- KI-Agenten: Anmelden mit gespeicherten Passkeys – Keevault signiert nur die einzelne Anmeldung für die Website des Passkeys (https), der Passkey verlässt den Tresor nie; standardmäßig aus, jede Nutzung wird bestätigt (#308).
+- Tools: Microsoft-Anmeldung anfordern (über die MCP-Schnittstelle) – Keevault kommt nach vorne, du wählst das Konto, nur dieses bekommt das Tool; standardmäßig aus (#315).
+- Demo: Admin-Modus ohne PIN, der Schalter ist dort immer sichtbar (#309).
+- Zugriffsbericht: nur noch ein Scrollbalken, Wörter wie „ForeignGroup“ brechen nicht mehr mitten im Wort um (#310).
+- „Bug melden“ und „Feature-Wunsch“ in der Hilfe: führen zum neuen Formular auf keevault.de (Version und System vorausgefüllt); die Meldungen laufen im Admin-Backend unter „Feedback“ zusammen, daraus lässt sich ein GitHub-Issue anlegen (#311).
+- Auswahl beim Verknüpfen und beim Verschieben eines Passkeys: „Aktueller Tresor“ (Standard) oder „Alle“, dazu Filter nach Microsoft, Passkey und Admin (#312).
+- Browser-Erweiterung: „Icon der Website übernehmen“ beim Bearbeiten eines Eintrags ohne Symbol auf seiner Website (#314).
+- Aktualisiert: Electron 45.2.2, electron-builder 26.18, Microsoft-Anmeldung (MSAL) 7.1.2 / 5.5.4, ssh2 1.17, qrcode-generator 2.0 (Partnerportal), GitHub Actions checkout/setup-node v7.
+- Behoben: Wurde der Admin-Modus eingeschaltet, während die App ihren Zustand neu las, konnte die Anzeige auf „aus“ zurückspringen.
+
+### English
+- Remote desktop with Credential Guard: Keevault now also recognises the Windows sign-in dialog by its window class (its title is often empty) and enters the password. In addition Ctrl+Shift+P on a selected asset types the linked RDP account's password (e.g. the AD account), Ctrl+Shift+U its user name (#316).
+- Admin mode: "Show linked assets" on a login lists every asset and linked login that uses it – opened with a click (#307).
+- AI agents: sign in with stored passkeys – Keevault only signs the single sign-in for the passkey's website (https), the passkey never leaves the vault; off by default, every use is confirmed (#308).
+- Tools: request a Microsoft sign-in (through the MCP interface) – Keevault comes to the front, you pick the account, only that one goes to the tool; off by default (#315).
+- Demo: admin mode without a PIN, the switch is always visible there (#309).
+- Access report: only one scrollbar, words like "ForeignGroup" no longer break in the middle (#310).
+- "Report a bug" and "Feature request" in the help: lead to the new form on keevault.de (version and system filled in); the reports come together in the admin backend under "Feedback", where a GitHub issue can be created from them (#311).
+- Picking an entry to link or to move a passkey to: "Current vault" (default) or "All", plus filters for Microsoft, passkey and admin (#312).
+- Browser extension: "Use the website's icon" when editing an entry without an icon on its website (#314).
+- Updated: Electron 45.2.2, electron-builder 26.18, Microsoft sign-in (MSAL) 7.1.2 / 5.5.4, ssh2 1.17, qrcode-generator 2.0 (partner portal), GitHub Actions checkout/setup-node v7.
+- Fixed: switching admin mode on while the app was re-reading its state could make the display jump back to "off".
+
 ## 0.9.21 – 2026-11-03
 - Einstellungen: feste Größe für alle Bereiche, Navigation links mit Symbolen, nur der Inhalt scrollt – der Dialog springt nicht mehr in der Größe (#211).
 - Remotedesktop mit Credential Guard meldet sich wieder ohne Zutun an: Keevault trägt das Passwort im Windows-Dialog ein, sobald er vorne ist; kommt er nicht, liegt es in der Zwischenablage (#189).

@@ -1,5 +1,5 @@
 import { h, icon, iconButton, setChildren, toast, avatar, modal, confirmDialog, formatDateTime, passkeySuccess } from '../../extension/core/dom.js';
-import { itemDetail, itemForm, generatorPanel } from '../../extension/core/ui-item.js';
+import { itemDetail, itemForm, generatorPanel, pickFilterBar, pickKindMatches } from '../../extension/core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../../extension/core/generator.js';
 import { unlockPanel, manageDialog, enableDialog, setClipboardWriter, showRecoveryKey, strengthMeter } from '../../extension/core/ui-protect.js';
 // Codes in dialogs (recovery key, invitation code) go through the app's clipboard like everything else.
@@ -99,6 +99,16 @@ function itemAvatar(i) {
   if (!known && i.hasIcon && !icons.has(i.key)) loadIcon(i, el);
   return el;
 }
+
+/** The entry's icon or logo in a picker row (as in the list). */
+function smallAvatar(i) {
+  const el = itemAvatar(i);
+  el.classList.add('small');
+  return el;
+}
+
+/** A Microsoft login among the list entries: marked so, or a Microsoft sign-in address. */
+const isMicrosoftSummary = (i) => i.type === 'login' && (!!i.msAdmin || (i.hosts || []).some((host) => /(^|\.)(microsoftonline|microsoft|office|azure)\.com$/.test(host)));
 
 /** Logos of the visible containers; re-renders the sidebar once new ones arrived. */
 async function loadLogos() {
@@ -629,6 +639,8 @@ function renderLocked(error) {
 async function setAdminMode(on, pin) {
   settingsRev++;
   st.settings = on ? await call('activateAdminMode', pin) : await call('deactivateAdminMode');
+  // Again after the answer: a state the main process sent while the PIN was still being checked is older (#23 race).
+  settingsRev++;
   applyViewClass();
   renderSidebar();
   renderList();
@@ -638,6 +650,11 @@ async function setAdminMode(on, pin) {
 
 /** "Activate admin mode": confirmed with the app PIN – without a PIN it cannot be switched on. */
 function adminModeDialog() {
+  // Demo (#309): switched on at once, no PIN asked (the smoke test keeps asking).
+  if (st.demo && !st.smoke) {
+    setAdminMode(true, '').catch((e) => toast(e.message, 'error'));
+    return;
+  }
   if (!st.pinSet) {
     modal(t('Admin-Modus aktivieren'), h('div', {},
       h('p', {}, t('Der Admin-Modus wird mit deiner App-PIN bestätigt. Lege zuerst eine PIN fest.'))), [
@@ -878,7 +895,8 @@ function renderSidebar() {
     h('div', { class: 'sidebar-foot' }, adminMode() ? modeSwitch() : null, h('button', { type: 'button', class: 'help-btn', title: t('Hilfe und Tipps (F1)'), onclick: helpDialog },
       h('span', { class: 'help-mark', 'aria-hidden': 'true' }, '?'), t('Hilfe')),
       // Admin mode next to Help (#23) – only once offered under Settings → View (and while it is on, to end it).
-      st.settings.adminOffered || adminMode() ? adminFootButton() : null),
+      // Demo: always there, so visitors find and try it (#309).
+      st.settings.adminOffered || adminMode() || (st.demo && !st.smoke) ? adminFootButton() : null),
     !st.signedIn ? h('button', { class: 'btn small', style: { margin: '8px 10px' }, onclick: async () => {
       try {
         await call('signIn');
@@ -914,10 +932,20 @@ function helpDialog() {
       article('info', t('Fehlerbehebung'), t('Wenn etwas nicht klappt'), kb('fehlerbehebung', 'troubleshooting')),
       article('shield', t('Sicherheit'), t('Wie Keevault schützt – und wo die Grenzen liegen'), en ? 'https://keevault.de/en/security.html' : 'https://keevault.de/sicherheit.html'),
       article('note', t('FAQ'), t('Antworten auf häufige Fragen'), en ? 'https://keevault.de/en/faq.html' : 'https://keevault.de/faq.html')),
+    // Bug report and feature request (#311): the form on keevault.de with version and system filled in.
+    h('div', { class: 'help-feedback' },
+      h('button', { type: 'button', class: 'btn small', dataset: { feedback: 'bug' }, onclick: () => openUrl(feedbackUrl('bug', en)) }, icon('flag', 14), t('Bug melden')),
+      h('button', { type: 'button', class: 'btn small', dataset: { feedback: 'feature' }, onclick: () => openUrl(feedbackUrl('feature', en)) }, icon('star', 14), t('Feature-Wunsch'))),
     h('div', { class: 'help-foot' },
       h('button', { type: 'button', class: 'linklike', onclick: () => openUrl(en ? 'https://keevault.de/en/knowledge/index.html' : 'https://keevault.de/wissen/index.html') }, t('Alle Artikel')),
       h('button', { type: 'button', class: 'linklike', onclick: () => openUrl(en ? 'https://keevault.de/en/support.html' : 'https://keevault.de/support.html') }, t('Support')),
       h('span', { class: 'muted' }, `Keevault ${st.version}`))), [{ label: t('Schließen'), primary: true }]);
+}
+
+/** Address of the feedback form on keevault.de with type, app version and system (nothing else leaves the app). */
+function feedbackUrl(type, en) {
+  const os = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[st.platform] || st.platform || '';
+  return `https://keevault.de/${en ? 'en/' : ''}feedback.html?${new URLSearchParams({ type, version: st.version || '', os })}`;
 }
 
 /** See-through ground (light/strong) as classes on <html>; the main process switches the window material. */
@@ -946,6 +974,7 @@ async function stepZoom(dir) {
 async function setView(patch) {
   settingsRev++;
   st.settings = await call('updateSettings', patch);
+  settingsRev++;
   applyViewClass();
   document.querySelectorAll('[data-view-value]').forEach((el) => el.dispatchEvent(new Event('view-changed')));
 }
@@ -3035,6 +3064,7 @@ async function renderDetail() {
     containerName,
     connect: (it, method) => connectServer(it.containerId, it.id, method),
     adminLinks: st.settings?.adminTools === true ? ADMIN_LINKS.map((l) => ({ ...l, open: (it) => openAdminLink(l, `${it.containerId}/${it.id}`) })) : null,
+    showLinkedAssets: adminMode() ? (it) => linkedAssetsDialog(it) : null,
     linkTitle,
     saveFile: async (name, data) => {
       try {
@@ -3104,7 +3134,9 @@ async function renderDetail() {
 /** Logins a server entry can link to (accounts for RDP, TeamViewer, Bastion); Microsoft admin accounts marked. */
 const linkOptions = () => items.filter((i) => i.type === 'login')
   // avatar: the entry's own icon or logo as in the list (#32), loaded the same way.
-  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin, loginLinked: !!i.loginLinked, avatar: () => itemAvatar(i) }))
+  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin, loginLinked: !!i.loginLinked, avatar: () => itemAvatar(i),
+    // Filters of the pickers (#312).
+    microsoft: isMicrosoftSummary(i), passkey: !!i.rpIds?.length }))
   .sort((a, b) => a.title.localeCompare(b.title));
 
 function linkTitle(key) {
@@ -3162,18 +3194,22 @@ function movePasskeyDialog(item, passkey) {
     return;
   }
   // Search window like the asset links: best matches first (same site, same user name), typing filters, a click moves.
+  // "Current vault" (the passkey's) by default, "All" and kinds above the list (#312).
   let chosen = targets[0].key;
   const search = h('input', { type: 'search', class: 'link-pick-search', placeholder: t('Eintrag suchen (Titel, Benutzer, Tresor) …'), 'aria-label': t('Eintrag suchen') });
   const list = h('div', { class: 'link-pick-list', role: 'listbox' });
+  const filters = pickFilterBar({ onChange: () => draw() });
   const LIMIT = 200;
   const draw = () => {
     const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const hits = targets.filter((i) => words.every((w) => [i.title, i.username, containerName(i.containerId)].join(' ').toLowerCase().includes(w)));
+    const hits = targets.filter((i) => (filters.state.all || i.containerId === item.containerId)
+      && pickKindMatches({ microsoft: isMicrosoftSummary(i), passkey: !!i.rpIds?.length, msAdmin: !!i.msAdmin }, filters.state.kind)
+      && words.every((w) => [i.title, i.username, containerName(i.containerId)].join(' ').toLowerCase().includes(w)));
     if (!hits.some((i) => i.key === chosen)) chosen = hits[0]?.key || '';
     list.replaceChildren(...[
       ...hits.slice(0, LIMIT).map((i) => h('button', { type: 'button', role: 'option', class: `link-pick-row ${i.key === chosen ? 'on' : ''}`, 'aria-selected': String(i.key === chosen),
         onclick: () => { chosen = i.key; draw(); } },
-      avatar(i.title, 'avatar small'), h('span', { class: 'link-pick-main' }, h('span', { class: 'link-pick-text' }, i.title),
+      smallAvatar(i), h('span', { class: 'link-pick-main' }, h('span', { class: 'link-pick-text' }, i.title),
         h('span', { class: 'link-pick-sub' }, [i.username, containerName(i.containerId)].filter(Boolean).join(' · '))),
       i.key === chosen ? icon('check', 14) : null)),
       hits.length ? null : h('p', { class: 'muted small link-pick-empty' }, t('Kein Eintrag gefunden.')),
@@ -3184,7 +3220,7 @@ function movePasskeyDialog(item, passkey) {
   draw();
   modal(t('Passkey verschieben'), h('div', { class: 'link-pick-dialog' },
     h('p', {}, t('Passkey für {user} ({rpId}) in einen anderen Eintrag verschieben.', { user: passkey.userName || passkey.userDisplayName || t('(ohne Benutzername)'), rpId: passkey.rpId })),
-    search, list,
+    search, filters.el, list,
     h('p', { class: 'muted small' }, t('Der Passkey selbst bleibt gleich – die Anmeldung bei der Website funktioniert danach mit dem Ziel-Eintrag. Schneller: den Passkey auf einen Login in der Liste ziehen.'))), [
     { label: t('Abbrechen') },
     { label: t('Verschieben'), primary: true, onClick: async () => {
@@ -4399,6 +4435,29 @@ const mcpScopeAction = (vaultId, folder) => (st.settings.mcpEnabled && st.settin
 // ---------------------------------------------------------------- reports (password check, access report)
 
 /** What the report dialogs need from the app. */
+/** Admin mode (#307): the assets and linked logins that use this login, each opened with a click. */
+async function linkedAssetsDialog(item) {
+  const USES = { rdp: 'RDP-Konto', teamviewer: 'TeamViewer-Passwort', bastionLogin: 'Microsoft-Anmeldung (Bastion)', bastionVm: 'Konto auf dem Server (Bastion)', login: 'Verknüpfter Login' };
+  const list = h('div', { class: 'link-pick-list linked-assets-list' }, h('span', { class: 'spinner' }));
+  const { close } = modal(t('Verknüpfte Assets von „{title}“', { title: item.title }), list, [{ label: t('Schließen') }]);
+  let entries = [];
+  try {
+    entries = await call('linkedEntries', item.containerId, item.id);
+  } catch (e) {
+    setChildren(list, notice(e.message));
+    return;
+  }
+  setChildren(list, entries.length ? entries.map((e) => h('button', { type: 'button', class: 'link-pick-row', dataset: { key: e.key }, onclick: () => {
+    close();
+    // Assets live on the assets side of admin mode, logins on the passwords side.
+    ui.devices = e.type === 'server';
+    Object.assign(ui, { view: 'container', containerId: e.containerId, folder: items.find((x) => x.key === e.key)?.folder || '', folderOf: e.containerId, selected: e.key, editing: null });
+    render();
+  } }, itemAvatar(items.find((x) => x.key === e.key) || { key: e.key, title: e.title }),
+  h('span', { class: 'link-pick-main' }, h('span', { class: 'link-pick-text' }, e.title), h('span', { class: 'link-pick-sub' }, e.uses.map((u) => t(USES[u])).join(' · ')))))
+    : [h('p', { class: 'muted' }, t('Kein Asset und kein Login verwendet diesen Eintrag.'))]);
+}
+
 function reportCtx(containerId = null) {
   return {
     call,
@@ -4570,6 +4629,8 @@ function settingsDialog() {
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
   const mcpEnabled = h('input', { type: 'checkbox', checked: !!s.mcpEnabled, disabled: enforced('mcpEnabled') });
+  const mcpPasskeys = h('input', { type: 'checkbox', name: 'mcpPasskeys', checked: !!s.mcpPasskeys });
+  const mcpMicrosoft = h('input', { type: 'checkbox', name: 'mcpMicrosoft', checked: !!s.mcpMicrosoft });
   const offlineMirror = h('input', { type: 'checkbox', checked: !!s.offlineMirror && st.pinSet, disabled: enforced('offlineMirror') || !st.pinSet });
   const mcpBox = h('div', {});
   const mcpMode = h('select', { disabled: enforced('mcpScope') },
@@ -4749,6 +4810,12 @@ function settingsDialog() {
           field(t('Zugriff für KI-Agenten'), mcpMode, t('Freigeben geht auch per Rechtsklick auf einen Tresor oder Ordner. Ein freigegebener Ordner schließt seine Unterordner ein.')),
           h('div', { class: 'field' }, h('label', {}, t('Freigegeben')), scopeList,
             h('div', { class: 'inline' }, scopeVault, scopeFolder, scopeAdd)),
+          // #308 / #315: off by default, every single use is confirmed in the app.
+          h('div', { class: 'field' }, h('label', {}, t('Zusätzliche Rechte (jede Nutzung wird bestätigt)')),
+            h('label', { class: 'inline' }, mcpPasskeys, t('Agenten dürfen sich mit gespeicherten Passkeys anmelden')),
+            h('p', { class: 'muted small' }, t('Keevault signiert nur die einzelne Anmeldung für die Website des Passkeys (https); der Passkey selbst verlässt den Tresor nie.')),
+            h('label', { class: 'inline' }, mcpMicrosoft, t('Tools dürfen eine Microsoft-Anmeldung anfordern')),
+            h('p', { class: 'muted small' }, t('Keevault kommt nach vorne, du wählst das Konto – nur dieses bekommt das Tool.'))),
           mcpBox) : h('p', { class: 'muted small' }, t('Nach dem Einschalten und Speichern erscheinen hier die Einstellungen für deinen KI-Client.'))),
     ] },
   ]), [
@@ -4774,6 +4841,8 @@ function settingsDialog() {
         mcpEnabled: mcpEnabled.checked,
         offlineMirror: offlineMirror.checked && st.pinSet,
         mcpScope: mcpMode.value,
+        mcpPasskeys: mcpEnabled.checked && mcpPasskeys.checked,
+        mcpMicrosoft: mcpEnabled.checked && mcpMicrosoft.checked,
         extensionIds: extensionIds.value.split(/[\s,;]+/).filter((x) => /^[a-p]{32}$/.test(x)),
       });
       if (changedTenant && st.signedIn) await call('switchTenant', tenant.value.trim());

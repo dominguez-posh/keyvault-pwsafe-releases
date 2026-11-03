@@ -1026,15 +1026,23 @@ export class VaultSession {
    * → their titles. Such a login must not disappear under them (#34).
    */
   async linkedFrom(containerId, id) {
+    return (await this.linkedEntries(containerId, id)).map((e) => e.title);
+  }
+
+  /** The entries using this one (see linkedFrom) with how: [{ key, containerId, id, title, type, uses: ['rdp', …] }] (#307). */
+  async linkedEntries(containerId, id) {
     const key = `${containerId}/${id}`;
     const candidates = (await this.summaries()).filter((s) => s.containerId === containerId && s.id !== id && (s.type === 'server' || s.loginLinked));
     const out = [];
     for (const s of candidates) {
       const it = await this.getItem(containerId, s.id).catch(() => null);
-      const sv = it?.server || {};
-      if (it && [sv.rdpLink, sv.tvLink, sv.bastionLoginLink, sv.bastionVmLink, it.loginLink].includes(key)) out.push(it.title);
+      if (!it) continue;
+      const sv = it.server || {};
+      const uses = Object.entries({ rdp: sv.rdpLink, teamviewer: sv.tvLink, bastionLogin: sv.bastionLoginLink, bastionVm: sv.bastionVmLink, login: it.loginLink })
+        .filter(([, v]) => v === key).map(([k]) => k);
+      if (uses.length) out.push({ key: `${containerId}/${s.id}`, containerId, id: s.id, title: it.title, type: it.type, uses });
     }
-    return out;
+    return out.sort((a, b) => a.title.localeCompare(b.title));
   }
 
   /** Refuses while other entries use this login (see linkedFrom). */

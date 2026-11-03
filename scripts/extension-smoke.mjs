@@ -372,6 +372,11 @@ try {
     if (process.env.KV_SMOKE_DEBUG) console.log(`[debug] edit popup: ${popups.length} opened by the extension, form: ${editForm}`);
     check(editForm, 'Nach dem Speichern des Passkeys öffnete das Popup den Eintrag nicht zum Bearbeiten');
     if (editForm) await shot(editPopup.sessionId, 'ext-popup-edit-after-passkey');
+    // An existing entry without an icon on its own site: "Take over the website's icon" is offered (#314).
+    if (editForm) {
+      const si = JSON.parse(await evaluate(editPopup.sessionId, 'JSON.stringify({ btn: !!document.querySelector(".site-icon"), hidden: !!document.querySelector(".site-icon")?.hidden, icon: !!document.querySelector(".icon-row .avatar img") })'));
+      check(si.icon || (si.btn && !si.hidden), `Bearbeiten ohne Symbol: kein „Icon der Website übernehmen“ (${JSON.stringify(si)})`);
+    }
     await send('Target.closeTarget', { targetId: editPopup.targetId }).catch(() => {});
     if (r?.createJson) {
       const reg = await verifyRegistrationResponse({ response: r.createJson, expectedChallenge: r.createChallenge, expectedOrigin: origin, expectedRPID: 'localhost' });

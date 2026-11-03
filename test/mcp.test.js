@@ -268,3 +268,70 @@ test('mcp: a login that signs in with another entry gives only the reference, ne
   assert.deepEqual({ vaultId: e.signInFrom.vaultId, entryId: e.signInFrom.entryId }, { vaultId: 'kv-team', entryId: 'pws-1' });
   assert.ok(!JSON.stringify(e).includes('S3cret!'), 'the linked password is not handed out with this entry');
 });
+
+test('mcp: passkey sign-in for an agent – off by default, own site only, every use confirmed, verifiable assertion (#308)', async () => {
+  const { createCredential } = await import('../extension/core/webauthn.js');
+  const { verifyRegistrationResponse, verifyAuthenticationResponse } = await import('@simplewebauthn/server');
+  const { b64uEncode, randomBytes } = await import('../extension/core/util.js');
+  const origin = 'https://github.com';
+  const regChallenge = b64uEncode(randomBytes(32));
+  const { passkey, response } = await createCredential({ origin, rpId: 'github.com', rpName: 'GitHub', user: { id: b64uEncode(randomBytes(16)), name: 'alice', displayName: 'Alice' }, challenge: regChallenge, pubKeyCredParams: [{ type: 'public-key', alg: -7 }] });
+  const reg = await verifyRegistrationResponse({ response, expectedChallenge: regChallenge, expectedOrigin: origin, expectedRPID: 'github.com' });
+  const items = new Map([['pk-1', { id: 'pk-1', version: 'v1', type: 'login', title: 'GitHub', username: 'alice', password: '', urls: ['https://github.com/'], totp: '', notes: '', folder: '', fields: [], passkeys: [passkey], card: {}, cert: {} }]]);
+  const v = { containers: async () => [{ id: 'kv', name: 'Team', kind: 'keyvault', access: { write: true } }], summaries: async () => [], getItem: async (_c, id) => structuredClone(items.get(id)), saveItem: async (_c, i) => i };
+  const features = { passkeys: false };
+  const asked = [];
+  let answer = true;
+  const mcp = new McpService({ vault: () => v, confirmRead: async () => 'deny', confirmWrite: async () => false, audit: () => {}, features: () => features,
+    confirmPasskey: async (x) => { asked.push(x); return answer; } });
+  const client = { agent: 'claude-code' };
+  mcp.connect(client);
+  const challenge = b64uEncode(randomBytes(32));
+  const args = { vaultId: 'kv', entryId: 'pk-1', origin, challenge };
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', args), /ausgeschaltet/, 'off by default');
+  features.passkeys = true;
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', { ...args, origin: 'https://evil.example' }), /nur für github\.com/);
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', { ...args, origin: 'http://github.com' }), /nur für github\.com/);
+  assert.equal(asked.length, 0, 'foreign origins are refused before asking');
+  answer = false;
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', args), /abgelehnt/);
+  answer = true;
+  const r = await mcp.call(client, 'sign_in_with_passkey', args);
+  assert.equal(asked.length, 2, 'every use is confirmed');
+  assert.ok(!JSON.stringify(r).includes(passkey.privateKey), 'never the private key');
+  const auth = await verifyAuthenticationResponse({ response: r.credential, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: 'github.com', credential: reg.registrationInfo.credential });
+  assert.equal(auth.verified, true);
+});
+
+test('mcp: Microsoft sign-in for a tool – off by default, the user picks the account, nothing without a choice (#315)', async () => {
+  const items = new Map([
+    ['ms-1', { id: 'ms-1', type: 'login', title: 'M365 Admin', username: 'admin@contoso.com', password: 'Ms-1', urls: ['https://login.microsoftonline.com'], msAdmin: true, totp: 'otpauth://totp/x?secret=JBSWY3DPEHPK3PXP', passkeys: [], folder: '' }],
+    ['ms-2', { id: 'ms-2', type: 'login', title: 'Fabrikam', username: 'it@fabrikam.com', password: 'Ms-2', urls: ['https://login.microsoftonline.com'], totp: '', passkeys: [], folder: '' }],
+    ['gh', { id: 'gh', type: 'login', title: 'GitHub', username: 'alice', password: 'Gh', urls: ['https://github.com'], totp: '', passkeys: [], folder: '' }],
+  ]);
+  const v = {
+    containers: async () => [{ id: 'kv', name: 'Team', kind: 'keyvault' }],
+    summaries: async () => [...items.values()].map((i) => ({ containerId: 'kv', id: i.id, type: i.type, title: i.title, username: i.username, msAdmin: !!i.msAdmin, hosts: i.urls.map((u) => new URL(u).hostname), folder: '' })),
+    getItem: async (_c, id) => structuredClone(items.get(id)),
+  };
+  const features = { microsoft: false };
+  let offered = null;
+  let pick = 'kv/ms-2';
+  const mcp = new McpService({ vault: () => v, confirmRead: async () => 'deny', confirmWrite: async () => false, audit: () => {}, features: () => features,
+    chooseMicrosoft: async (x) => { offered = x; return pick; } });
+  const client = { agent: 'report-tool' };
+  mcp.connect(client);
+  await assert.rejects(mcp.call(client, 'request_microsoft_login', {}), /ausgeschaltet/, 'off by default');
+  features.microsoft = true;
+  const r = await mcp.call(client, 'request_microsoft_login', { purpose: 'Graph-Bericht' });
+  assert.deepEqual(offered.accounts.map((a) => a.title), ['M365 Admin', 'Fabrikam'], 'only Microsoft logins, admins first');
+  assert.equal(offered.purpose, 'Graph-Bericht');
+  assert.equal(r.username, 'it@fabrikam.com');
+  assert.equal(r.password, 'Ms-2');
+  await mcp.call(client, 'request_microsoft_login', { tenant: 'contoso.com' }).catch(() => {});
+  assert.deepEqual(offered.accounts.map((a) => a.title), ['M365 Admin'], 'tenant narrows the choice');
+  pick = null;
+  await assert.rejects(mcp.call(client, 'request_microsoft_login', {}), /abgelehnt/, 'no choice, nothing returned');
+  pick = 'kv/gh';
+  await assert.rejects(mcp.call(client, 'request_microsoft_login', {}), /abgelehnt/, 'a key that was not offered is refused');
+});

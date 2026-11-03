@@ -52,6 +52,9 @@ const DEFAULTS = {
   agentRules: {}, // { [agent]: { write: boolean, until: ISO string | null } }
   // Entries an agent reads without asking ("never ask again"), revoked from the entry's context menu.
   mcpTrusted: [], // [{ agent, vaultId, entryId, title }]
+  // Agents may sign one sign-in with a stored passkey (#308) / ask for a Microsoft sign-in (#315) – each use confirmed.
+  mcpPasskeys: false,
+  mcpMicrosoft: false,
   // Offline read mode: encrypted mirror of the vault answers (needs the app PIN); off by default, policy can forbid it.
   offlineMirror: false,
   // View (main menu): zoom factor of the window and see-through ground (off | light | strong, Windows 11 acrylic).

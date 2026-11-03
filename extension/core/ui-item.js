@@ -93,6 +93,9 @@ export function itemDetail(item, ctx) {
       hoverMenu),
     // Fields as one card with dividers (modern design); the action bar and meta line stay outside.
     rows.length ? h('div', { class: 'field-card' }, ...rows) : h('p', { class: 'muted' }, t('Keine Felder')),
+    // Admin mode (#307): which assets and linked logins use this login.
+    item.type === 'login' && ctx.showLinkedAssets ? h('div', { class: 'actions linked-assets-row' },
+      h('button', { type: 'button', class: 'btn small linked-assets', onclick: () => ctx.showLinkedAssets(item) }, icon('link', 14), t('Verknüpfte Assets anzeigen'))) : null,
     h('div', { class: 'meta muted' }, item.updatedBy
       ? t('Geändert {date} von {user}', { date: formatDateTime(item.updated), user: item.updatedBy })
       : t('Geändert {date}', { date: formatDateTime(item.updated) })),
@@ -306,6 +309,29 @@ function revealButton(input) {
 }
 
 /**
+ * Filters above a picker list (#312): range "Current vault" (default) or "All", and kinds – all, Microsoft logins,
+ * with passkey, admin accounts. Options carry { microsoft, passkey, msAdmin }. → { el, state: { all, kind } }
+ */
+const PICK_KINDS = [['all', 'Alle'], ['microsoft', 'Microsoft'], ['passkey', 'Mit Passkey'], ['admin', 'Admin']];
+export function pickFilterBar({ scope = true, onChange }) {
+  const state = { all: false, kind: 'all' };
+  const seg = (key, choices, label) => {
+    const box = h('span', { class: 'seg pick-seg', role: 'radiogroup', 'aria-label': label, dataset: { filter: key } });
+    const draw = () => box.replaceChildren(...choices.map(([value, text]) => h('button', {
+      type: 'button', role: 'radio', 'aria-checked': String(state[key] === value), class: state[key] === value ? 'on' : '', dataset: { value: String(value) },
+      onclick: () => { state[key] = value; draw(); onChange(); },
+    }, t(text))));
+    draw();
+    return box;
+  };
+  const el = h('div', { class: 'pick-filters' },
+    scope ? seg('all', [[false, 'Aktueller Tresor'], [true, 'Alle']], t('Bereich')) : null,
+    seg('kind', PICK_KINDS, t('Art')));
+  return { el, state };
+}
+export const pickKindMatches = (o, kind) => kind === 'all' || (kind === 'microsoft' && o.microsoft) || (kind === 'passkey' && o.passkey) || (kind === 'admin' && o.msAdmin);
+
+/**
  * Item editor.
  * @param {object} item  item to edit (or {} for a new one)
  * @param {{ containers: Array<{ id, name }>, containerId?: string, isNew: boolean,
@@ -410,9 +436,18 @@ export function itemForm(item, ctx) {
   let icon64 = it.icon;
   const iconPreview = h('span', {});
   const iconRemove = h('button', { type: 'button', class: 'btn small', onclick: () => { icon64 = ''; drawIcon(); } }, t('Entfernen'));
+  // The open website's own icon for an entry without one (#314) – offered by the browser extension when the tab is one
+  // of the entry's sites.
+  const iconFromSite = ctx.siteIcon ? h('button', { type: 'button', class: 'btn small site-icon', onclick: async () => {
+    const url = await ctx.siteIcon().catch(() => '');
+    if (!url) return toast(t('Die Website hat kein passendes Symbol'), 'error');
+    icon64 = url;
+    return drawIcon();
+  } }, t('Icon der Website übernehmen')) : null;
   const drawIcon = () => {
     iconPreview.replaceChildren(avatar(title.value || it.title, 'avatar', icon64));
     iconRemove.hidden = !icon64;
+    if (iconFromSite) iconFromSite.hidden = !!icon64;
   };
   const iconChoose = h('button', { type: 'button', class: 'btn small', onclick: async () => {
     try {
@@ -546,12 +581,23 @@ export function itemForm(item, ctx) {
       extra, h('span', { class: 'link-pick-main' }, h('span', { class: 'link-pick-text' }, title), detail ? h('span', { class: 'link-pick-sub' }, detail) : null),
       key === current ? icon('check', 14) : null);
       const LIMIT = 200;
+      // "Current vault" by default; "All" shows the other vaults' entries too – greyed out, links stay in one vault.
+      const filters = pickFilterBar({ onChange: () => fill() });
+      const linkable = new Set(options.map((o) => o.key));
       const fill = () => {
         const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-        const hits = options.filter((o) => words.every((w) => [o.title, o.username, o.container].join(' ').toLowerCase().includes(w)));
+        const pool = filters.state.all ? (allOptions || []) : options;
+        const hits = pool.filter((o) => pickKindMatches(o, filters.state.kind) && words.every((w) => [o.title, o.username, o.container].join(' ').toLowerCase().includes(w)));
         list.replaceChildren(...[
-          words.length ? null : row('', emptyLabel, '', h('span', { class: 'link-pick-none' }, icon('x', 14))),
-          ...hits.slice(0, LIMIT).map((o) => row(o.key, o.title, [o.username, o.container].filter(Boolean).join(' · '), pickAvatar(o))),
+          words.length || filters.state.kind !== 'all' ? null : row('', emptyLabel, '', h('span', { class: 'link-pick-none' }, icon('x', 14))),
+          ...hits.slice(0, LIMIT).map((o) => {
+            const r = row(o.key, o.title, [o.username, o.container].filter(Boolean).join(' · '), pickAvatar(o));
+            if (!linkable.has(o.key)) {
+              r.disabled = true;
+              r.title = t('Nur Einträge aus demselben Tresor lassen sich verknüpfen.');
+            }
+            return r;
+          }),
           hits.length ? null : h('p', { class: 'muted small link-pick-empty' }, t('Kein Eintrag gefunden.')),
           hits.length > LIMIT ? h('p', { class: 'muted small link-pick-empty' }, t('{count} weitere – Suche verfeinern', { count: hits.length - LIMIT })) : null].filter(Boolean));
       };
@@ -562,7 +608,7 @@ export function itemForm(item, ctx) {
         list.querySelector('.link-pick-row')?.click();
       });
       fill();
-      const { close } = modal(t('Eintrag verknüpfen'), h('div', { class: 'link-pick-dialog' }, search, list), [{ label: t('Abbrechen') }]);
+      const { close } = modal(t('Eintrag verknüpfen'), h('div', { class: 'link-pick-dialog' }, search, filters.el, list), [{ label: t('Abbrechen') }]);
       setTimeout(() => search.focus(), 0);
     });
     draw();
@@ -722,7 +768,7 @@ export function itemForm(item, ctx) {
     // typeFixed: the type was chosen before (button "Neu") – no type field then.
     ctx.typeFixed ? row(t('Tresor'), containerSelect) : h('div', { class: 'grid2' }, row(t('Tresor'), containerSelect), row(t('Typ'), typeSelect)),
     row(t('Titel'), title),
-    row(t('Logo'), h('div', { class: 'field-row icon-row' }, iconPreview, iconChoose, iconRemove)),
+    row(t('Logo'), h('div', { class: 'field-row icon-row' }, iconPreview, iconChoose, iconFromSite, iconRemove)),
     loginOnly,
     cardOnly,
     certOnly,
