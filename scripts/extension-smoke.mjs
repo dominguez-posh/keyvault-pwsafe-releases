@@ -233,7 +233,11 @@ async function clickNode(sessionId, target) {
 }
 async function evaluate(sessionId, expression) {
   const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
-  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
+  if (r.exceptionDetails) {
+    // Which page: a failing check names the address (and the expression) instead of only the error.
+    const where = await send('Runtime.evaluate', { expression: 'location.href', returnByValue: true }, sessionId).then((x) => x.result?.value).catch(() => '?');
+    throw new Error(`${r.exceptionDetails.exception?.description || r.exceptionDetails.text} – ${where} – ${expression.slice(0, 80)}`);
+  }
   return r.result.value;
 }
 async function shot(sessionId, name) {
@@ -250,11 +254,19 @@ function pageErrors(sessionId, label) {
 }
 async function waitFor(fn, ms = 8000) {
   const start = Date.now();
+  let lastError = null;
   while (Date.now() - start < ms) {
-    const v = await fn();
-    if (v) return v;
+    // A page that is just navigating (new document, its script not run yet) answers with an error: ask again.
+    try {
+      const v = await fn();
+      if (v) return v;
+      lastError = null;
+    } catch (e) {
+      lastError = e;
+    }
     await sleep(250);
   }
+  if (lastError) throw lastError;
   return null;
 }
 const findTarget = async (prefix) => (await send('Target.getTargets')).targetInfos.find((x) => x.url.startsWith(prefix));
@@ -530,6 +542,25 @@ try {
       if (asset) await sw(options.sessionId, 'delete', { containerId: asset.containerId, id: asset.id }).catch(() => {});
     }
     pageErrors(bp.sessionId, 'bastion-pick');
+    // "Save" next to an account (#306): the VM becomes an asset linked to it – without signing in.
+    const vmSave = '/subscriptions/s-smoke/resourceGroups/rg-smoke/providers/Microsoft.Compute/virtualMachines/vm-smoke-06/bastionHost';
+    const bs = await open(`http://bst-smoke.bastion.azure.com:${server.address().port}${vmSave}`);
+    await sleep(2500);
+    const keep = await waitFor(() => barPoint(bs.sessionId, (n) => n.nodeName === 'BUTTON' && /save-only/.test(attrsOf(n).class || '')), 6000);
+    check(!!keep, 'Bastion-Leiste: kein „Speichern“ neben den Konten');
+    if (keep) {
+      for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: keep.x, y: keep.y, button: 'left', clickCount: 1 }, bs.sessionId);
+      const kept = await waitFor(async () => {
+        const all = await sw(options.sessionId, 'items', {});
+        const s = (all || []).find((x) => x.type === 'server' && x.title === 'vm-smoke-06');
+        return s ? sw(options.sessionId, 'item', { containerId: s.containerId, id: s.id }) : null;
+      }, 6000);
+      check(!!kept?.server?.bastionVmLink, `Bastion „Speichern“: kein verknüpftes Asset (${JSON.stringify(kept?.server || null)})`);
+      const state = await evaluate(bs.sessionId, '({ connected: !!window.connected, pw: !!document.forms[0].password.value })');
+      check(!state.connected && !state.pw, `Bastion „Speichern“: trotzdem angemeldet (${JSON.stringify(state)})`);
+      if (kept) await sw(options.sessionId, 'delete', { containerId: kept.containerId, id: kept.id }).catch(() => {});
+    }
+    pageErrors(bs.sessionId, 'bastion-save');
   }
 
   // "Remember": tick the box, choose the account – the next Microsoft sign-in starts by itself after the countdown.

@@ -315,7 +315,8 @@ export function itemForm(item, ctx) {
   const it = normalizeItem(item);
   const containerSelect = h('select', { name: 'container', disabled: !ctx.isNew },
     ...ctx.containers.map((c) => h('option', { value: c.id, selected: c.id === ctx.containerId }, c.name)));
-  const typeSelect = h('select', { name: 'type' },
+  // The type is fixed once the entry exists (#263): another type would drop its fields (server, card, certificate).
+  const typeSelect = h('select', { name: 'type', disabled: !ctx.isNew, title: ctx.isNew ? '' : t('Der Typ lässt sich nach dem Anlegen nicht mehr ändern.') },
     ...Object.entries(ITEM_TYPES).filter(([k]) => k !== 'server' || ctx.devices || it.type === 'server')
       .map(([k, label]) => h('option', { value: k, selected: k === it.type }, t(label))));
   const title = h('input', { name: 'title', value: item.title || '', placeholder: t('z. B. GitHub'), required: true, autocomplete: 'off' });

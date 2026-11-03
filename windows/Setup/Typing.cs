@@ -18,6 +18,28 @@ namespace Keevault.Setup
         [StructLayout(LayoutKind.Sequential)] private struct INPUT { public uint type; public UNION u; }
         [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
         [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+
+        private static string ForegroundTitle()
+        {
+            var sb = new StringBuilder(256);
+            GetWindowText(GetForegroundWindow(), sb, sb.Capacity);
+            return sb.ToString();
+        }
+
+        /// <summary>Waits up to 30 s until the window in front has one of the titles ("A|B"); false if it never comes.</summary>
+        private static bool WaitForWindow(string titles)
+        {
+            var wanted = titles.Split('|');
+            for (var i = 0; i < 300; i++)
+            {
+                var title = ForegroundTitle();
+                foreach (var w in wanted) if (w.Length > 0 && title.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                Thread.Sleep(100);
+            }
+            return false;
+        }
 
         private const uint KEYUP = 2, UNICODE = 4;
 
@@ -31,10 +53,17 @@ namespace Keevault.Setup
             return SendInput(1, input, Marshal.SizeOf(typeof(INPUT))) == 1;
         }
 
-        public static int Run()
+        public static int Run(string waitWindow = null)
         {
             string text;
             using (var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false))) text = stdin.ReadToEnd();
+            // Typed only into the expected window (e.g. "Windows-Sicherheit"); it never came: nothing typed, exit code 4.
+            if (!string.IsNullOrEmpty(waitWindow))
+            {
+                if (!WaitForWindow(waitWindow)) return 4;
+                Thread.Sleep(400); // the dialog puts the focus into its password field
+                if (!WaitForWindow(waitWindow)) return 4;
+            }
             // Wait until Ctrl/Shift/Alt/Win of the shortcut are released – otherwise characters would become shortcuts.
             for (var i = 0; i < 300; i++)
             {
