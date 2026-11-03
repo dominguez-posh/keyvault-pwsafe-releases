@@ -5,6 +5,7 @@ import { totpCode, parseTotp } from './totp.js';
 import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator.js';
 import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods, isMicrosoftLogin, DEVICE_KINDS, deviceOs, defaultPort } from './model.js';
 import { t } from './i18n.js';
+import { hostFromUrl } from './match.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 import { expiryState } from './health.js';
 
@@ -51,6 +52,12 @@ export function itemDetail(item, ctx) {
   if (item.type === 'server') rows.push(...serverRows(item, ctx));
   // Desktop with admin tools on: PIM and the admin centers – one click opens it, signed in with this account.
   if (ctx.adminLinks?.length && isMicrosoftLogin(item)) rows.push(adminPanel(item, ctx.adminLinks));
+  // Sophos login: one "open" button per portal (VPN, Admin, User portal …); the browser then fills the sign-in.
+  if (item.type === 'login' && item.sophos && item.portals?.length) {
+    rows.push(h('div', { class: 'field sophos-open' }, h('label', {}, t('Portale')),
+      h('div', { class: 'field-row portal-buttons' }, ...item.portals.map((p) => h('button', { type: 'button', class: 'btn small portal-open', title: p.url,
+        onclick: () => ctx.openUrl(p.url) }, icon('link', 14), t('{name} öffnen', { name: p.label || hostFromUrl(p.url) || p.url }))))));
+  }
   if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
   if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
   if (item.totp) rows.push(totpField(item.totp, ctx));
@@ -73,7 +80,7 @@ export function itemDetail(item, ctx) {
       avatar(item.title, 'avatar large', item.icon),
       h('div', { class: 'item-head-text' },
         h('h2', {}, item.favorite ? icon('star', 14) : null, item.title),
-        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(item.type === 'server' ? DEVICE_KINDS[item.server.kind] : ITEM_TYPES[item.type]), item.msAdmin ? t('Microsoft-Admin') : ''].filter(Boolean).join(' · ')),
+        h('div', { class: 'muted' }, [ctx.containerName(item.containerId), item.folder, t(item.type === 'server' ? DEVICE_KINDS[item.server.kind] : ITEM_TYPES[item.type]), item.msAdmin ? t('Microsoft-Admin') : '', item.sophos ? t('Sophos') : ''].filter(Boolean).join(' · ')),
         expiryBadge(item.expires)),
       hoverMenu),
     // Fields as one card with dividers (modern design); the action bar and meta line stay outside.
@@ -327,6 +334,30 @@ export function itemForm(item, ctx) {
     generator.hidden = !generator.hidden;
   });
   const urls = h('textarea', { name: 'urls', rows: 2, placeholder: t('https://example.com (eine pro Zeile)'), value: it.urls.join('\n'), spellcheck: 'false' });
+  // Sophos login: named portals (VPN, Admin, User portal …) as free rows – name and address each free to type.
+  const sophos = h('input', { type: 'checkbox', name: 'sophos', checked: it.sophos });
+  const portalRows = h('div', { class: 'portal-rows' });
+  const portalRow = (p = { label: '', url: '' }) => {
+    const row = h('div', { class: 'field-row portal-row' },
+      h('input', { class: 'portal-label', value: p.label, placeholder: t('Name, z. B. VPN-Portal'), autocomplete: 'off' }),
+      h('input', { class: 'portal-url', value: p.url, placeholder: 'https://vpn.example.com', autocomplete: 'off', spellcheck: 'false' }));
+    row.append(iconButton('x', t('Entfernen'), () => row.remove()));
+    portalRows.append(row);
+  };
+  const seedPortals = it.portals.length ? it.portals : (item.portals || []);
+  (seedPortals.length ? seedPortals : [{ label: t('VPN-Portal'), url: '' }, { label: t('Admin-Portal'), url: '' }]).forEach((p) => portalRow(p));
+  const portalBox = h('div', { class: 'field sophos-portals' }, h('label', {}, t('Portale')), portalRows,
+    h('button', { type: 'button', class: 'btn small portal-add', onclick: () => portalRow() }, icon('plus', 14), t('Portal hinzufügen')),
+    h('div', { class: 'muted small' }, t('Mit Einmalcode (MFA) trägt Keevault beim Ausfüllen im Browser Passwort und Code direkt hintereinander ins Passwortfeld ein. Kopieren in der App liefert nur das Passwort.')));
+  const urlsRow = row(t('Websites'), urls);
+  const syncSophos = () => {
+    portalBox.hidden = !sophos.checked;
+    urlsRow.hidden = sophos.checked;
+  };
+  sophos.addEventListener('change', syncSophos);
+  const collectPortals = () => [...portalRows.querySelectorAll('.portal-row')]
+    .map((r) => ({ label: r.querySelector('.portal-label').value, url: r.querySelector('.portal-url').value }))
+    .filter((p) => p.url.trim());
   // The TOTP secret is as sensitive as the password: hidden unless revealed.
   const totp = h('input', { name: 'totp', type: 'password', value: it.totp, placeholder: t('otpauth://… oder Base32-Geheimnis'), autocomplete: 'off', spellcheck: 'false' });
   const revealTotp = iconButton('eye', t('Anzeigen'), () => {
@@ -585,9 +616,11 @@ export function itemForm(item, ctx) {
   const loginOnly = h('div', { class: 'login-only' },
     row(t('Benutzername'), username),
     h('div', { class: 'field' }, h('label', {}, t('Passwort')), h('div', { class: 'field-row' }, password, reveal, genButton), meter, generator),
-    row(t('Websites'), urls),
+    urlsRow,
     row(t('Einmalcode (TOTP)'), h('div', { class: 'field-row' }, totp, revealTotp, scanTotp)),
     h('label', { class: 'inline' }, msAdmin, t('Microsoft-Admin-Konto (für Admin Center und Bastion)')),
+    h('label', { class: 'inline' }, sophos, t('Sophos-Login (Portale, bei MFA Passwort + Einmalcode zusammen)')),
+    portalBox,
     passkeyBox);
   // Credit card
   const secretInput = (name, value, extra = {}) => h('input', { name, type: 'password', value, autocomplete: 'off', spellcheck: 'false', ...extra });
@@ -644,6 +677,7 @@ export function itemForm(item, ctx) {
   };
   typeSelect.addEventListener('change', syncType);
   syncType();
+  syncSophos();
   updateMeter();
 
   const save = h('button', { type: 'submit', class: 'btn primary' }, icon('check'), t('Speichern'));
@@ -690,7 +724,7 @@ export function itemForm(item, ctx) {
       title: title.value,
       username: login ? username.value : type === 'server' && !srvRdpLink.value ? srvUser.value : '',
       password: login ? password.value : type === 'certificate' ? certPassword.value : type === 'server' && !srvRdpLink.value ? srvPass.value : '',
-      urls: login ? urls.value.split(/\r?\n/) : [],
+      urls: login && !sophos.checked ? urls.value.split(/\r?\n/) : [],
       totp: login ? totp.value : '',
       card: type === 'card' ? { holder: cardHolder.value, number: cardNumber.value, expiry: cardExpiry.value, cvc: cardCvc.value, pin: cardPin.value } : undefined,
       cert: type === 'certificate' ? cert : undefined,
@@ -700,6 +734,8 @@ export function itemForm(item, ctx) {
         bastionUrl: srvBastion.value, bastionLoginLink: srvBastionLogin.value, bastionVmLink: srvBastionVm.value,
       } : undefined,
       msAdmin: login && msAdmin.checked,
+      sophos: login && sophos.checked,
+      portals: login && sophos.checked ? collectPortals() : [],
       folder: folder.value,
       icon: icon64,
       favorite: favorite.checked,

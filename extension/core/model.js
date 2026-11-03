@@ -27,6 +27,14 @@ export const MICROSOFT_LOGIN_URLS = ['https://login.microsoftonline.com', 'https
 export const isMicrosoftLogin = (item) => item.type === 'login'
   && (!!item.msAdmin || item.urls.some((u) => /(^|.)(microsoftonline|microsoft|office|azure).com$/.test(hostFromUrl(u) || '')));
 
+// Sophos logo (blue rounded square with a white ring, 64 px PNG) for the Sophos login template.
+const SOPHOS_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAA8klEQVR42u2b0QqAIAxF/dd+rr8seoqoIGm7c+4EvubOKdDp1tqyts6xDT76eCYA/idkYvBvIorAv0soBP8soRj8XUJB+KsEBNSEPyUgAAGxAo4nWoAMtPeRxDYiuFTEyOASERnAXUVkgzeXkBHeVIISPvqdLgK8g3SXMHRwinm8AlMvrXIBURsX83kRkAjeZX7LANRZZIiA8OzNOo6MX980FgQgAAEIyLYCmMbDH4AABCAAAeQCZIOcB3AihABOhbkX4GaIu0Fuh6kPoEKEGqF6VWItev8emFdQKUqtMAJomEAATVO0zdE4SesszdNV2+d3Q9AN7Fe8JZIAAAAASUVORK5CYII=';
+// Sophos login: a login flavour (own 'New' entry, logo, portal buttons). With MFA (a TOTP set) the Sophos portals
+// want the password and the one-time code typed together into the password field – see cs:fill (browser only).
+export const isSophosLogin = (item) => item.type === 'login' && !!item.sophos;
+/** Password as the Sophos portal expects it on autofill: password immediately followed by the current TOTP (MFA). */
+export const sophosFillPassword = (item, code) => (item.sophos && item.totp && code ? item.password + code : item.password);
+
 /**
  * Sign-in name in FQDN form ("user@contoso.local") for an Active Directory login: from "user", "CONTOSO\\user" or
  * "user@…" plus the entry's field "Domäne (FQDN)" (also the older "Domäne (DNS)"); unchanged without such a field.
@@ -47,6 +55,12 @@ export function entryTemplate(name, { msAdmin = false } = {}) {
       type: 'login', title: 'Microsoft', icon: MICROSOFT_LOGO, msAdmin,
       urls: [...MICROSOFT_LOGIN_URLS, 'https://portal.azure.com', 'https://admin.microsoft.com'],
       fields: [{ name: t('Mandanten-ID'), value: '' }, { name: t('Primäre Domäne'), value: '' }],
+    };
+  }
+  if (name === 'sophos') {
+    return {
+      type: 'login', title: 'Sophos', icon: SOPHOS_LOGO, sophos: true, urls: [],
+      portals: [{ label: t('VPN-Portal'), url: '' }, { label: t('Admin-Portal'), url: '' }, { label: t('User-Portal'), url: '' }],
     };
   }
   if (name === 'ad') {
@@ -168,9 +182,18 @@ export function normalizeItem(input = {}) {
     server: normalizeServer(input.server),
     // Login used for Microsoft admin centers and Bastion (admin tools pick these accounts).
     msAdmin: !!input.msAdmin,
+    // Sophos login flavour and its named portals (VPN/Admin/User portal, each a free URL) – see isSophosLogin.
+    sophos: !!input.sophos,
+    portals: normalizePortals(input.portals),
     created: input.created || '',
     createdBy: input.createdBy || '',
   };
+}
+
+/** Named portals of a Sophos login: up to 12 rows, each { label, url }; rows without a URL are dropped. */
+function normalizePortals(list) {
+  return (Array.isArray(list) ? list : []).map((p) => ({ label: str(p?.label).trim().slice(0, 80), url: normalizeUrl(str(p?.url)) || '' }))
+    .filter((p) => p.url).slice(0, 12);
 }
 
 function normalizeCard(c = {}) {
@@ -235,7 +258,8 @@ export const cardLast4 = (number) => {
 };
 
 export function itemHosts(item) {
-  return [...new Set((item.urls || []).map(hostFromUrl).filter(Boolean))];
+  const urls = [...(item.urls || []), ...((item.portals || []).map((p) => p.url))];
+  return [...new Set(urls.map(hostFromUrl).filter(Boolean))];
 }
 
 export function itemRpIds(item) {
@@ -261,6 +285,8 @@ export function serializeItem(input, actor = '') {
     cert: item.type === 'certificate' && item.cert.data ? { fileName: item.cert.fileName, data: item.cert.data } : undefined,
     server: item.type === 'server' ? item.server : undefined,
     msAdmin: item.type === 'login' && item.msAdmin ? true : undefined,
+    sophos: item.type === 'login' && item.sophos ? true : undefined,
+    portals: item.type === 'login' && item.portals.length ? item.portals : undefined,
     folder: item.folder,
     favorite: item.favorite,
     expires: item.expires || undefined,
@@ -294,6 +320,7 @@ export function serializeItem(input, actor = '') {
   if (item.icon) tags.ic = '1';
   if (item.expires) tags.exp = item.expires;
   if (item.type === 'login' && item.msAdmin) tags.adm = '1';
+  if (item.type === 'login' && item.sophos) tags.sop = '1';
   if (item.type === 'server' && serverMethods(item).length) tags.sv = serverMethods(item).join(' ');
   return { value, contentType: CONTENT_TYPE, tags, doc };
 }
@@ -318,6 +345,7 @@ export function summaryFromSecret(secret, containerId) {
     hasIcon: t.ic === '1',
     expires: /^\d{4}-\d{2}-\d{2}$/.test(t.exp || '') ? t.exp : '',
     msAdmin: t.adm === '1',
+    sophos: t.sop === '1',
     methods: split(t.sv),
     updated: (secret.attributes?.updated || 0) * 1000,
   };
