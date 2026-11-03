@@ -286,6 +286,24 @@ export class FileContainers {
     this.onChange();
   }
 
+  folderIcons(id) {
+    return this.get(id).folderIcons();
+  }
+
+  async setFolderIcons(id, patch) {
+    await this.serial(id, () => this.get(id).setFolderIcons(patch));
+    this.onChange();
+  }
+
+  /** Settings of the app kept in a (personal) file vault: { updated, value } or null. */
+  appSettings(id) {
+    return this.get(id).appSettings();
+  }
+
+  async setAppSettings(id, value, updated) {
+    await this.serial(id, () => this.get(id).setAppSettings(value, updated));
+  }
+
   /** Format 1 → secured file (new ID). Returns the new ID. */
   async migrate(id, creator) {
     const entry = this.entries.get(id);

@@ -15,10 +15,13 @@ export const SHARD_CHARS = 18_000;
 export const shardName = (i) => `${INDEX_SECRET}-${String(i).padStart(2, '0')}`;
 export const isIndexSecret = (name) => name === INDEX_SECRET || /^pws-index-\d{2,}$/.test(String(name));
 
-const flags = (s) => (s.favorite ? 1 : 0) | (s.hasTotp ? 2 : 0) | (s.hasIcon ? 4 : 0) | (s.unprotected ? 8 : 0);
+const flags = (s) => (s.favorite ? 1 : 0) | (s.hasTotp ? 2 : 0) | (s.hasIcon ? 4 : 0) | (s.unprotected ? 8 : 0)
+  | (s.msAdmin ? 16 : 0) | (s.sophos ? 32 : 0) | (s.loginLinked ? 64 : 0);
 
 /** Summary → compact row (positions matter: see unpack). */
-export const pack = (s) => [s.id, s.type, s.title, s.username || '', s.hosts.join(' '), s.rpIds.join(' '), s.folder || '', flags(s), s.expires || '', Math.round((s.updated || 0) / 1000)];
+// Rows written by older versions end after the time: no flags beyond 8, no connection methods of servers.
+export const pack = (s) => [s.id, s.type, s.title, s.username || '', s.hosts.join(' '), s.rpIds.join(' '), s.folder || '', flags(s), s.expires || '', Math.round((s.updated || 0) / 1000),
+  (s.methods || []).join(' ')];
 
 export const unpack = (containerId, a) => ({
   key: `${containerId}/${a[0]}`,
@@ -34,6 +37,10 @@ export const unpack = (containerId, a) => ({
   hasTotp: !!(a[7] & 2),
   hasIcon: !!(a[7] & 4),
   unprotected: !!(a[7] & 8),
+  msAdmin: !!(a[7] & 16),
+  sophos: !!(a[7] & 32),
+  loginLinked: !!(a[7] & 64),
+  methods: a[10] ? String(a[10]).split(' ') : [],
   expires: a[8] || '',
   updated: (a[9] || 0) * 1000,
 });

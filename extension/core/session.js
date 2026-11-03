@@ -14,6 +14,7 @@ import { t } from './i18n.js';
 import { normalizeFolder, requireFolderDepth } from './model.js';
 import { FREE_LIMIT, LicenseLimitError, requestCode, verifyLicense } from './license.js';
 import { isImageDataUrl } from './image.js';
+import { normalizeFolderIcon } from './folder-icons.js';
 import {
   ContainerKey, ContainerLockedError, setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries, mergeKeyrings,
 } from './protect.js';
@@ -36,6 +37,8 @@ export const CONTAINER_FORMAT = 'kvpwsafe-container';
 const CONTAINER_TYPE = 'application/vnd.kvpwsafe.container+json; v=1';
 const LOGO_TYPE = 'application/vnd.kvpwsafe.logo; v=1';
 const FOLDERS_TYPE = 'application/vnd.kvpwsafe.folders+json; v=1';
+// The folder list with its symbols stays well below the 25 KB of a secret, also when sealed (Base64 + envelope).
+const FOLDERS_MAX = 17_000;
 
 // Vault settings of the admins (Key Vault Administrator): which functions everyone else may use. Restrictive by
 // default – everything off until an admin turns it on. Enforced by the app; Azure roles still apply on top.
@@ -424,19 +427,48 @@ export class VaultSession {
   async folders(containerId) {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).folders ? this.adapter(c).folders(containerId) : [];
+    return (await this.folderDoc(c)).folders;
+  }
+
+  /** { folders: [paths], icons: { [path]: symbol } } of a Key Vault (one secret for both). */
+  async folderDoc(c) {
     let value;
     try {
       value = (await this.kv(c).getSecret(FOLDERS_SECRET)).value;
     } catch (e) {
-      if (e.status === 404) return [];
+      if (e.status === 404) return { folders: [], icons: {} };
       throw e;
     }
-    if (isSealedValue(value)) value = await (await this.requireKey(containerId)).decrypt(JSON.parse(value)[SEALED], `${containerId}/${FOLDERS_SECRET}`);
-    return JSON.parse(value).folders || [];
+    if (isSealedValue(value)) value = await (await this.requireKey(c.id)).decrypt(JSON.parse(value)[SEALED], `${c.id}/${FOLDERS_SECRET}`);
+    const doc = JSON.parse(value);
+    return { folders: doc.folders || [], icons: doc.icons && typeof doc.icons === 'object' ? doc.icons : {} };
   }
 
-  async writeFolders(c, list) {
-    let value = JSON.stringify({ folders: [...new Set(list)].sort() });
+  /** Symbols of the folders: { [path]: icon name or image data URL }. */
+  async folderIcons(containerId) {
+    const c = await this.container(containerId);
+    if (c.kind !== 'keyvault') return this.adapter(c).folderIcons ? this.adapter(c).folderIcons(containerId) : {};
+    return (await this.folderDoc(c)).icons;
+  }
+
+  /** patch: { [path]: symbol } – '' or an invalid value puts the plain folder back. */
+  async setFolderIcons(containerId, patch) {
+    const c = await this.container(containerId);
+    const clean = Object.fromEntries(Object.entries(patch || {}).map(([p, v]) => [String(p), normalizeFolderIcon(v)]).filter(([p]) => p));
+    if (c.kind !== 'keyvault') return this.adapter(c).setFolderIcons(containerId, clean);
+    const doc = await this.folderDoc(c);
+    const icons = { ...doc.icons };
+    for (const [p, v] of Object.entries(clean)) {
+      if (v) icons[p] = v;
+      else delete icons[p];
+    }
+    return this.writeFolders(c, doc.folders, icons);
+  }
+
+  async writeFolders(c, list, icons) {
+    icons ??= (await this.folderDoc(c)).icons;
+    let value = JSON.stringify({ folders: [...new Set(list)].sort(), ...(Object.keys(icons).length ? { icons } : {}) });
+    if (value.length > FOLDERS_MAX) throw new Error(t('Zu viele eigene Ordner-Bilder – bitte einige durch Standardsymbole ersetzen'));
     if (await this.readKeyring(c)) value = JSON.stringify({ [SEALED]: await (await this.requireKey(c.id)).encrypt(value, `${c.id}/${FOLDERS_SECRET}`) });
     await this.kv(c).setSecret(FOLDERS_SECRET, value, { contentType: FOLDERS_TYPE, tags: { kvpwsafe: 'folders' } });
   }
@@ -490,7 +522,9 @@ export class VaultSession {
   async removeFolder(containerId, path) {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).removeFolder(containerId, path);
-    return this.writeFolders(c, (await this.folders(containerId)).filter((f) => f !== path && !f.startsWith(`${path}/`)));
+    const doc = await this.folderDoc(c);
+    const inTree = (f) => f === path || f.startsWith(`${path}/`);
+    return this.writeFolders(c, doc.folders.filter((f) => !inTree(f)), Object.fromEntries(Object.entries(doc.icons).filter(([f]) => !inTree(f))));
   }
 
   async sealTags(key, aad, tags) {
