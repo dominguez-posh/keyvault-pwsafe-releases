@@ -270,7 +270,29 @@ function normalizeServer(s = {}) {
     bastionUrl: normalizeUrl(str(s?.bastionUrl)) || '',
     bastionLoginLink: linkKey(s?.bastionLoginLink),
     bastionVmLink: linkKey(s?.bastionVmLink),
+    // Microsoft tenant of the VM (domain like contoso.com or the tenant ID): the portal opens in that directory (#30).
+    bastionTenant: normalizeTenant(s?.bastionTenant),
   };
+}
+
+/** "contoso.com", "contoso.onmicrosoft.com" or a tenant ID (GUID) – anything else is dropped. */
+export function normalizeTenant(value) {
+  const v = str(value).trim().replace(/^@/, '').toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v) || /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(v) ? v : '';
+}
+
+/**
+ * Bastion link in the VM's tenant: Azure portal links get "#@tenant" (replacing another one), so the portal signs in
+ * to that directory; shareable links (bastion.azure.com) stay as they are.
+ */
+export function bastionUrlInTenant(url, tenant) {
+  const t = normalizeTenant(tenant);
+  if (!t || !/^https:\/\/portal\.azure\.com\//i.test(url || '')) return url || '';
+  const u = String(url);
+  const hash = u.indexOf('#');
+  if (hash < 0) return `${u.replace(/\/?$/, '/')}#@${t}`;
+  const frag = u.slice(hash + 1).replace(/^@[^/]*/, '');
+  return `${u.slice(0, hash)}#@${t}${frag.startsWith('/') || !frag ? frag : `/${frag}`}`;
 }
 
 /** Connection methods a server entry offers (also mirrored into its tags for the server list). */

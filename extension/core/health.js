@@ -63,6 +63,31 @@ export function passwordReport(items, now = Date.now()) {
   };
 }
 
+/**
+ * Logins whose websites support passkeys (public directory of the 2FA Directory project: { domain: { passwordless,
+ * mfa, documentation } }) but that hold no passkey yet – a recommendation next to the password findings (#26).
+ * → [{ key, title, containerId, username, folder, site, kind: 'passwordless' | 'mfa', documentation }]
+ */
+export function passkeyRecommendations(items, directory) {
+  const domains = Object.entries(directory || {}).filter(([, v]) => v && (v.passwordless || v.mfa));
+  if (!domains.length) return [];
+  const out = [];
+  for (const i of items) {
+    if (i.type !== 'login' || i.passkeys?.length) continue;
+    for (const url of i.urls || []) {
+      let host = '';
+      try { host = new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { continue; }
+      const hit = domains.find(([d]) => host === d || host.endsWith(`.${d}`));
+      if (!hit) continue;
+      const [site, v] = hit;
+      out.push({ key: i.key, title: i.title, containerId: i.containerId, username: i.username, folder: i.folder || '', site,
+        kind: v.passwordless ? 'passwordless' : 'mfa', documentation: /^https:\/\//.test(v.documentation || '') ? v.documentation : '' });
+      break;
+    }
+  }
+  return out.sort((a, b) => a.title.localeCompare(b.title));
+}
+
 /** SHA-1 of a password split for the HIBP range API (k-anonymity: only the first 5 hex digits leave the PC). */
 export async function hibpParts(password) {
   const hash = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(password));

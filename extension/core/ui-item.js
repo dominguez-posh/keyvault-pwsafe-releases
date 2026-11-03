@@ -3,7 +3,7 @@
 import { h, icon, iconButton, formatDateTime, avatar, toast, modal } from './dom.js';
 import { totpCode, parseTotp } from './totp.js';
 import { generatePassword, passwordStrength, DEFAULT_OPTIONS } from './generator.js';
-import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods, isMicrosoftLogin, DEVICE_KINDS, deviceOs, defaultPort } from './model.js';
+import { ITEM_TYPES, CERT_MAX_BYTES, FIELD_TYPES, FIELD_FILE_MAX_BYTES, normalizeItem, formatCardNumber, serverMethods, isMicrosoftLogin, DEVICE_KINDS, deviceOs, defaultPort, bastionUrlInTenant } from './model.js';
 import { t } from './i18n.js';
 import { hostFromUrl } from './match.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
@@ -262,8 +262,9 @@ function serverRows(item, ctx) {
   else if (s.tvPassword) rows.push(secretField(t('TeamViewer-Passwort'), s.tvPassword, ctx));
   if (s.bastionUrl) {
     rows.push(h('div', { class: 'field' }, h('label', {}, t('Bastion-Link')), h('div', { class: 'field-row' },
-      h('a', { href: '#', class: 'url', title: s.bastionUrl, onclick: (e) => { e.preventDefault(); ctx.openUrl(s.bastionUrl); } }, s.bastionUrl),
-      iconButton('copy', t('Kopieren'), () => ctx.copy(s.bastionUrl, t('Adresse'))))));
+      h('a', { href: '#', class: 'url', title: s.bastionUrl, onclick: (e) => { e.preventDefault(); ctx.openUrl(bastionUrlInTenant(s.bastionUrl, s.bastionTenant)); } }, s.bastionUrl),
+      iconButton('copy', t('Kopieren'), () => ctx.copy(bastionUrlInTenant(s.bastionUrl, s.bastionTenant), t('Adresse'))))));
+    if (s.bastionTenant) rows.push(h('div', { class: 'field' }, h('label', {}, t('Microsoft-Tenant')), h('div', { class: 'field-row' }, h('span', { class: 'value' }, s.bastionTenant))));
   }
   if (s.mgmtUrl) {
     rows.push(h('div', { class: 'field' }, h('label', {}, t('Verwaltungsseite')), h('div', { class: 'field-row' },
@@ -503,6 +504,12 @@ export function itemForm(item, ctx) {
   // vault would hand them to people without access there (and break for everyone else).
   const sameVault = (options) => (options || []).filter((o) => !o.containerId || o.containerId === containerSelect.value);
   const linkPickers = [];
+  // The entry's own icon or logo when the app provides it (as in its list), else the letter avatar.
+  const pickAvatar = (o) => {
+    const el = o.avatar ? o.avatar() : avatar(o.title, 'avatar');
+    el.classList.add('small');
+    return el;
+  };
   const linkSelect = (name, value, emptyLabel, allOptions = ctx.linkOptions) => {
     if (!allOptions) return h('input', { type: 'hidden', name, value });
     let options = sameVault(allOptions);
@@ -543,7 +550,7 @@ export function itemForm(item, ctx) {
         const hits = options.filter((o) => words.every((w) => [o.title, o.username, o.container].join(' ').toLowerCase().includes(w)));
         list.replaceChildren(...[
           words.length ? null : row('', emptyLabel, '', h('span', { class: 'link-pick-none' }, icon('x', 14))),
-          ...hits.slice(0, LIMIT).map((o) => row(o.key, o.title, [o.username, o.container].filter(Boolean).join(' · '), avatar(o.title, 'avatar small'))),
+          ...hits.slice(0, LIMIT).map((o) => row(o.key, o.title, [o.username, o.container].filter(Boolean).join(' · '), pickAvatar(o))),
           hits.length ? null : h('p', { class: 'muted small link-pick-empty' }, t('Kein Eintrag gefunden.')),
           hits.length > LIMIT ? h('p', { class: 'muted small link-pick-empty' }, t('{count} weitere – Suche verfeinern', { count: hits.length - LIMIT })) : null].filter(Boolean));
       };
@@ -578,6 +585,14 @@ export function itemForm(item, ctx) {
   const adminOptions = ctx.linkOptions && [...ctx.linkOptions].sort((a, b) => Number(!!b.msAdmin) - Number(!!a.msAdmin));
   const srvBastionLogin = linkSelect('srvBastionLogin', sv.bastionLoginLink, t('Keine – im Browser selbst anmelden'), adminOptions);
   const srvBastionVm = linkSelect('srvBastionVm', sv.bastionVmLink, t('Wie bei RDP'));
+  const srvBastionTenant = h('input', { name: 'srvBastionTenant', value: sv.bastionTenant || '', placeholder: t('z. B. contoso.com oder Tenant-ID'), autocomplete: 'off', spellcheck: 'false' });
+  // Empty: taken from the Microsoft sign-in's domain once one is chosen (alex@contoso.com → contoso.com).
+  srvBastionLogin.addEventListener?.('change', () => {
+    if (srvBastionTenant.value.trim()) return;
+    const o = (ctx.linkOptions || []).find((x) => x.key === srvBastionLogin.value);
+    const domain = String(o?.username || '').split('@')[1];
+    if (domain) srvBastionTenant.value = domain.toLowerCase();
+  });
   const syncServer = () => {
     srvOwn.hidden = !!srvRdpLink.value;
     srvTvOwn.hidden = !!srvTvLink.value;
@@ -608,7 +623,8 @@ export function itemForm(item, ctx) {
   containerSelect.addEventListener('change', () => linkPickers.forEach((refresh) => refresh()));
   const bastionBox = h('div', {},
     row(t('Bastion-Link'), srvBastion),
-    h('div', { class: 'grid2' }, row(t('Microsoft-Anmeldung (Bastion)'), srvBastionLogin), row(t('Konto auf dem Server (Bastion)'), srvBastionVm)));
+    h('div', { class: 'grid2' }, row(t('Microsoft-Anmeldung (Bastion)'), srvBastionLogin), row(t('Konto auf dem Server (Bastion)'), srvBastionVm)),
+    row(t('Microsoft-Tenant'), srvBastionTenant));
   srvKind.addEventListener('change', syncKind);
   srvOs.addEventListener('change', syncKind);
   syncKind();
@@ -753,7 +769,7 @@ export function itemForm(item, ctx) {
       server: type === 'server' ? {
         kind: srvKind.value, os: srvOs.value, mgmtUrl: srvMgmt.value, host: srvHost.value, port: srvPort.value, rdpLink: srvRdpLink.value, tvId: srvTvId.value,
         tvLink: srvTvLink.value, tvPassword: srvTvLink.value ? '' : srvTvPass.value,
-        bastionUrl: srvBastion.value, bastionLoginLink: srvBastionLogin.value, bastionVmLink: srvBastionVm.value,
+        bastionUrl: srvBastion.value, bastionLoginLink: srvBastionLogin.value, bastionVmLink: srvBastionVm.value, bastionTenant: srvBastionTenant.value,
       } : undefined,
       msAdmin: login && msAdmin.checked,
       sophos: login && sophos.checked,

@@ -26,14 +26,14 @@ import { buildInvite, parseInvite, ROLES } from '../extension/core/azure.js';
 import { vaultHost, KV_SCOPE } from '../extension/core/keyvault.js';
 import { SAMPLE_CSV } from '../extension/core/import-sample.js';
 import { mapLimit, decodeJwtPayload } from '../extension/core/util.js';
-import { passwordReport, hibpParts, hibpCount } from '../extension/core/health.js';
+import { passwordReport, hibpParts, hibpCount, passkeyRecommendations } from '../extension/core/health.js';
 import { OfflineMirror, isNetworkError } from './offline.js';
 import { itemMatchesHost } from '../extension/core/match.js';
 import { setLanguage, t } from '../extension/core/i18n.js';
 import { FILE_EXTENSION } from '../extension/core/filevault.js';
 import { createDemoBackend } from '../extension/core/demo.js';
 import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, readBackupHeader } from '../extension/core/backup.js';
-import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder, fqdnUserName, resolveLogin } from '../extension/core/model.js';
+import { CERT_MAX_BYTES, limitFolderDepth, requireFolderDepth, normalizeFolder, fqdnUserName, resolveLogin, bastionUrlInTenant } from '../extension/core/model.js';
 import { moveFolderIcons } from '../extension/core/folder-icons.js';
 import { itemsToCsv } from '../extension/core/export.js';
 import { WindowsProvider, ORIGIN as WINDOWS_ORIGIN, providerStatus, registerProvider, rememberDesktopCommand, ensureProvider, removeProvider, machineSetupStatus, runMachineSetup } from './windows-provider.js';
@@ -390,6 +390,13 @@ function requirePin() {
 let keptVault = false;
 let keptAccount = null;
 
+/** Windows is locked (idle state "locked"; smoke tests set KVPWSAFE_TEST_WINDOWS_LOCKED): lock the app too. */
+function lockIfWindowsLocked() {
+  const locked = smokeTest && process.env.KVPWSAFE_TEST_WINDOWS_LOCKED ? process.env.KVPWSAFE_TEST_WINDOWS_LOCKED === '1' : powerMonitor.getSystemIdleState(1) === 'locked';
+  if (opened && locked) return lockNow().then(() => true);
+  return Promise.resolve(false);
+}
+
 async function lockNow() {
   mcp?.revoke();
   if (!opened && !auth.account) return;
@@ -545,8 +552,28 @@ const PERSONAL_FILE = 'Keevault-Persoenlich.kvpws';
 const fileLocations = new Map(); // file path → { kind, provider, providerStatus, inSync }
 let recentPin = null; // { pin, at } after a correct PIN – used once to bind / unlock the personal vault key
 
+/**
+ * Location of a folder or file (see locateRaw) plus, for cloud folders, whether the sync client runs (OneDrive.exe;
+ * null for providers we cannot check) and whether the device is online – a quit OneDrive leaves the Cloud Files
+ * status at its last value, so the file would silently stop syncing (#15).
+ */
+async function locate(target) {
+  const info = await locateRaw(target);
+  if (info?.kind !== 'cloud') return info;
+  return { ...info, clientRunning: await syncClientRunning(info.provider), online: net.isOnline() };
+}
+
+/** Is the sync client of a cloud folder running? Known for OneDrive; null for other providers or when unknown. */
+function syncClientRunning(provider) {
+  if (smokeTest && process.env.KVPWSAFE_TEST_SYNC_CLIENT) return Promise.resolve(process.env.KVPWSAFE_TEST_SYNC_CLIENT === 'running');
+  if (demo || process.platform !== 'win32' || !/onedrive/i.test(provider || '')) return Promise.resolve(demo ? true : null);
+  return new Promise((resolve) => {
+    execFileCb('tasklist', ['/FI', 'IMAGENAME eq OneDrive.exe', '/NH', '/FO', 'CSV'], { windowsHide: true, timeout: 5000 }, (err, out) => resolve(err ? null : /"OneDrive\.exe"/i.test(String(out))));
+  });
+}
+
 /** Location of a folder or file via Keevault-Update.exe --location (Cloud Files API, drive type). */
-function locate(target) {
+function locateRaw(target) {
   // Smoke tests: a temporary folder stands in for a network drive (never the user's real OneDrive).
   if (smokeTest && process.env.KVPWSAFE_TEST_REMOTE && path.resolve(target).startsWith(path.resolve(process.env.KVPWSAFE_TEST_REMOTE))) return Promise.resolve(process.env.KVPWSAFE_TEST_PROVIDER ? { kind: 'cloud', provider: process.env.KVPWSAFE_TEST_PROVIDER, providerStatus: 'idle', inSync: true } : { kind: 'network', file: false });
   // Demo: its own OneDrive stand-in in the demo profile (the personal vault wizard never touches the real one).
@@ -571,8 +598,17 @@ async function refreshFileLocations() {
   let changedAny = false;
   for (const p of config.get().fileContainers || []) {
     const info = await locate(p);
-    if (JSON.stringify(info) !== JSON.stringify(fileLocations.get(p) || null)) changedAny = true;
+    const before = fileLocations.get(p);
+    if (JSON.stringify(info) !== JSON.stringify(before || null)) changedAny = true;
     if (info) fileLocations.set(p, info);
+    // The sync client just stopped: say so once, also when the window is in the background (#15).
+    if (info?.clientRunning === false && before?.clientRunning !== false && opened) {
+      const name = info.provider || 'OneDrive';
+      send({ type: 'sync-stopped', path: p, provider: name });
+      if (Notification.isSupported() && !smokeTest && !win?.isFocused()) {
+        new Notification({ title: 'Keevault', body: t('{provider} läuft nicht – Änderungen an Tresoren in diesem Ordner werden nicht synchronisiert. Starte {provider}.', { provider: name }) }).show();
+      }
+    }
   }
   return changedAny;
 }
@@ -764,7 +800,7 @@ async function signInFor(host) {
   if (!job) return null;
   const item = typeof job.source === 'string' ? await usableItem(...splitEntryKey(job.source)) : job.source;
   // Bastion's sign-in on the VM always gets the FQDN form (user@contoso.local) when the account knows its domain.
-  const username = job.mode === 'form' ? fqdnUserName(item) : item.username || '';
+  const username = job.mode === 'form' || job.mode === 'bastion' ? fqdnUserName(item) : item.username || '';
   // passkey: the account has one – the extension prefers it to the password and answers Microsoft's prompt by itself.
   return { mode: job.mode, username, password: item.password || '', totp: item.totp ? (await totpCode(item.totp))?.code || '' : '', passkey: !!item.passkeys?.length };
 }
@@ -820,10 +856,25 @@ async function launchSsh(host, port, username, password) {
  * server, starts mstsc and removes it again after the connection was made (a credential saved before is restored).
  * The password goes through stdin, never onto a command line.
  */
-function launchRdp(host, port, username, password) {
-  if (smokeTest) return { prompt: !password };
+async function launchRdp(host, port, username, password) {
+  if (smokeTest) {
+    // Smoke: KVPWSAFE_TEST_CREDENTIAL_GUARD=1 takes the Credential Guard way (nothing is started).
+    if (process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD === '1' && password) return { prompt: true, copied: true, credentialGuard: true };
+    return { prompt: !password };
+  }
   if (process.platform !== 'win32') throw new Error(t('Remotedesktop gibt es nur unter Windows.'));
   const target = port && port !== 3389 ? `${host}:${port}` : host;
+  // Credential Guard forbids saved credentials for remote desktop ("Windows Defender Credential Guard lässt die
+  // Verwendung von gespeicherten Anmeldeinformationen nicht zu", #29): mstsc with the user name filled in, the password
+  // on the clipboard (cleared as usual) for the Windows dialog.
+  if (password && (await credentialGuardRunning())) {
+    const file = path.join(app.getPath('temp'), `keevault-rdp-${process.pid}.rdp`);
+    await fs.writeFile(file, [`full address:s:${target}`, `username:s:${username}`, 'prompt for credentials:i:1', ''].join('\r\n'), 'utf8');
+    spawn('mstsc.exe', [file], { detached: true, stdio: 'ignore' }).unref();
+    setTimeout(() => fs.rm(file, { force: true }).catch(() => {}), 60_000).unref?.();
+    await copyToClipboard(password);
+    return { prompt: true, copied: true, credentialGuard: true };
+  }
   const exe = helperExe();
   if (!exe || !password) {
     spawn('mstsc.exe', [`/v:${target}`], { detached: true, stdio: 'ignore' }).unref();
@@ -833,6 +884,43 @@ function launchRdp(host, port, username, password) {
   child.stdin.end([host, String(port || 3389), username, password].join('\n'));
   child.unref();
   return { prompt: false };
+}
+
+/**
+ * Websites that support passkeys: the 2FA Directory's public list (passkeys.2fa.directory), kept for a day in memory
+ * and as a file in the profile (used when offline). Smoke tests set KVPWSAFE_TEST_PASSKEY_DIRECTORY (JSON).
+ */
+const PASSKEY_DIRECTORY_URL = 'https://passkeys-api.2fa.directory/v1/supported.json';
+let passkeyDirectoryCache = null; // { at, data }
+async function passkeyDirectory() {
+  if (smokeTest && process.env.KVPWSAFE_TEST_PASSKEY_DIRECTORY) return JSON.parse(process.env.KVPWSAFE_TEST_PASSKEY_DIRECTORY);
+  if (passkeyDirectoryCache && Date.now() - passkeyDirectoryCache.at < 86_400_000) return passkeyDirectoryCache.data;
+  const file = path.join(app.getPath('userData'), 'passkey-directory.json');
+  try {
+    const res = await secureFetch(PASSKEY_DIRECTORY_URL, { headers: { 'User-Agent': 'Keevault' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data || typeof data !== 'object') throw new Error('unexpected format');
+    passkeyDirectoryCache = { at: Date.now(), data };
+    await fs.writeFile(file, JSON.stringify(data)).catch(() => {});
+    return data;
+  } catch (e) {
+    const saved = JSON.parse(await fs.readFile(file, 'utf8').catch(() => 'null'));
+    if (saved) return saved;
+    throw e;
+  }
+}
+
+/** Is Windows Defender Credential Guard running (Win32_DeviceGuard: security service 1)? Asked once per start. */
+let credentialGuard = null;
+function credentialGuardRunning() {
+  if (credentialGuard) return credentialGuard;
+  credentialGuard = new Promise((resolve) => {
+    execFileCb('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      '(Get-CimInstance -Namespace root\\Microsoft\\Windows\\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop).SecurityServicesRunning -contains 1'],
+    { windowsHide: true, timeout: 8000 }, (err, out) => resolve(!err && /True/i.test(String(out))));
+  });
+  return credentialGuard;
 }
 
 /** TeamViewer with ID (and password when stored); without the program installed: its link, password to clipboard. */
@@ -2515,7 +2603,7 @@ const api = {
     if (method === 'rdp') {
       if (!s.host) throw new Error(t('Kein Server (IP oder Name) hinterlegt'));
       const account = await serverAccount(item, s.rdpLink);
-      return { method, ...launchRdp(s.host, s.port, account.username, account.password) };
+      return { method, ...(await launchRdp(s.host, s.port, account.username, account.password)) };
     }
     if (method === 'ssh') {
       if (!s.host) throw new Error(t('Kein Server (IP oder Name) hinterlegt'));
@@ -2537,9 +2625,13 @@ const api = {
       if (s.bastionLoginLink) addSignInJob(MS_LOGIN_HOSTS, s.bastionLoginLink, 'microsoft');
       // The server account goes into Bastion's own sign-in form (portal blade or shareable link page).
       const vm = s.bastionVmLink || s.rdpLink || (item.username || item.password ? { username: item.username, password: item.password } : null);
-      if (vm) addSignInJob(['bastion.azure.com', 'reactblade.portal.azure.net', 'portal.azure.net'], vm, 'form');
-      if (!smokeTest) await shell.openExternal(s.bastionUrl);
-      return { method, signIn: !!bridge?.clients?.size };
+      // 'bastion': fill Bastion's form and press its "Connect" (#31).
+      if (vm) addSignInJob(['bastion.azure.com', 'reactblade.portal.azure.net', 'portal.azure.net'], vm, 'bastion');
+      // In the VM's tenant (#30): the portal signs in to that directory, the Microsoft sign-in above picks the account.
+      const url = bastionUrlInTenant(s.bastionUrl, s.bastionTenant);
+      lastAdminUrl = url;
+      if (!smokeTest) await shell.openExternal(url);
+      return { method, signIn: !!bridge?.clients?.size, url };
     }
     throw new Error(t('Unbekannte Verbindungsart'));
   },
@@ -2687,7 +2779,9 @@ const api = {
         i.pwnedCount = hibpCount(await ranges.get(prefix), suffix);
       });
     }
-    return { ...passwordReport(items), skipped, hibp };
+    // Passkey recommendations (#26): the public directory is downloaded (nothing about the vault leaves the PC).
+    const directory = await passkeyDirectory().catch((e) => { diag(`PASSKEY directory: ${e.message}`); return null; });
+    return { ...passwordReport(items), skipped, hibp, passkeys: passkeyRecommendations(items, directory), passkeyDirectory: !!directory };
   },
   /** Who may do what in the Key Vault vaults (role assignments incl. inherited ones) – for audits. */
   async accessReport() {
@@ -2957,6 +3051,9 @@ app.whenReady().then(async () => {
     const minutes = Number(config.get().autoLockMinutes) || 0;
     if (opened && !smokeTest && minutes > 0 && powerMonitor.getSystemIdleTime() >= minutes * 60) lockNow();
   }, 30_000);
+  // Windows locked (#28): the "lock-screen" event does not always arrive (e.g. only in the tray, some session
+  // changes) – the idle state "locked" catches it within a few seconds, so unlocking needs the PIN again.
+  setInterval(() => { if (!smokeTest) lockIfWindowsLocked(); }, 3_000).unref?.();
   // Pending index writes (debounced) go out before the app quits.
   let flushedBeforeQuit = false;
   app.on('before-quit', (e) => {
@@ -3647,7 +3744,35 @@ function runSmokeTest() {
           if (!dialogText) errors.push('personal: protection dialog did not open');
           else if (/Benutzer einladen|Invite user/.test(dialogText)) errors.push('personal: protection dialog offers "Invite user"');
           else if (/Masterpasswort entfernen|Remove master password/.test(dialogText)) errors.push('personal: protection dialog offers "Remove master password"');
+          // "Change master password" shows how strong the new one is while typing (#22): weak red, strong green.
+          await js('[...document.querySelectorAll("dialog[open] button")].find((b) => /Masterpasswort ändern|Change master password/.test(b.textContent))?.click()');
+          await sleep(400);
+          const meterFor = (pw) => js(`(() => { const d = [...document.querySelectorAll("dialog[open]")].at(-1); const i = d?.querySelector("input[type=password]"); const m = d?.querySelector(".strength");
+            if (!i || !m) return "missing"; i.value = ${JSON.stringify(pw)}; i.dispatchEvent(new Event("input")); return m.dataset.level + "|" + getComputedStyle(m.querySelector("span"), "::after").backgroundColor; })()`);
+          const weak = String(await meterFor('abc'));
+          const strong = String(await meterFor('Kv!9xQ#2mLp$7wZr&4tB'));
+          if (weak === 'missing' || !/^[01]\|/.test(weak) || !/^[34]\|/.test(strong) || weak.split('|')[1] === strong.split('|')[1]) errors.push(`personal: no strength bar when changing the master password (${weak} / ${strong})`);
           await js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click())');
+          // OneDrive quit (#15): the personal vault's folder stands in for OneDrive; first running, then stopped – a
+          // message, a red mark and a notice above the vault's list.
+          Object.assign(process.env, { KVPWSAFE_TEST_PROVIDER: 'OneDrive', KVPWSAFE_TEST_SYNC_CLIENT: 'running' });
+          await refreshFileLocations();
+          changed();
+          await sleep(500);
+          await js('document.querySelector(".personal-slot .nav")?.click()');
+          await sleep(600);
+          const syncView = () => js('JSON.stringify({ problem: !!document.querySelector(".personal-slot .source-badge.problem"), notice: document.querySelector(".list-pane .notice.warn")?.textContent || "", toast: document.getElementById("toast")?.classList.contains("show") ? document.getElementById("toast").textContent : "" })');
+          let sv = JSON.parse(await syncView());
+          if (sv.problem || /läuft nicht/.test(sv.notice)) errors.push(`sync: warning while OneDrive runs (${JSON.stringify(sv)})`);
+          process.env.KVPWSAFE_TEST_SYNC_CLIENT = 'stopped';
+          await refreshFileLocations();
+          changed();
+          for (let i = 0; i < 10 && !(sv = JSON.parse(await syncView())).notice; i++) await sleep(300);
+          if (!sv.problem || !/OneDrive läuft nicht/.test(sv.notice) || !/OneDrive läuft nicht/.test(sv.toast)) errors.push(`sync: no warning after OneDrive stopped (${JSON.stringify(sv)})`);
+          delete process.env.KVPWSAFE_TEST_PROVIDER;
+          delete process.env.KVPWSAFE_TEST_SYNC_CLIENT;
+          await refreshFileLocations();
+          changed();
         } catch (e) {
           errors.push(`personal: ${e.message}`);
         }
@@ -3783,6 +3908,7 @@ function runSmokeTest() {
           lastAdminUrl: () => lastAdminUrl,
           confirmAgentRead,
           waitForUnlock,
+          lockIfWindowsLocked,
           signInDone: (host) => browserHandlers.signInDone({ host }),
           // The feature checks use PIN 2468 (the personal vault check sets the same one).
           ensurePin: async () => {

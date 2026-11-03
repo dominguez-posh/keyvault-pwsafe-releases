@@ -1016,7 +1016,34 @@ export class VaultSession {
     return saved;
   }
 
+  /**
+   * Entries of the same vault that use this entry as their account (devices: RDP, TeamViewer, Bastion; linked logins)
+   * → their titles. Such a login must not disappear under them (#34).
+   */
+  async linkedFrom(containerId, id) {
+    const key = `${containerId}/${id}`;
+    const candidates = (await this.summaries()).filter((s) => s.containerId === containerId && s.id !== id && (s.type === 'server' || s.loginLinked));
+    const out = [];
+    for (const s of candidates) {
+      const it = await this.getItem(containerId, s.id).catch(() => null);
+      const sv = it?.server || {};
+      if (it && [sv.rdpLink, sv.tvLink, sv.bastionLoginLink, sv.bastionVmLink, it.loginLink].includes(key)) out.push(it.title);
+    }
+    return out;
+  }
+
+  /** Refuses while other entries use this login (see linkedFrom). */
+  async requireUnlinked(containerId, id) {
+    const s = (await this.summaries()).find((x) => x.containerId === containerId && x.id === id);
+    if (s && s.type !== 'login') return;
+    const users = await this.linkedFrom(containerId, id);
+    if (users.length) {
+      throw new Error(t('„{title}“ wird noch verwendet von: {list}. Zuerst dort die Verknüpfung lösen oder das Asset löschen.', { title: s?.title || id, list: users.join(', ') }));
+    }
+  }
+
   async deleteItem(containerId, id) {
+    await this.requireUnlinked(containerId, id);
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).deleteItem(containerId, id, await this.actor());
     await this.kv(c).deleteSecret(id);
@@ -1030,6 +1057,8 @@ export class VaultSession {
     // Nothing leaves a shared vault into the personal one (only the owner could read it there).
     const [from, to] = await Promise.all([this.container(fromId), this.container(toId)]);
     if (to.personal && !from.personal) throw new Error(t('Einträge aus geteilten Tresoren lassen sich nicht in den persönlichen Tresor verschieben'));
+    // Links stay within one vault: a login in use there cannot leave it (#34).
+    if (fromId !== toId) await this.requireUnlinked(fromId, id);
     const item = await this.getItem(fromId, id, { fresh: true });
     const saved = await this.saveItem(toId, { ...item, id: '', folder: folder ?? item.folder });
     await this.deleteItem(fromId, id);

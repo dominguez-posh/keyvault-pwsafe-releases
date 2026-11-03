@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { expiryState, daysUntil, expiringEntries, passwordReport, hibpParts, hibpCount } from '../extension/core/health.js';
+import { expiryState, daysUntil, expiringEntries, passwordReport, hibpParts, hibpCount, passkeyRecommendations } from '../extension/core/health.js';
 
 const now = Date.parse('2026-10-28T10:00:00Z');
 
@@ -46,4 +46,19 @@ test('HIBP: k-anonymity split and range parsing', async () => {
   const range = '0018A45C4D1DEF81644B54AB7F969B88D65:1\r\n1E4C9B93F3F0682250B6CF8331B7EE68FD8:9545824\r\n00D4F6E8FA6EECAD2A3AA415EEC418D38EC:0';
   assert.equal(hibpCount(range, suffix), 9545824);
   assert.equal(hibpCount(range, 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'), 0);
+});
+
+test('passkey recommendation: logins on websites of the public directory without a passkey yet (#26)', () => {
+  const directory = { 'github.com': { passwordless: 'allowed', documentation: 'https://docs.github.com/passkeys' }, 'example.org': { mfa: 'allowed' }, 'nope.com': { notes: 'x' } };
+  const items = [
+    { key: 'k/1', type: 'login', title: 'GitHub', urls: ['https://www.github.com/login'], passkeys: [] },
+    { key: 'k/2', type: 'login', title: 'Example', urls: ['https://login.example.org'] },
+    { key: 'k/3', type: 'login', title: 'GitHub mit Passkey', urls: ['https://github.com'], passkeys: [{ rpId: 'github.com' }] },
+    { key: 'k/4', type: 'login', title: 'Nope', urls: ['https://nope.com'] },
+    { key: 'k/5', type: 'note', title: 'Notiz', urls: ['https://github.com'] },
+  ];
+  const r = passkeyRecommendations(items, directory);
+  assert.deepEqual(r.map((x) => [x.key, x.site, x.kind]), [['k/2', 'example.org', 'mfa'], ['k/1', 'github.com', 'passwordless']]);
+  assert.equal(r.find((x) => x.key === 'k/1').documentation, 'https://docs.github.com/passkeys');
+  assert.deepEqual(passkeyRecommendations(items, null), []);
 });

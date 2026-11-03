@@ -4,6 +4,46 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.20 – 2026-11-03
+- Schmales Fenster: Der Passkey eines Eintrags steht bündig in seinem Feld statt als eingerückter Kasten im Kasten; Benutzername und Adresse brechen nicht mehr mitten im Wort um.
+- Tresorsuche in der Seitenleiste: Das Suchfeld nimmt die ganze Breite der Zeile „Tresore“ ein, statt als kurzes Feld über der abgeschnittenen Überschrift zu liegen.
+- Einrichtungs-Assistenten ohne Scrollbalken: breiterer Dialog, der Schritt „Ort“ zweispaltig (Abonnement/Ressourcengruppe, Key Vault/Region, Anzeigename/Name).
+- Ein Menü statt „Menü“ und „Ansicht“: oben Design und Zoom, dann Einstellungen, Werkzeuge und Sperren. Alle Ansichtseinstellungen (Zoom, Design, Transparenz, Speicherort, PIM-Knöpfe, Zurücksetzen) stehen unter Einstellungen → Ansicht.
+- Admin-Modus nur noch auf Wunsch: Einstellungen → Ansicht → „Admin-Modus anbieten“ zeigt unten neben „Hilfe“ einen Schalter (Einschalten mit der App-PIN). Standardmäßig aus – andere Benutzer sehen ihn nicht mehr.
+- Fehlermeldungen in Dialogen (z. B. im Papierkorb) erscheinen vor dem Dialog statt dahinter.
+- Masterpasswort festlegen oder ändern (persönlicher Tresor, Datei-Tresore): Ein roter, gelber oder grüner Balken zeigt beim Tippen, wie sicher das Passwort ist.
+- OneDrive-Prüfung: Läuft OneDrive nicht, warnt Keevault – Meldung (auch als Windows-Benachrichtigung, wenn das Fenster im Hintergrund ist), roter Punkt am Tresor und ein Hinweis über der Liste, dass Änderungen nur auf diesem Gerät bleiben. Ohne Netzwerk zeigt er gelb „offline – wird später synchronisiert“ statt eines Fehlers. Geprüft wird beim Start und jede Minute.
+- Behoben: Wurde der Admin-Modus umgeschaltet, während die Liste neu geladen wurde, sprang die Anzeige auf den alten Zustand zurück.
+- Zugriffsbericht und Passwort-Check: breiter Dialog, lange Namen umbrechen statt waagerecht zu scrollen. Kurze Einträge zeigen keinen Scrollbalken mehr.
+- Passwort-Check empfiehlt Passkeys: Logins, deren Website laut der öffentlichen Liste passkeys.2fa.directory Passkeys kann (ohne Passwort oder als zweiter Faktor) und die noch keinen haben, stehen in einem eigenen Abschnitt mit Link zur Anleitung. Die Liste wird nur heruntergeladen, verglichen wird auf dem PC.
+- Bastion im Browser: Öffnest du die Bastion-Anmeldung einer VM direkt im Browser, bietet Keevault die Logins an. Das gewählte Konto wird eingetragen und verbunden; mit „Als Asset speichern“ legt Keevault die VM als Asset an, verknüpft mit diesem Konto (oder verknüpft ein vorhandenes).
+- Bastion aus der App: Keevault drückt nach dem Ausfüllen auch „Connect“, fragt danach nicht mehr „Bastion-Zugang speichern?“ und schließt den Tab mit dem Formular, sobald Bastion die Sitzung im neuen Tab öffnet. Neues Feld „Microsoft-Tenant“ am Asset (Domain oder Tenant-ID; vorbelegt aus der Microsoft-Anmeldung): Das Portal öffnet in diesem Verzeichnis.
+- Sperren, wenn Windows gesperrt wird: zusätzlich zur Windows-Meldung prüft Keevault alle 3 Sekunden, ob Windows gesperrt ist – danach ist wieder die PIN nötig.
+- Remotedesktop mit Credential Guard: Windows lässt dort keine gespeicherten Anmeldedaten zu. Keevault startet die Verbindung dann mit vorausgefülltem Benutzernamen und legt das Passwort in die Zwischenablage (im Windows-Dialog mit Strg+V einfügen).
+- Eintrag verknüpfen: Die Auswahl zeigt die Symbole und Logos der Einträge wie die Liste.
+- Ein Login, den ein Asset (RDP, TeamViewer, Bastion) oder ein verknüpfter Login verwendet, lässt sich nicht mehr löschen oder in einen anderen Tresor verschieben, bis die Verknüpfung gelöst oder das Asset gelöscht ist. Ein wiederhergestelltes Asset behält seine Verknüpfung.
+- Seitenleiste mindestens 280 px breit (Standard 300 px), damit längere Tresornamen Platz haben. Im Admin-Modus optional ein PIM-Knopf zwischen „Keevault for Admins“ und dem Schloss (Einstellungen → Ansicht → „PIM-Knopf im Admin-Modus“, standardmäßig aus).
+
+### English
+- Narrow window: an entry's passkey sits flush in its field instead of an indented box inside the box; user name and address no longer break mid-word.
+- Vault search in the sidebar: the search field takes the full width of the "Vaults" row instead of a short field over the cut-off heading.
+- Setup wizards without scrollbars: wider dialog, the "Location" step in two columns (subscription/resource group, Key Vault/region, display name/name).
+- One menu instead of "Menu" and "View": design and zoom on top, then settings, tools and lock. Every view setting (zoom, design, transparency, location marks, PIM buttons, reset) is under Settings → View.
+- Admin mode only on request: Settings → View → "Offer admin mode" shows a switch next to "Help" at the bottom (switched on with the app PIN). Off by default – other users no longer see it.
+- Error messages in dialogs (e.g. in the trash) appear in front of the dialog instead of behind it.
+- Setting or changing a master password (personal vault, file vaults): a red, yellow or green bar shows how strong the password is while typing.
+- OneDrive check: if OneDrive is not running, Keevault warns – a message (also as a Windows notification when the window is in the background), a red dot on the vault and a notice above the list that changes stay on this device only. Without network it shows yellow "offline – synchronised later" instead of an error. Checked at start and every minute.
+- Fixed: switching admin mode while the list was reloading made the display jump back to the old state.
+- Access report and password check: wide dialog, long names wrap instead of scrolling sideways. Short entries no longer show a scrollbar.
+- The password check recommends passkeys: logins whose website supports passkeys according to the public list passkeys.2fa.directory (without password or as second factor) and that have none yet are listed in their own section with a link to the guide. The list is only downloaded, the comparison happens on the PC.
+- Bastion in the browser: opening a VM's Bastion sign-in directly in the browser, Keevault offers the logins. The chosen account is filled in and connected; with "Save as asset" Keevault keeps the VM as an asset linked to that account (or links an existing one).
+- Bastion from the app: after filling in, Keevault also presses "Connect", no longer asks "Save Bastion access?" and closes the tab with the form once Bastion opens the session in a new tab. New field "Microsoft tenant" on the asset (domain or tenant ID; preset from the Microsoft sign-in): the portal opens in that directory.
+- Lock when Windows locks: besides Windows' notification Keevault checks every 3 seconds whether Windows is locked – the PIN is needed again afterwards.
+- Remote desktop with Credential Guard: Windows allows no saved credentials there. Keevault then starts the connection with the user name filled in and puts the password on the clipboard (paste it into the Windows dialog with Ctrl+V).
+- Link entry: the picker shows the entries' icons and logos like the list.
+- A login used by an asset (RDP, TeamViewer, Bastion) or a linked login can no longer be deleted or moved to another vault until the link is removed or the asset is deleted. A restored asset keeps its link.
+- Sidebar at least 280 px wide (default 300 px) so longer vault names fit. In admin mode an optional PIM button between "Keevault for Admins" and the lock (Settings → View → "PIM button in admin mode", off by default).
+
 ## 0.9.19 – 2026-11-03
 - Erster Start auf einem neuen Gerät: Kein Tresor wird mehr von selbst verbunden. Es öffnet sich der Assistent für den persönlichen Tresor, danach ein Einrichtungs-Assistent für einen Team-Tresor, der jeden Schritt erklärt: was ein Tresor ist, Anmeldung, Ort (Abonnement, Ressourcengruppe, neuer oder vorhandener leerer Key Vault), Zugriff, Notfallkonten, Prüfen und Erstellen. Er ersetzt auch den bisherigen Dialog „Neuen Key-Vault-Tresor erstellen“. Bestehende Installationen behalten ihre Tresore.
 - Gefundene Keevault-Tresore verbindet die App nur noch, wenn „Gefundene Keevault-Tresore automatisch verbinden“ (Einstellungen → Anmeldung) an ist – bei neuen Installationen ist es aus; vorhandene Tresore wählst du unter „Vorhandenen Key Vault hinzufügen“ aus der Liste.
