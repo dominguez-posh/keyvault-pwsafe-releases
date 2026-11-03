@@ -23,6 +23,16 @@ const SAMPLE = {
   ],
 };
 
+// Example Azure around the vaults (setup wizard): resource groups, regions and an empty Key Vault to take over.
+const SUB = '00000000-0000-0000-0000-000000000000';
+const GROUPS = [
+  { name: 'rg-pwsafe', location: 'germanywestcentral' },
+  { name: 'rg-security', location: 'westeurope' },
+  { name: 'rg-team-it', location: 'germanywestcentral' },
+];
+const REGIONS = [{ name: 'germanywestcentral', displayName: 'Germany West Central' }, { name: 'westeurope', displayName: 'West Europe' },
+  { name: 'northeurope', displayName: 'North Europe' }, { name: 'switzerlandnorth', displayName: 'Switzerland North' }];
+
 export function createDemoBackend() {
   const store = new Map(); // vault -> Map(name -> versions[])
   const deleted = new Map();
@@ -36,6 +46,20 @@ export function createDemoBackend() {
       store.get(v.name).set(`pws-demo${++seq}`, [{ version: `v${seq}a`, value, contentType, tags, attributes: { enabled: true, updated: now() - seq * 3600 } }]);
     }
   }
+
+  // Key Vault resources (ARM): the demo vaults, an empty one in rg-security and the ones created in the wizard.
+  const vaultResources = new Map(VAULTS.map((v) => [v.name, { group: 'rg-pwsafe', location: 'germanywestcentral', tags: { kvpwsafe: 'container', 'kvpwsafe-name': v.displayName } }]));
+  for (const name of ['kv-pws-demo-leer']) {
+    store.set(name, new Map());
+    deleted.set(name, new Map());
+    vaultResources.set(name, { group: 'rg-security', location: 'westeurope', tags: {} });
+  }
+  const vaultResource = (name) => {
+    const r = vaultResources.get(name);
+    return { id: `/subscriptions/${SUB}/resourceGroups/${r.group}/providers/Microsoft.KeyVault/vaults/${name}`, name, location: r.location, tags: r.tags,
+      properties: { tenantId: SUB, vaultUri: `https://${name}.vault.azure.net/`, enableRbacAuthorization: true, enableSoftDelete: true, softDeleteRetentionInDays: 90,
+        enablePurgeProtection: !!r.purge, provisioningState: 'Succeeded', sku: { family: 'A', name: 'standard' } } };
+  };
 
   const json = (status, body) => new Response(body === undefined ? '' : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const resourceId = (name) => `/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-kvpwsafe-demo/providers/Microsoft.KeyVault/vaults/${name}`;
@@ -84,7 +108,31 @@ export function createDemoBackend() {
     return json(400, { error: { message: 'Im Demo-Modus nicht unterstützt' } });
   }
 
-  function arm(url, method) {
+  function arm(url, method, body) {
+    const p = url.pathname;
+    if (/^\/subscriptions\/[^/]+\/resourcegroups$/i.test(p)) return json(200, { value: GROUPS.map((g) => ({ id: `/subscriptions/${SUB}/resourceGroups/${g.name}`, ...g })) });
+    if (/^\/subscriptions\/[^/]+\/locations$/.test(p)) return json(200, { value: REGIONS.map((r) => ({ ...r, metadata: { regionType: 'Physical' } })) });
+    if (p.endsWith('/providers/Microsoft.KeyVault/checkNameAvailability')) {
+      const { name } = JSON.parse(body || '{}');
+      return json(200, store.has(name) ? { nameAvailable: false, reason: 'AlreadyExists', message: `Der Name „${name}“ ist bereits vergeben.` } : { nameAvailable: true });
+    }
+    const group = /\/resourceGroups\/([^/]+)\/providers\/Microsoft\.KeyVault\/vaults$/i.exec(p);
+    if (group && method === 'GET') return json(200, { value: [...vaultResources].filter(([, r]) => r.group === group[1]).map(([name]) => vaultResource(name)) });
+    const one = /\/resourceGroups\/([^/]+)\/providers\/Microsoft\.KeyVault\/vaults\/([^/]+)$/i.exec(p);
+    if (one && method === 'PUT') {
+      const b = JSON.parse(body || '{}');
+      store.set(one[2], new Map());
+      deleted.set(one[2], new Map());
+      vaultResources.set(one[2], { group: one[1], location: b.location, tags: b.tags || {}, purge: !!b.properties?.enablePurgeProtection });
+      return json(200, vaultResource(one[2]));
+    }
+    if (one && vaultResources.has(one[2]) && method === 'PATCH') {
+      const b = JSON.parse(body || '{}');
+      if (b.tags) vaultResources.get(one[2]).tags = b.tags;
+      return json(200, vaultResource(one[2]));
+    }
+    if (one && vaultResources.has(one[2]) && method === 'GET') return json(200, vaultResource(one[2]));
+    if (p.includes('/providers/Microsoft.Authorization/roleAssignments/') && method === 'PUT') return json(201, { id: p, properties: JSON.parse(body || '{}').properties });
     if (url.pathname.endsWith('/providers/Microsoft.ResourceGraph/resources')) {
       return json(200, { data: VAULTS.map((v) => ({ id: resourceId(v.name), name: v.name, displayName: v.displayName, vaultUri: `https://${v.name}.vault.azure.net/`, rbac: true, tagged: true, resourceGroup: 'rg-pwsafe' })) });
     }
@@ -122,6 +170,11 @@ export function createDemoBackend() {
         return { id: r.id, status: people[id] ? 200 : 404, body: { displayName: people[id]?.[0], userPrincipalName: people[id]?.[1] } };
       }) });
     }
+    if (url.pathname.endsWith('/me')) return json(200, { id: 'u-alex', displayName: 'Alex Demo', userPrincipalName: 'alex@contoso.com' });
+    if (url.pathname.endsWith('/invitations') && method === 'POST') {
+      const { invitedUserEmailAddress: email } = JSON.parse(body || '{}');
+      return json(201, { invitedUser: { id: `guest-${email}` }, invitedUserDisplayName: email });
+    }
     if (url.pathname.endsWith('/users')) return json(200, { value: [{ id: 'u-kim', displayName: 'Kim Beispiel', userPrincipalName: 'kim@contoso.com' }] });
     if (url.pathname.endsWith('/groups')) return json(200, { value: [{ id: 'g-dev', displayName: 'Entwicklung', securityEnabled: true }] });
     return json(404, { error: { message: 'Nicht gefunden' } });
@@ -131,7 +184,7 @@ export function createDemoBackend() {
     const url = new URL(input);
     const method = init.method || 'GET';
     if (url.hostname.endsWith('.vault.azure.net')) return keyVault(url, method, init.body);
-    if (url.hostname === 'management.azure.com') return arm(url, method);
+    if (url.hostname === 'management.azure.com') return arm(url, method, init.body);
     if (url.hostname === 'graph.microsoft.com') return graph(url, method, init.body);
     return json(404, {});
   }

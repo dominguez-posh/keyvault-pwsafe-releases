@@ -7,7 +7,7 @@
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
 import { hostFromUrl, itemMatchesHost, rankCandidates } from './core/match.js';
-import { itemHosts, sophosFillPassword } from './core/model.js';
+import { itemHosts, sophosFillPassword, resolveLogin } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
@@ -272,8 +272,11 @@ async function lockedProtected() {
   return (await vault.containers()).filter((c) => c.protected && c.locked).length;
 }
 
+/** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
+const usableItem = async (containerId, id) => resolveLogin(await vault.getItem(containerId, id), (c, i) => vault.getItem(c, i));
+
 async function fillTab({ tabId, containerId, id, force = false }) {
-  const item = await vault.getItem(containerId, id);
+  const item = await usableItem(containerId, id);
   const hosts = itemHosts(item);
   const frames = (await chrome.webNavigation.getAllFrames({ tabId })) || [];
   let targets = frames.filter((f) => {
@@ -887,13 +890,13 @@ const contentCommands = {
   },
   /** Current one-time code of an entry, only for a matching site (filled straight into the code field). */
   'cs:totp': async ({ containerId, id }, sender) => {
-    const item = await vault.getItem(containerId, id);
+    const item = await usableItem(containerId, id);
     if (!itemMatchesHost(itemHosts(item), senderHost(sender))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     if (!item.totp) throw new Error(t('Kein Einmalcode (TOTP) hinterlegt'));
     return { code: (await totpCode(item.totp)).code };
   },
   'cs:fill': async ({ containerId, id }, sender) => {
-    const item = await vault.getItem(containerId, id);
+    const item = await usableItem(containerId, id);
     if (!itemMatchesHost(itemHosts(item), senderHost(sender))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const totpCopied = await copyTotpAfterFill(item);
     return { username: item.username, password: await browserPassword(item), totpCopied };

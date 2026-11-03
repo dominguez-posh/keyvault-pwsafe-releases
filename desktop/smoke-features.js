@@ -372,6 +372,37 @@ export async function featureChecks(ctx) {
       await closeDialogs();
     });
 
+    // ---- linked login: an entry signs in with another login (domain login / Microsoft login) – shown with the linked
+    // values, edited without own user and password; a Microsoft link opens the website with a one-click sign-in
+    await step('loginlink', async () => {
+      const domain = await save({ type: 'login', title: 'Smoke Domain', username: 'CONTOSO\\smoke', password: 'Dom-Smoke-1' });
+      const ms = await save({ type: 'login', title: 'Smoke MS Link', username: 'smoke-link@contoso.onmicrosoft.com', password: 'Ms-Link-1', msAdmin: true, urls: ['https://login.microsoftonline.com'] });
+      const intranet = await save({ type: 'login', title: 'Smoke Intranet', urls: ['https://intranet.contoso.com'], loginLink: `${kvc.id}/${domain.id}` });
+      const partner = await save({ type: 'login', title: 'Smoke Partner', urls: ['https://partner.contoso.com'], loginLink: `${kvc.id}/${ms.id}` });
+      await openItem('Smoke Intranet');
+      const shown = await js('document.querySelector(".detail-pane")?.innerText || ""');
+      if (!/Anmeldung über|Signs in with/.test(shown) || !shown.includes('Smoke Domain') || !shown.includes('CONTOSO\\smoke')) fail('loginlink', `linked login not shown: ${shown.slice(0, 200)}`);
+      if (!(await js('[...document.querySelectorAll(".detail-pane .field label")].some((l) => /^(Passwort|Password)$/.test(l.textContent.trim()))'))) fail('loginlink', 'password of the linked login missing in the detail view');
+      // Editor: the link is chosen, own user name and password are hidden; the stored entry keeps no copy.
+      await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
+      await sleep(300);
+      await js('document.querySelector(".context-menu [data-action=edit]")?.click()');
+      await sleep(500);
+      const ed = JSON.parse(await js('JSON.stringify({ own: !!document.querySelector(".detail-pane .own-login")?.hidden, pick: document.querySelector(".detail-pane .login-link .link-pick-text")?.textContent || "" })'));
+      if (!ed.own || ed.pick !== 'Smoke Domain') fail('loginlink', `editor of a linked login: ${JSON.stringify(ed)}`);
+      await js('[...document.querySelectorAll(".detail-pane button")].find((b) => /^(Abbrechen|Cancel)$/.test(b.textContent.trim()))?.click()');
+      await sleep(300);
+      const stored = await vault.getItem(kvc.id, intranet.id);
+      if (stored.password || stored.username || stored.loginLink !== `${kvc.id}/${domain.id}`) fail('loginlink', 'linked login stores its own values');
+      // Microsoft link: opening the website starts the one-click sign-in for exactly that Microsoft account.
+      ctx.clearSignIns();
+      await api.openWithMicrosoft({ containerId: kvc.id, id: partner.id, url: 'https://partner.contoso.com' });
+      const job = await ctx.signInFor('login.microsoftonline.com');
+      if (job?.username !== 'smoke-link@contoso.onmicrosoft.com' || ctx.lastAdminUrl() !== 'https://partner.contoso.com') fail('loginlink', `Microsoft link: sign-in job ${job?.username}, opened ${ctx.lastAdminUrl()}`);
+      if (await api.openWithMicrosoft({ containerId: kvc.id, id: intranet.id, url: 'https://intranet.contoso.com' }).then(() => true, () => false)) fail('loginlink', 'one-click Microsoft sign-in for a domain-linked login');
+      ctx.clearSignIns();
+    });
+
     // ---- import guide for browsers: the import dialog shows per-browser CSV-export steps (Chrome, Edge, Firefox)
     await step('browserimport', async () => {
       await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => r.textContent.includes(${JSON.stringify(kvc.name)})); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); })()`);
@@ -385,6 +416,87 @@ export async function featureChecks(ctx) {
       const addr = await js('document.querySelector("dialog[open] .browser-steps code")?.textContent || ""');
       if (Number(steps) < 2 || addr !== 'about:logins') fail('browserimport', `Firefox guide not shown (${steps} steps, "${addr}")`);
       await closeDialogs();
+    });
+
+    // ---- folder symbols: chosen in the folder's menu, shown in the list, moved along with a rename, taken over from an
+    // import (KeePass group icons)
+    await step('foldericons', async () => {
+      await save({ type: 'login', title: 'Smoke Symbol', username: 's', password: 'x', folder: 'Smoke Symbole' });
+      await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
+      for (let i = 0; i < 15 && !(await js('!!document.querySelector(\'.list .folder-row[data-folder="Smoke Symbole"]\')')); i++) await sleep(300);
+      await js('document.querySelector(\'.list .folder-row[data-folder="Smoke Symbole"]\')?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 300, clientY: 200 }))');
+      await sleep(300);
+      await js('document.querySelector(".context-menu [data-action=folder-icon]")?.click()');
+      await sleep(400);
+      if (!(await js('document.querySelectorAll("dialog[open] .icon-grid .icon-choice").length > 20'))) fail('foldericons', 'symbol picker did not open');
+      await js('document.querySelector("dialog[open] .icon-choice[data-icon=server]")?.click()');
+      let icons = {};
+      for (let i = 0; i < 15 && icons['Smoke Symbole'] !== 'server'; i++) {
+        await sleep(300);
+        icons = await api.folderIcons(kvc.id);
+      }
+      if (icons['Smoke Symbole'] !== 'server') fail('foldericons', `symbol not stored: ${JSON.stringify(icons)}`);
+      let shown = false;
+      for (let i = 0; i < 15 && !shown; i++) {
+        await sleep(300);
+        shown = await js('!!document.querySelector(\'.list .folder-row[data-folder="Smoke Symbole"] .folder-icon .icon-server\')');
+      }
+      if (!shown) fail('foldericons', 'list does not show the chosen symbol');
+      await api.renameFolder(kvc.id, 'Smoke Symbole', 'Smoke Symbole 2');
+      icons = await api.folderIcons(kvc.id);
+      if (icons['Smoke Symbole 2'] !== 'server' || icons['Smoke Symbole']) fail('foldericons', `symbol did not move with the rename: ${JSON.stringify(icons)}`);
+      const r = await api.importItems(kvc.id, [{ type: 'login', title: 'Smoke KP Symbol', username: 'k', password: 'x', folder: 'Smoke KP' }], { folderIcons: { 'Smoke KP': 'database', 'Smoke Symbole 2': 'star' } });
+      const imported = (await vault.summaries()).find((x) => x.containerId === kvc.id && x.title === 'Smoke KP Symbol');
+      if (imported) created.push(imported.id);
+      icons = await api.folderIcons(kvc.id);
+      if (r.imported !== 1 || icons['Smoke KP'] !== 'database') fail('foldericons', `import did not take the folder symbol: ${JSON.stringify(icons)}`);
+      if (icons['Smoke Symbole 2'] !== 'server') fail('foldericons', 'import replaced a symbol chosen before');
+      for (const f of ['Smoke Symbole 2', 'Smoke KP']) await api.setFolderIcon(kvc.id, f, '');
+    });
+
+    // ---- setup wizard for a team vault: step by step with an explanation per step, the check before creating
+    await step('vaultwizard', async () => {
+      // "+" is the last button in the head of the vault list (the vault search comes before it).
+      await js('[...document.querySelectorAll(".nav-section .icon-btn")].at(-1)?.click()');
+      await sleep(300);
+      await js('[...document.querySelectorAll("dialog[open] .option-card")].find((b) => /Neuen Key-Vault-Tresor|new Key Vault/i.test(b.textContent))?.click()');
+      // The demo's example Azure: subscription, resource groups and regions filled in.
+      const selects = async () => String(await js('JSON.stringify([...document.querySelectorAll("dialog[open] .vault-wizard select")].map((x) => [...x.options].map((o) => o.value)))'));
+      for (let i = 0; i < 30 && !(await selects()).includes('rg-security'); i++) await sleep(300);
+      if (!(await selects()).includes('rg-security') || !(await selects()).includes('westeurope')) fail('vaultwizard', `example resource groups or regions missing: ${await selects()}`);
+      // "Use an existing empty Key Vault" lists the demo's empty vault in rg-security.
+      await js('(() => { const [, rg, mode] = document.querySelectorAll("dialog[open] .vault-wizard select"); rg.value = "rg-security"; rg.dispatchEvent(new Event("change")); mode.value = "existing"; mode.dispatchEvent(new Event("change")); return true; })()');
+      for (let i = 0; i < 20 && !(await selects()).includes('kv-pws-demo-leer'); i++) await sleep(300);
+      if (!(await selects()).includes('kv-pws-demo-leer')) fail('vaultwizard', `empty example Key Vault not offered: ${await selects()}`);
+      await js('(() => { const mode = document.querySelectorAll("dialog[open] .vault-wizard select")[2]; mode.value = "new"; mode.dispatchEvent(new Event("change")); return true; })()');
+      const at = () => js('document.querySelector("dialog[open] .vault-wizard .wizard-steps li.on")?.textContent || ""');
+      if (!/Ort|Location/.test(await at())) fail('vaultwizard', `wizard does not start at the location: "${await at()}"`);
+      if (!(await js('!!document.querySelector("dialog[open] .vault-wizard .wizard-explain")'))) fail('vaultwizard', 'no explanation in the step');
+      const next = () => js('[...document.querySelectorAll("dialog[open] .wizard-buttons .btn.primary")].at(-1)?.click()');
+      // An invalid name stops at the location step.
+      await js('(() => { const n = [...document.querySelectorAll("dialog[open] .vault-wizard input")].find((i) => /kv-pws/.test(i.placeholder)); n.value = "1"; n.dispatchEvent(new Event("input")); })()');
+      await next();
+      await sleep(400);
+      if (!/Ort|Location/.test(await at())) fail('vaultwizard', 'went on with an invalid Key Vault name');
+      await js('(() => { const n = [...document.querySelectorAll("dialog[open] .vault-wizard input")].find((i) => /kv-pws/.test(i.placeholder)); n.value = "kv-pws-smoke"; n.dispatchEvent(new Event("input")); })()');
+      for (const label of [/Zugriff|Access/, /Notfall|Emergency/, /Erstellen|Create/]) {
+        await next();
+        await sleep(400);
+        if (!label.test(await at())) fail('vaultwizard', `expected step ${label}, at "${await at()}"`);
+      }
+      const summary = await js('document.querySelector("dialog[open] .wizard-summary")?.textContent || ""');
+      if (!summary.includes('kv-pws-smoke')) fail('vaultwizard', `summary without the Key Vault: ${summary.slice(0, 200)}`);
+      // Created in the demo's Azure: the wizard ends with "Fertig" and the vault is in the app.
+      await next();
+      for (let i = 0; i < 30 && !(await js('/Fertig|Done/.test(document.querySelector("dialog[open] .vault-wizard .wizard-buttons")?.textContent || "")')); i++) await sleep(300);
+      if (!(await vault.containers()).some((c) => c.id === 'kv-pws-smoke.vault.azure.net')) fail('vaultwizard', 'vault not created in the demo');
+      await closeDialogs();
+      await api.removeContainer('kv-pws-smoke.vault.azure.net').catch(() => {});
+      // The wizard opened the new vault: the following checks work in the demo's team vault again.
+      changed();
+      await sleep(600);
+      await js(`[...document.querySelectorAll(".sidebar .nav")].find((n) => n.textContent.includes(${JSON.stringify(kvc.name)}))?.click()`);
+      await sleep(600);
     });
 
     // ---- start: admin mode is always off after a start (#8)
@@ -786,6 +898,30 @@ export async function featureChecks(ctx) {
       const job = await ctx.signInFor('x.bastion.azure.com');
       if (job?.username !== 'admin@contoso.local') fail('bastionfqdn', `Bastion gets "${job?.username}" instead of admin@contoso.local`);
       ctx.clearSignIns();
+    });
+
+    // ---- PIM on the unlock screen: off by default, switched on in the menu (View), then shown when locked
+    // (last check: it locks the app and unlocks it again with the PIN)
+    await step('pimlock', async () => {
+      if (config.get().pimOnLock) fail('pimlock', 'PIM on the unlock screen is on by default');
+      await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click(); document.querySelector(".main-menu [data-tab=view]")?.click()');
+      await sleep(300);
+      await js('[...document.querySelectorAll(".main-menu .seg")].find((x) => /PIM/.test(x.getAttribute("aria-label")))?.querySelector("button")?.click()');
+      for (let i = 0; i < 10 && !config.get().pimOnLock; i++) await sleep(200);
+      if (!config.get().pimOnLock) fail('pimlock', 'menu did not switch it on');
+      await js('document.querySelector(".main-menu")?.remove()');
+      await api.lock();
+      let shown = false;
+      for (let i = 0; i < 15 && !shown; i++) {
+        await sleep(300);
+        shown = await js('!!document.querySelector(".pim-lock")');
+      }
+      if (!shown) fail('pimlock', 'no PIM button on the unlock screen');
+      config.update({ pimOnLock: false });
+      await api.verifyPin(await ctx.ensurePin());
+      await api.unlock({ entra: true });
+      changed();
+      await sleep(800);
     });
   } finally {
     await cleanUp();

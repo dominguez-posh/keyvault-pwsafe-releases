@@ -9,12 +9,13 @@ import { ACCESS_LEVELS } from '../../extension/core/azure.js';
 import { setLanguage, t, LANGUAGES, getLanguage, locale } from '../../extension/core/i18n.js';
 import { pickImage, LOGO_MAX_CHARS } from '../../extension/core/image.js';
 import { ROLE_NAMES, FILE_ROLES } from '../../extension/core/members.js';
-import { MAX_FOLDER_DEPTH, entryTemplate } from '../../extension/core/model.js';
+import { MAX_FOLDER_DEPTH, entryTemplate, resolveLogin } from '../../extension/core/model.js';
 import { expiryState, expiringEntries, daysUntil } from '../../extension/core/health.js';
 import { healthDialog, accessReportDialog } from './reports.js';
 import { releaseNotesSince } from '../../extension/core/release-notes.js';
 import * as progress from './progress.js';
 import { buildItemLink, parseItemLink } from '../../extension/core/links.js';
+import { FOLDER_ICONS, MAX_FOLDER_IMAGE, isFolderImage } from '../../extension/core/folder-icons.js';
 
 // Calls that can take a moment show the progress card bottom right (progress.js); the main process reports
 // done/total under the same id where it knows them. Dialogs with their own inline progress are not listed.
@@ -59,6 +60,7 @@ const ui = { view: 'all', containerId: null, selected: null, editing: null, edit
 // Vaults that fit in the sidebar without scrolling; with more, the list scrolls and a search appears above it.
 const VAULTS_FIT = 5;
 const explicitFolders = new Map(); // containerId → created folders (also empty ones)
+const folderIconMap = new Map(); // containerId → { [stored folder path]: symbol name or image data URL }
 const logos = new Map(); // containerId → data URL | null (loaded once per session, refreshed on change)
 const busyContainers = new Set(); // containerIds being loaded or reconciled right now (sidebar spinner)
 const icons = new Map(); // item key → data URL (Key Vault lists only tags; icons are fetched on demand)
@@ -367,6 +369,15 @@ async function render() {
   versionTag.textContent = `Keevault ${st.version}`;
   versionTag.title = t('Nach Updates suchen …');
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
+  if (!st.opened && firstRun && !st.settings.setupOffered && !st.smoke && !st.demo) {
+    // First start on this device, nothing set up yet: straight into the app (nothing to unlock), the wizards follow.
+    try {
+      await call('unlock', { entra: false });
+      return render();
+    } catch {
+      return renderSetup();
+    }
+  }
   if (!st.opened) return firstRun ? renderSetup() : renderLocked();
   await loadItems();
   // Admin mode shows itself in the brand ("Keevault for Admins") and the copper accent – no extra badge.
@@ -378,12 +389,13 @@ async function render() {
   checkWindowsRequests();
   loadLogos();
   if (st.requirePin && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ forced: true });
-  else if (!document.querySelector('dialog[open]') && !st.smoke && !st.demo) checkOtherInstallation();
-  // First start after setting up: offer the personal vault once (use an existing one or create a new one).
-  else if (!(st.settings.personalVaults || []).length && !st.settings.personalOffered && !document.querySelector('dialog[open]') && !st.smoke && !st.demo) {
-    call('updateSettings', { personalOffered: true }).catch(() => {});
-    setTimeout(() => personalWizard(), 400);
-  }
+  // First start on this device with nothing set up: the personal vault wizard, then the setup wizard for a team vault
+  // (skipped when the personal vault brought the vaults along from another device). Each opens only once.
+  // The desktop demo (fresh profile each start) shows the same first start, with example resources and its own PIN.
+  else if ((st.demo ? st.platform !== 'web' : !st.containers.length) && !st.settings.setupOffered && !document.querySelector('dialog[open]') && !st.smoke) {
+    call('updateSettings', { personalOffered: true, setupOffered: true }).catch(() => {});
+    setTimeout(() => firstStartWizards({ always: st.demo }), 400);
+  } else if (!document.querySelector('dialog[open]') && !st.smoke && !st.demo) checkOtherInstallation();
   await renderDetail();
   if (pendingItemLink) openItemLink(pendingItemLink);
 }
@@ -520,7 +532,7 @@ function renderSetup(error) {
     }
   } }, icon('vault', 22), h('div', {},
     h('b', {}, t('Azure Key Vault (Microsoft Entra ID)')),
-    h('div', { class: 'muted small' }, t('Für Unternehmen: Anmeldung mit dem Arbeitskonto, Teilen über Azure-Rollen, Audit-Log. Deine Key Vaults werden automatisch gesucht.'))));
+    h('div', { class: 'muted small' }, t('Für Unternehmen: Anmeldung mit dem Arbeitskonto, Teilen über Azure-Rollen, Audit-Log.'))));
   splash(
     h('h1', {}, t('Keevault einrichten')),
     h('p', { class: 'muted' }, t('Wo sollen deine Passwörter und Passkeys liegen?')),
@@ -581,6 +593,9 @@ function renderLocked(error) {
     st.pinSet ? null : h('p', { class: 'muted small' }, t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')),
     entra,
     st.hasFiles ? local : null,
+    // PIM before signing in (e.g. the Key Vault role is only eligible): turned on in the menu → View.
+    st.settings.pimOnLock ? h('button', { class: 'btn block pim-lock', title: t('Rolle mit Privileged Identity Management aktivieren'), onclick: () => openUrl(ADMIN_LINKS[0].url) },
+      icon('ac-elevate'), t('PIM: Rolle aktivieren')) : null,
     h('div', { class: 'card-links' },
       h('button', { class: 'linklike', onclick: settingsDialog }, t('Einstellungen')),
       h('button', { class: 'linklike', onclick: async () => {
@@ -916,7 +931,7 @@ function onOffControl(key, label, on, after) {
 /** View → "Ansicht auf Standard": zoom, transparency, bottom bar, source marks and column widths as on first start. */
 async function resetView() {
   try { localStorage.removeItem('paneWidths'); } catch {}
-  await setView({ zoom: 1, theme: 'system', transparency: 'light', sourceBadges: true, pimButton: false, adminTools: false });
+  await setView({ zoom: 1, theme: 'system', transparency: 'light', sourceBadges: true, pimButton: false, pimOnLock: false, adminTools: false });
   await render();
   toast(t('Ansicht zurückgesetzt'));
 }
@@ -986,6 +1001,7 @@ function mainMenu(anchor) {
       viewRow(t('Design'), choiceControl('theme', t('Design'), [['system', t('System')], ['light', t('Hell')], ['dark', t('Dunkel')]], 'system')),
       viewRow(t('Transparenz'), choiceControl('transparency', t('Transparenz'), [['off', t('Aus')], ['light', t('Leicht')], ['strong', t('Stark')]], 'light')),
       viewRow(t('Speicherort'), onOffControl('sourceBadges', t('Speicherort'), true, renderSidebar)),
+      viewRow(t('PIM beim Entsperren'), onOffControl('pimOnLock', t('PIM beim Entsperren'), false)),
       // Admin mode changes the list (devices tab), the New menu and the open entry (admin tiles): redraw them.
       h('div', { class: 'context-sep' }),
       entry('view-reset', 'refresh', t('Auf Standard zurücksetzen'), resetView)),
@@ -1385,6 +1401,11 @@ function renderList() {
       explicitFolders.set(container.id, f);
       renderRows();
     }, () => {});
+    call('folderIcons', container.id).then((icons) => {
+      if (JSON.stringify(icons) === JSON.stringify(folderIconMap.get(container.id) || {})) return;
+      folderIconMap.set(container.id, icons);
+      renderRows();
+    }, () => {});
   }
 }
 
@@ -1727,7 +1748,7 @@ function folderRows(container, list, row, rerender) {
     const parent = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
     out.push(h('li', { class: 'folder-crumb', ...dropTarget(parent, container) },
       h('button', { class: 'icon-btn', title: t('Übergeordneter Ordner'), onclick: () => open(parent) }, icon('back', 16)),
-      icon('folder', 16), h('b', {}, cur.split('/').join(' / '))));
+      folderGlyph(container.id, cur, 16), h('b', {}, cur.split('/').join(' / '))));
   }
   for (const f of children) {
     const count = inside(f);
@@ -1749,7 +1770,7 @@ function folderRows(container, list, row, rerender) {
         startDrag(e, container, selected ? [...ui.multi] : [], selected ? [...ui.multiFolders] : [f]);
       } : undefined,
       ondragend: dragFolder ? endDrag : undefined },
-      h('span', { class: 'folder-icon' }, icon('folder', 18)),
+      h('span', { class: 'folder-icon' }, folderGlyph(container.id, f, 18)),
       h('div', { class: 'row-text' }, h('div', { class: 'row-title' }, name), h('div', { class: 'row-sub' }, t('{count} Einträge', { count }))),
       !count && writable(container) ? h('button', { class: 'icon-btn', title: t('Leeren Ordner löschen'), onclick: async (e) => {
         e.stopPropagation();
@@ -1863,10 +1884,12 @@ function folderActions(c, folder, count, open) {
   const parent = folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '';
   const reloadFolders = async () => {
     explicitFolders.set(c.id, await call('folders', c.id));
+    folderIconMap.set(c.id, await call('folderIcons', c.id).catch(() => ({})));
     await reloadAll();
   };
   return [
     { action: 'open-folder', icon: 'folder', label: t('Öffnen'), onClick: () => open(folder) },
+    { action: 'folder-icon', icon: 'image', label: t('Symbol ändern …'), disabled: !canWrite, onClick: () => folderIconDialog(c, folder) },
     folder.split('/').length < MAX_FOLDER_DEPTH
       ? { action: 'subfolder', icon: 'folder-plus', label: t('Neuer Unterordner'), disabled: !canWrite, onClick: () => newFolderDialog(c, `${folder}/`) } : null,
     { action: 'rename-folder', icon: 'edit', label: t('Umbenennen'), disabled: !canWrite, onClick: () => renameFolderDialog(c, folder) },
@@ -1907,6 +1930,44 @@ function folderActions(c, folder, count, open) {
       }
     } },
   ];
+}
+
+/** Symbol of a folder in the list: the chosen one, its own image, or the plain folder. */
+function folderGlyph(containerId, folder, size) {
+  const value = folderIconMap.get(containerId)?.[nsFolder(folder)];
+  if (isFolderImage(value)) return h('img', { class: 'folder-img', src: value, width: size, height: size, alt: '' });
+  return icon(value || 'folder', size);
+}
+
+function folderIconDialog(c, folder) {
+  const current = folderIconMap.get(c.id)?.[nsFolder(folder)] || '';
+  const save = async (value) => {
+    await call('setFolderIcon', c.id, nsFolder(folder), value);
+    folderIconMap.set(c.id, await call('folderIcons', c.id));
+    renderList();
+  };
+  const { close } = modal(t('Symbol für „{folder}“', { folder: folder.split('/').pop() }), h('div', {},
+    h('div', { class: 'icon-grid' }, ...FOLDER_ICONS.map((name) => h('button', {
+      type: 'button', class: `icon-choice ${(current || 'folder') === name ? 'on' : ''}`, title: name, dataset: { icon: name },
+      onclick: async () => {
+        try {
+          await save(name === 'folder' ? '' : name);
+          close();
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+      },
+    }, icon(name, 22)))),
+    isFolderImage(current) ? h('p', { class: 'muted small inline' }, h('img', { class: 'folder-img', src: current, width: 22, height: 22, alt: '' }), t('Eigenes Bild')) : null), [
+    { label: t('Eigenes Bild …'), onClick: async () => {
+      const url = await pickImage({ size: 32, maxChars: MAX_FOLDER_IMAGE });
+      if (!url) return false;
+      await save(url);
+      return true;
+    } },
+    { label: t('Standard'), onClick: () => save('') },
+    { label: t('Schließen') },
+  ]);
 }
 
 function renameFolderDialog(c, folder) {
@@ -2577,13 +2638,20 @@ function itemActions(i) {
   const c = st.containers.find((x) => x.id === containerId) || {};
   const canWrite = writable(c);
   const open = async () => call('item', containerId, id);
+  // Copying takes the sign-in the entry uses (a linked login: the linked entry's user name and password).
+  const usable = async () => resolveLogin(await open(), (c, x) => call('item', c, x));
+  const openSite = async () => {
+    const u = await usable();
+    if (u.linked?.microsoft) return call('openWithMicrosoft', { containerId, id, url: `https://${i.hosts[0]}` }).catch((e) => toast(e.message, 'error'));
+    return openUrl(`https://${i.hosts[0]}`);
+  };
   return [
     { action: 'favorite', icon: 'star', label: i.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), disabled: !canWrite, onClick: () => toggleFavorite(i) },
     '-',
-    i.username ? { action: 'copy-user', icon: 'copy', label: t('Benutzername kopieren'), onClick: async () => copy((await open()).username, t('Benutzername')) } : null,
-    i.type === 'login' || i.type === 'certificate' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copy((await open()).password, t('Passwort')) } : null,
+    i.username || i.loginLinked ? { action: 'copy-user', icon: 'copy', label: t('Benutzername kopieren'), onClick: async () => copy((await usable()).username, t('Benutzername')) } : null,
+    i.type === 'login' || i.type === 'certificate' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copy((await usable()).password, t('Passwort')) } : null,
     i.type === 'card' ? { action: 'copy-card', icon: 'copy', label: t('Kartennummer kopieren'), onClick: async () => copy((await open()).card.number, t('Kartennummer')) } : null,
-    i.hosts?.[0] ? { action: 'open', icon: 'external', label: t('Website öffnen'), onClick: () => openUrl(`https://${i.hosts[0]}`) } : null,
+    i.hosts?.[0] ? { action: 'open', icon: 'external', label: t('Website öffnen'), onClick: () => (i.loginLinked ? openSite() : openUrl(`https://${i.hosts[0]}`)) } : null,
     '-',
     { action: 'edit', icon: 'edit', label: t('Bearbeiten'), disabled: !canWrite, onClick: async () => {
       ui.selected = i.key;
@@ -2896,11 +2964,15 @@ async function renderDetail() {
     pane.replaceChildren(notice(e.message));
     return undefined;
   }
+  // Linked login (domain or Microsoft login): shown and copied with the linked values; edited as stored (no copy).
+  const shown = await resolveLogin(item, (c, i) => call('item', c, i));
   if (ui.selected !== key || ui.editing) return undefined;
   const canWrite = writable(st.containers.find((c) => c.id === containerId) || {});
-  pane.replaceChildren(itemDetail(item, {
+  pane.replaceChildren(itemDetail(shown, {
     copy,
-    openUrl,
+    // Linked to a Microsoft login: the website opens with a one-click sign-in for that account.
+    openUrl: shown.linked?.microsoft ? (u) => call('openWithMicrosoft', { containerId, id, url: u })
+      .then((r) => toast(r.signIn ? t('Geöffnet – die Browser-Erweiterung meldet dich mit dem Microsoft-Login an') : t('Geöffnet – ohne Browser-Erweiterung bitte selbst anmelden')), (e) => toast(e.message, 'error')) : openUrl,
     containerName,
     connect: (it, method) => connectServer(it.containerId, it.id, method),
     adminLinks: st.settings?.adminTools === true ? ADMIN_LINKS.map((l) => ({ ...l, open: (it) => openAdminLink(l, `${it.containerId}/${it.id}`) })) : null,
@@ -2972,7 +3044,7 @@ async function renderDetail() {
 
 /** Logins a server entry can link to (accounts for RDP, TeamViewer, Bastion); Microsoft admin accounts marked. */
 const linkOptions = () => items.filter((i) => i.type === 'login')
-  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin }))
+  .map((i) => ({ key: i.key, containerId: i.containerId, title: i.title, username: i.username, container: containerName(i.containerId), msAdmin: !!i.msAdmin, loginLinked: !!i.loginLinked }))
   .sort((a, b) => a.title.localeCompare(b.title));
 
 function linkTitle(key) {
@@ -3231,7 +3303,7 @@ function containerMenu() {
       : t('Key Vault per Adresse oder Einladungslink. Der Zugriff kommt über Azure-Rollen.'), () => addContainerDialog()),
     option('plus', t('Neuen Key-Vault-Tresor erstellen'), st.signedIn
       ? t('Legt einen Key Vault in einem Azure-Abonnement an, z. B. für ein Team.')
-      : t('Zuerst mit Microsoft Entra ID anmelden (Seitenleiste: „Key-Vault-Tresore anmelden“).'), createContainerDialog, !st.signedIn)), []);
+      : t('Der Assistent führt Schritt für Schritt durch Anmeldung, Ort, Zugriff und Notfallkonten.'), () => vaultWizard({ intro: false }))), []);
 }
 
 const defaultEmail = () => st.settings.fileEmail || st.account?.username || '';
@@ -3269,7 +3341,8 @@ function fileRiskBox() {
 async function personalWizard() {
   const s = { step: 0, info: null, mode: 'create', id: null, recoveryKey: null };
   const body = h('div', { class: 'wizard' });
-  const { close } = modal(t('Persönlicher Tresor'), body, []);
+  const { dialog, close } = modal(t('Persönlicher Tresor'), body, []);
+  const closed = new Promise((resolve) => dialog.addEventListener('close', resolve));
   const steps = [t('Start'), t('Speicherort'), t('Schutz'), t('FIDO-Stick'), t('Fertig')];
   const header = () => h('ol', { class: 'wizard-steps' }, ...steps.map((label, i) => h('li', { class: i === s.step ? 'on' : i < s.step ? 'done' : '' }, h('span', {}, String(i + 1)), label)));
   const buttons = (...b) => h('div', { class: 'wizard-buttons' }, ...b);
@@ -3384,6 +3457,17 @@ async function personalWizard() {
     body.replaceChildren(header(), ...[content].flat().filter(Boolean));
   };
   draw();
+  return closed;
+}
+
+async function firstStartWizards({ always = false } = {}) {
+  await personalWizard();
+  await call('syncSettings').catch(() => null);
+  st = await call('state');
+  if (document.querySelector('dialog[open]')) return render();
+  if (!always && (st.containers.some((c) => c.kind === 'keyvault') || st.settings.containers.length)) return render();
+  await vaultWizard();
+  return render();
 }
 
 /** After the personal vault was opened with its master password on this device: bind it to the PIN. */
@@ -3684,22 +3768,34 @@ function suggestVaultName(text) {
   return `kv-pws-${slug}`.slice(0, 24).replace(/-+$/, '');
 }
 
-async function createContainerDialog() {
-  let subs;
-  try {
-    subs = await call('subscriptions');
-  } catch (e) {
-    toast(e.message, 'error');
-    return;
-  }
-  if (!subs.length) {
-    toast(t('Kein Azure-Abonnement verfügbar'), 'error');
-    return;
-  }
+/**
+ * Setup wizard for a team vault in Azure Key Vault, step by step with what each step means: what it is and what is
+ * needed → sign in → where (subscription, resource group, new or existing empty Key Vault) → who gets access →
+ * break-glass accounts → check and create. intro: false starts at the sign-in (or, signed in, at "where").
+ */
+async function vaultWizard({ intro = true } = {}) {
+  const s = { step: intro ? 0 : st.signedIn ? 2 : 1, subs: null, done: null };
+  const body = h('div', { class: 'wizard vault-wizard' });
+  const { dialog, close } = modal(t('Tresor einrichten'), body, []);
+  const steps = [t('Start'), t('Anmelden'), t('Ort'), t('Zugriff'), t('Notfallzugang'), t('Erstellen')];
+  const header = () => h('ol', { class: 'wizard-steps' }, ...steps.map((label, i) => h('li', { class: i === s.step ? 'on' : i < s.step ? 'done' : '' }, h('span', {}, String(i + 1)), label)));
+  const buttons = (...b) => h('div', { class: 'wizard-buttons' }, ...b);
+  const btn = (label, onClick, { primary = false, disabled = false } = {}) => h('button', { type: 'button', class: primary ? 'btn primary' : 'btn', disabled, onclick: async (e) => {
+    const el = e.currentTarget;
+    el.disabled = true;
+    try { await onClick(); } catch (err) { toast(err.message, 'error'); } finally { el.disabled = false; }
+  } }, label);
+  const go = async (step) => {
+    s.step = step;
+    if (step === 2 && !s.subs) await loadSubscriptions();
+    draw();
+  };
+  const explain = (...lines) => h('div', { class: 'wizard-explain' }, ...lines.map((x) => (typeof x === 'string' ? h('p', {}, x) : x)));
+
   const VIA = { home: '', guest: t('Gast'), lighthouse: t('nur Lighthouse') };
   const display = h('input', { placeholder: t('z. B. Team Infrastruktur') });
   const name = h('input', { placeholder: t('kv-pws-team (weltweit eindeutig)') });
-  const sub = h('select', {}, ...subs.map((s) => h('option', { value: s.id }, VIA[s.via] ? `${s.name} (${VIA[s.via]})` : s.name)));
+  const sub = h('select');
   const rg = h('select');
   const loc = h('select');
   const purge = h('input', { type: 'checkbox', checked: true });
@@ -3713,9 +3809,10 @@ async function createContainerDialog() {
   let rgPermissions = null;
   const newFields = h('div', {}, field(t('Key-Vault-Name'), name, t('3–24 Zeichen: Buchstaben, Ziffern, Bindestriche')));
   const existingFields = h('div', { hidden: true }, field(t('Key Vault'), existing));
+  const current = () => (s.subs || []).find((x) => x.id === sub.value);
   const drawRgNotice = () => {
-    const s = current();
-    const msg = s.via === 'lighthouse' ? null
+    const x = current();
+    const msg = !x || x.via === 'lighthouse' ? null
       : mode.value === 'new' && rgPermissions && !rgPermissions.createVault
         ? notice(t('Auf dieser Ressourcengruppe darfst du keine Key Vaults anlegen (nötig: Besitzer oder Mitwirkender). Wähle „Vorhandenen leeren Key Vault verwenden“ oder eine andere Ressourcengruppe.'), 'warn')
         : rgPermissions && !rgPermissions.assignRoles
@@ -3723,15 +3820,15 @@ async function createContainerDialog() {
     setChildren(rgNotice, msg);
   };
   const loadGroup = async () => {
-    const s = current();
+    const x = current();
     rgPermissions = null;
     existing.replaceChildren();
-    if (!rg.value || s.via === 'lighthouse') return drawRgNotice();
-    call('groupPermissions', s.id, s.tenantId, rg.value).then((p) => { rgPermissions = p; drawRgNotice(); }, () => drawRgNotice());
+    if (!x || !rg.value || x.via === 'lighthouse') return drawRgNotice();
+    call('groupPermissions', x.id, x.tenantId, rg.value).then((p) => { rgPermissions = p; drawRgNotice(); }, () => drawRgNotice());
     if (mode.value !== 'existing') return drawRgNotice();
     existing.replaceChildren(h('option', { value: '' }, t('Wird geladen …')));
     try {
-      const vaults = await call('groupVaults', s.id, s.tenantId, rg.value);
+      const vaults = await call('groupVaults', x.id, x.tenantId, rg.value);
       const label = (v) => (v.added ? t('bereits in der App') : v.marked ? t('bereits Tresor') : !v.readable ? t('kein Datenzugriff') : !v.empty ? t('nicht leer') : '');
       existing.replaceChildren(...(vaults.length ? vaults.map((v) => h('option', {
         value: v.vaultUrl, disabled: !v.readable || (!v.empty && !v.marked) || v.added, dataset: { resourceId: v.resourceId, name: v.name },
@@ -3743,13 +3840,15 @@ async function createContainerDialog() {
     }
     return drawRgNotice();
   };
+  const regionField = field(t('Region'), loc);
+  const purgeLabel = h('label', { class: 'inline' }, purge, t('Löschschutz (Purge Protection) – empfohlen, nicht umkehrbar'));
   mode.addEventListener('change', () => {
     newFields.hidden = mode.value !== 'new';
     existingFields.hidden = mode.value !== 'existing';
     purgeLabel.hidden = mode.value !== 'new';
+    regionField.hidden = mode.value !== 'new';
     loadGroup();
   });
-  const current = () => subs.find((s) => s.id === sub.value);
 
   // Access: Entra groups / people of the subscription's tenant and guests to invite.
   const access = []; // { principal } | { email }  + level
@@ -3833,15 +3932,16 @@ async function createContainerDialog() {
     if (l) loc.value = l;
   };
   const loadSubscription = async () => {
-    const s = current();
-    setChildren(subNotice, s.via === 'lighthouse'
+    const x = current();
+    if (!x) return;
+    setChildren(subNotice, x.via === 'lighthouse'
       ? notice(t('Diese Subscription siehst du nur über Azure Lighthouse. So angelegte Key Vaults lassen sich nicht nutzen: Lighthouse vergibt keine Datenrollen und lädt keine Gäste ein. Lass dich im Kunden-Tenant als Gast einladen und gib dem Gastkonto Besitzer auf der Ressourcengruppe – dann erscheint die Subscription hier mit „Gast“.'), 'warn')
-      : s.via === 'guest' ? notice(t('Wird im Tenant „{tenant}“ mit deinem Gastkonto angelegt; Gruppen und Personen stammen aus diesem Verzeichnis.', { tenant: s.tenantName || s.tenantId }), 'info') : null);
+      : x.via === 'guest' ? notice(t('Wird im Tenant „{tenant}“ mit deinem Gastkonto angelegt; Gruppen und Personen stammen aus diesem Verzeichnis.', { tenant: x.tenantName || x.tenantId }), 'info') : null);
     access.length = 0;
     drawAccess();
     loadBreakGlass();
     try {
-      const [groups, locations] = await Promise.all([call('resourceGroups', s.id, s.tenantId), call('locations', s.id, s.tenantId)]);
+      const [groups, locations] = await Promise.all([call('resourceGroups', x.id, x.tenantId), call('locations', x.id, x.tenantId)]);
       rg.replaceChildren(...groups.map((g) => h('option', { value: g.name, dataset: { location: g.location } }, g.name)));
       loc.replaceChildren(...locations.map((l) => h('option', { value: l.name }, l.displayName)));
       syncLocation();
@@ -3849,6 +3949,16 @@ async function createContainerDialog() {
     } catch (e) {
       toast(e.message, 'error');
     }
+  };
+  const loadSubscriptions = async () => {
+    try {
+      s.subs = await call('subscriptions');
+    } catch (e) {
+      s.subs = null;
+      throw e;
+    }
+    sub.replaceChildren(...s.subs.map((x) => h('option', { value: x.id }, VIA[x.via] ? `${x.name} (${VIA[x.via]})` : x.name)));
+    if (s.subs.length) await loadSubscription();
   };
   rg.addEventListener('change', () => {
     syncLocation();
@@ -3861,71 +3971,172 @@ async function createContainerDialog() {
   name.addEventListener('input', () => {
     name.dataset.touched = '1';
   });
-  const regionField = field(t('Region'), loc);
-  const purgeLabel = h('label', { class: 'inline' }, purge, t('Löschschutz (Purge Protection) – empfohlen, nicht umkehrbar'));
-  mode.addEventListener('change', () => { regionField.hidden = mode.value !== 'new'; });
-  modal(t('Neuen Key-Vault-Tresor erstellen'), h('div', {},
-    h('p', { class: 'muted' }, t('Legt einen Azure Key Vault (RBAC, Soft Delete) an und gibt dir Bearbeiten- und Verwalten-Rechte. Nötig: Besitzer (oder Mitwirkender + Benutzerzugriffsadministrator) auf der Ressourcengruppe.')),
-    field(t('Anzeigename'), display),
-    h('div', { class: 'grid2' }, field(t('Abonnement'), sub), field(t('Ressourcengruppe'), rg)),
-    subNotice,
-    field(t('Key Vault'), mode),
-    rgNotice,
-    newFields,
-    existingFields,
-    regionField,
-    purgeLabel,
-    h('h3', {}, t('Zugriff')),
-    h('div', { class: 'field-row access-search' }, search, level),
-    results,
-    accessList,
-    h('h3', {}, t('Notfallzugang (Break-Glass-Konten)')),
-    h('p', { class: 'muted small' }, t('Bekommen dauerhaft „Verwalten“ (voller Zugriff, ohne PIM) – damit im Notfall jemand an die Passwörter kommt.')),
-    bgSearch,
-    bgResults,
-    bgList,
-    h('label', { class: 'inline' }, bgRemember, t('Für neue Tresore in diesem Tenant merken'))), [
-    { label: t('Abbrechen') },
-    { label: t('Erstellen'), primary: true, onClick: async () => {
-      const s = current();
-      if (s.via === 'lighthouse') throw new Error(t('Über Azure Lighthouse lässt sich hier kein nutzbarer Tresor anlegen (siehe Hinweis).'));
-      if (!rg.value) throw new Error(t('Bitte eine Ressourcengruppe wählen'));
-      // Break-glass accounts get "Manage"; someone chosen in both lists keeps the higher level.
-      const members = access.filter((a) => a.principal && !breakGlass.some((b) => b.id === a.principal.id)).map((a) => ({ principal: a.principal, level: a.level }))
-        .concat(breakGlass.map((p) => ({ principal: p, level: 'manage' })));
-      if (bgRemember.checked && s.tenantId) {
-        st.settings = await call('updateSettings', { breakGlass: { ...(st.settings.breakGlass || {}), [s.tenantId]: breakGlass.map((p) => ({ ...p })) } });
-      }
-      const guests = access.filter((a) => a.email).map((a) => ({ email: a.email, level: a.level }));
-      if (mode.value === 'existing') {
-        const option = existing.selectedOptions[0];
-        if (!option?.value || option.disabled) throw new Error(t('Bitte einen leeren Key Vault wählen'));
-        const r = await call('adoptVault', {
-          subscriptionId: s.id, tenantId: s.tenantId, via: s.via, vaultUrl: option.value, resourceId: option.dataset.resourceId,
-          displayName: display.value.trim() || option.dataset.name, members, guests,
-        });
-        for (const w of r.warnings) toast(w, 'error');
-        if (!r.warnings.length) toast(t('Key Vault als Tresor eingerichtet'));
-        ui.containerId = r.id;
-        ui.view = 'container';
-        return reloadAll();
-      }
+
+  const checkWhere = () => {
+    const x = current();
+    if (!x) throw new Error(t('Kein Azure-Abonnement verfügbar'));
+    if (x.via === 'lighthouse') throw new Error(t('Über Azure Lighthouse lässt sich hier kein nutzbarer Tresor anlegen (siehe Hinweis).'));
+    if (!rg.value) throw new Error(t('Bitte eine Ressourcengruppe wählen'));
+    if (mode.value === 'existing') {
+      const option = existing.selectedOptions[0];
+      if (!option?.value || option.disabled) throw new Error(t('Bitte einen leeren Key Vault wählen'));
+    } else {
       if (rgPermissions && !rgPermissions.createVault) throw new Error(t('Auf dieser Ressourcengruppe darfst du keine Key Vaults anlegen'));
+      if (!/^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$/.test(name.value.trim())) throw new Error(t('Key-Vault-Name: 3–24 Zeichen, mit einem Buchstaben beginnen, Buchstaben, Ziffern und Bindestriche'));
+    }
+  };
+
+  const create = async () => {
+    const x = current();
+    checkWhere();
+    // Break-glass accounts get "Manage"; someone chosen in both lists keeps the higher level.
+    const members = access.filter((a) => a.principal && !breakGlass.some((b) => b.id === a.principal.id)).map((a) => ({ principal: a.principal, level: a.level }))
+      .concat(breakGlass.map((p) => ({ principal: p, level: 'manage' })));
+    if (bgRemember.checked && x.tenantId) {
+      st.settings = await call('updateSettings', { breakGlass: { ...(st.settings.breakGlass || {}), [x.tenantId]: breakGlass.map((p) => ({ ...p })) } });
+    }
+    const guests = access.filter((a) => a.email).map((a) => ({ email: a.email, level: a.level }));
+    let r;
+    if (mode.value === 'existing') {
+      const option = existing.selectedOptions[0];
+      r = await call('adoptVault', {
+        subscriptionId: x.id, tenantId: x.tenantId, via: x.via, vaultUrl: option.value, resourceId: option.dataset.resourceId,
+        displayName: display.value.trim() || option.dataset.name, members, guests,
+      });
+    } else {
       toast(t('Tresor wird erstellt …'));
-      const r = await call('createContainer', {
-        subscriptionId: s.id, tenantId: s.tenantId, via: s.via, resourceGroup: rg.value, location: loc.value,
+      r = await call('createContainer', {
+        subscriptionId: x.id, tenantId: x.tenantId, via: x.via, resourceGroup: rg.value, location: loc.value,
         name: name.value.trim(), displayName: display.value.trim() || name.value.trim(), purgeProtection: purge.checked,
         members,
         guests,
       });
-      for (const w of r.warnings) toast(w, 'error');
-      if (!r.warnings.length) toast(t('Tresor erstellt. Neue Rollen können einige Minuten brauchen, bis sie wirken.'));
-      ui.containerId = r.id;
-      ui.view = 'container';
-      await reloadAll();
-    } },
-  ]);
-  await loadSubscription();
+    }
+    for (const w of r.warnings) toast(w, 'error');
+    s.done = { id: r.id, warnings: r.warnings };
+    ui.containerId = r.id;
+    ui.view = 'container';
+    await reloadAll();
+    draw();
+  };
+
+  const choice = (iconName, title, text, onClick) => h('button', { type: 'button', class: 'option-card', onclick: onClick },
+    icon(iconName, 20), h('div', {}, h('b', {}, title), h('div', { class: 'muted small' }, text)));
+
+  const draw = () => {
+    let content;
+    if (s.done) {
+      content = [
+        explain(t('Der Tresor ist eingerichtet und steht in der Seitenleiste.'),
+          t('Neue Rollen können einige Minuten brauchen, bis sie wirken – bis dahin kann der Tresor kurz „Kein Zugriff“ zeigen.'),
+          t('Weitere Personen gibst du später per Rechtsklick auf den Tresor → „Teilen“ frei.')),
+        s.done.warnings.length ? notice(t('Nicht alles hat geklappt – siehe Meldungen. Fehlende Rollen kann jemand mit Besitzer-Rechten nachtragen.'), 'warn') : null,
+        buttons(btn(t('Fertig'), () => close(), { primary: true })),
+      ];
+    } else if (s.step === 0) {
+      content = [
+        explain(t('Ein Tresor ist der Ort, an dem Keevault Passwörter, Passkeys und Zertifikate speichert. Für ein Team oder eine Firma empfehlen wir einen Tresor in Azure Key Vault: Zugriff über Azure-Rollen, Audit-Log, keine Datei, die man kopieren kann.'),
+          t('Wähle, was du einrichten möchtest. Der Assistent erklärt jeden Schritt.')),
+        choice('plus', t('Neuen Tresor in Azure anlegen'), t('Für ein Team: Key Vault in deinem Azure-Abonnement, Zugriff für Gruppen und Personen. Nötig: Besitzer-Rechte auf einer Ressourcengruppe.'), () => go(1)),
+        choice('link', t('Vorhandenen Tresor verbinden'), t('Ein Kollege hat schon einen Tresor eingerichtet und dir Zugriff gegeben, oder du hast einen Einladungslink.'), async () => {
+          // Signed in, the dialog lists the vaults found in Azure to pick from.
+          if (!st.signedIn) {
+            try {
+              await call('signIn');
+              st = await call('state');
+            } catch (e) {
+              toast(e.message, 'error');
+            }
+          }
+          close();
+          addContainerDialog();
+        }),
+        choice('note', t('Datei-Tresor (ohne Azure)'), t('Verschlüsselte Datei wie bei KeePass, z. B. auf einem Netzlaufwerk.'), () => { close(); createFileDialog(); }),
+        buttons(btn(t('Später'), () => close())),
+      ];
+    } else if (s.step === 1) {
+      content = [
+        explain(t('Für einen Tresor in Azure meldest du dich mit deinem Arbeitskonto bei Microsoft an. Keevault fragt dabei nur nach den Rechten, die es für Key Vault braucht.'),
+          t('Danach sucht Keevault deine Azure-Abonnements und Ressourcengruppen.')),
+        st.signedIn ? notice(t('Angemeldet als {user}', { user: st.account?.username || '' }), 'info') : null,
+        buttons(
+          intro ? btn(t('Zurück'), () => go(0)) : null,
+          st.signedIn
+            ? btn(t('Weiter'), () => go(2), { primary: true })
+            : btn(t('Mit Microsoft anmelden'), async () => {
+              const r = await call('signIn');
+              if (r.discoverError) toast(t('Tresor-Suche: {message}', { message: r.discoverError }), 'error');
+              st = await call('state');
+              await go(2);
+            }, { primary: true })),
+      ];
+    } else if (s.step === 2) {
+      content = s.subs && !s.subs.length ? [
+        explain(t('Mit diesem Konto ist kein Azure-Abonnement sichtbar. Für einen Tresor in Azure brauchst du ein Abonnement mit einer Ressourcengruppe, auf der du Besitzer bist – frag deine IT danach.'),
+          t('Alternativ: Lass dir Zugriff auf einen vorhandenen Tresor geben oder richte einen Datei-Tresor ein.')),
+        buttons(btn(t('Zurück'), () => go(1)), btn(t('Vorhandenen Tresor verbinden'), () => { close(); addContainerDialog(); })),
+      ] : [
+        explain(t('Der Tresor ist ein Azure Key Vault in einer Ressourcengruppe deines Abonnements. Keevault legt ihn mit RBAC und Soft Delete an und gibt dir Bearbeiten- und Verwalten-Rechte.'),
+          t('Nötig: Besitzer (oder Mitwirkender + Benutzerzugriffsadministrator) auf der Ressourcengruppe. Der Anzeigename ist nur für die App, der Key-Vault-Name muss weltweit eindeutig sein.')),
+        field(t('Anzeigename'), display),
+        h('div', { class: 'grid2' }, field(t('Abonnement'), sub), field(t('Ressourcengruppe'), rg)),
+        subNotice,
+        field(t('Key Vault'), mode),
+        rgNotice,
+        newFields,
+        existingFields,
+        regionField,
+        purgeLabel,
+        buttons(btn(t('Zurück'), () => go(1)), btn(t('Weiter'), () => { checkWhere(); return go(3); }, { primary: true })),
+      ];
+    } else if (s.step === 3) {
+      content = [
+        explain(t('Wer soll den Tresor nutzen? Am besten eine Entra-Gruppe (z. B. dein Team) statt einzelner Personen – dann regelt die Gruppenmitgliedschaft den Zugriff. Externe lädst du per E-Mail als Gast ein.'),
+          t('Lesen: Passwörter ansehen und nutzen. Bearbeiten: auch anlegen und ändern. Verwalten: auch Zugriff vergeben. Du kannst das später jederzeit unter „Teilen“ ändern.')),
+        h('div', { class: 'field-row access-search' }, search, level),
+        results,
+        accessList,
+        buttons(btn(t('Zurück'), () => go(2)), btn(t('Weiter'), () => go(4), { primary: true })),
+      ];
+    } else if (s.step === 4) {
+      content = [
+        explain(t('Notfallkonten (Break-Glass-Konten) bekommen dauerhaft „Verwalten“ – ohne PIM und ohne Bedingungen. So kommt im Notfall jemand an die Passwörter, wenn die normale Anmeldung klemmt.'),
+          t('Optional, aber empfohlen. Die Konten merkt sich Keevault für weitere Tresore in diesem Tenant.')),
+        bgSearch,
+        bgResults,
+        bgList,
+        h('label', { class: 'inline' }, bgRemember, t('Für neue Tresore in diesem Tenant merken')),
+        buttons(btn(t('Zurück'), () => go(3)), btn(t('Weiter'), () => go(5), { primary: true })),
+      ];
+    } else {
+      const x = current();
+      const row = (label, value) => h('div', { class: 'summary-row' }, h('span', { class: 'muted' }, label), h('b', {}, value));
+      content = [
+        explain(t('Bitte prüfen. „Erstellen“ legt den Tresor in Azure an und vergibt die Rollen – das dauert etwa eine Minute.')),
+        h('div', { class: 'wizard-summary' },
+          row(t('Anzeigename'), display.value.trim() || (mode.value === 'existing' ? existing.selectedOptions[0]?.dataset.name || '' : name.value.trim())),
+          row(t('Abonnement'), x?.name || ''),
+          row(t('Ressourcengruppe'), rg.value),
+          mode.value === 'existing'
+            ? row(t('Key Vault'), existing.selectedOptions[0]?.textContent || '')
+            : row(t('Key Vault'), `${name.value.trim()} · ${loc.selectedOptions[0]?.textContent || loc.value}${purge.checked ? ` · ${t('Löschschutz')}` : ''}`),
+          row(t('Zugriff'), access.length ? access.map((a) => `${a.email || a.principal.displayName} (${t(ACCESS_LEVELS[a.level].label)})`).join(', ') : t('nur du')),
+          row(t('Notfallkonten'), breakGlass.length ? breakGlass.map((p) => p.displayName).join(', ') : t('keine'))),
+        buttons(btn(t('Zurück'), () => go(4)), btn(mode.value === 'existing' ? t('Einrichten') : t('Erstellen'), create, { primary: true })),
+      ];
+    }
+    body.replaceChildren(header(), ...[content].flat().filter(Boolean));
+  };
+  if (s.step === 2) {
+    body.replaceChildren(h('span', { class: 'spinner' }));
+    try {
+      await loadSubscriptions();
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+  draw();
+  return new Promise((resolve) => dialog.addEventListener('close', resolve));
 }
 
 async function shareDialog(container) {
@@ -4084,11 +4295,11 @@ function openImport(container) {
     containers: writableContainers(),
     defaultContainer: container?.id || st.settings.defaultContainer,
     existing: async (containerId) => items.filter((i) => i.containerId === containerId),
-    save: async (containerId, list, onProgress) => {
+    save: async (containerId, list, onProgress, extra) => {
       const listener = (ev) => onProgress(ev.done, ev.total);
       progressListeners.add(listener);
       try {
-        return await call('importItems', containerId, list);
+        return await call('importItems', containerId, list, extra);
       } finally {
         progressListeners.delete(listener);
       }
@@ -4288,6 +4499,8 @@ function settingsDialog() {
   const extensionIds = h('input', { value: s.extensionIds.join(', '), disabled: enforced('extensionIds') });
   const signInWindows = h('input', { type: 'checkbox', checked: s.signInWindows !== false, disabled: enforced('signInWindows') });
   const startWithWindows = h('input', { type: 'checkbox', checked: !!s.startWithWindows });
+  const autoDiscover = h('input', { type: 'checkbox', checked: !!s.autoDiscover });
+  const settingsSync = h('input', { type: 'checkbox', checked: s.settingsSync !== false });
   const autoTypeKeys = h('select', {},
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
@@ -4390,6 +4603,11 @@ function settingsDialog() {
       field(t('Sprache'), language),
       st.platform === 'win32' ? h('label', { class: 'inline' }, startWithWindows, t('Mit Windows starten (im Infobereich)')) : null,
       st.platform === 'win32' ? h('p', { class: 'muted small' }, t('Dann ist Keevault für Browser-Erweiterung und KI-Agenten sofort da, ohne dass sie die App erst starten müssen.')) : null,
+      section(t('Einstellungen mitnehmen'),
+        h('label', { class: 'inline' }, settingsSync, t('Einstellungen im persönlichen Tresor speichern')),
+        h('p', { class: 'muted small' }, (st.settings.personalVaults || []).length
+          ? t('Verbundene Tresore, Ansicht und Verhalten liegen verschlüsselt im persönlichen Tresor. Auf einem neuen Gerät übernimmt Keevault sie, sobald du dort den persönlichen Tresor öffnest. PIN, Geräteschlüssel und Freigaben für KI-Agenten bleiben auf dem Gerät.')
+          : t('Dafür zuerst einen persönlichen Tresor einrichten.'))),
       section(t('Updates'),
         managed
           ? h('p', { class: 'muted small' }, managedUpdateHint(st.updateKind))
@@ -4417,7 +4635,9 @@ function settingsDialog() {
     ] },
     { label: t('Anmeldung'), content: [
       section(t('Microsoft Entra ID (Key-Vault-Tresore)'),
-        st.account ? h('p', { class: 'muted small' }, t('Angemeldet als {user}', { user: st.account.username })) : h('p', { class: 'muted small' }, t('Keine IDs nötig: Melde dich einfach an, deine Key Vaults werden automatisch gesucht.')),
+        st.account ? h('p', { class: 'muted small' }, t('Angemeldet als {user}', { user: st.account.username })) : h('p', { class: 'muted small' }, t('Keine IDs nötig: Melde dich einfach an und füge deine Key-Vault-Tresore hinzu.')),
+        h('label', { class: 'inline' }, autoDiscover, t('Gefundene Keevault-Tresore automatisch verbinden')),
+        h('p', { class: 'muted small' }, t('Verbindet nach der Anmeldung jeden Key Vault, der als Keevault-Tresor eingerichtet ist und auf den du Zugriff hast. Aus: Nur Tresore, die du selbst hinzufügst oder die deine Organisation vorgibt.')),
         field(t('Verzeichnis (Tenant)'), directory),
         field(t('Entsperren'), prompt),
         st.platform === 'win32' ? h('label', { class: 'inline' }, signInWindows, t('Anmeldung im Windows-Dialog (wie PowerShell/Azure CLI) statt im Browser')) : null,
@@ -4480,6 +4700,8 @@ function settingsDialog() {
         autoTypeKeys: autoTypeKeys.value,
         signInWindows: signInWindows.checked,
         startWithWindows: startWithWindows.checked,
+        autoDiscover: autoDiscover.checked,
+        settingsSync: settingsSync.checked,
         updateMode: updateMode.value,
         updateChannel: updateChannel.value === 'beta' ? 'beta' : 'stable',
         mcpEnabled: mcpEnabled.checked,

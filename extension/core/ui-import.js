@@ -169,7 +169,8 @@ export function importDialog(ctx) {
       }
       progress.hidden = false;
       progress.max = Math.max(1, list.length);
-      const r = await ctx.save(container.value, list, (done) => { progress.value = done; });
+      // Folder symbols of the source go along (KeePass group icons); only the desktop app stores them.
+      const r = await ctx.save(container.value, list, (done) => { progress.value = done; }, { folderIcons: parsed.folderIcons || {} });
       toast(t('{imported} von {total} Einträgen importiert', { imported: r.imported, total: items.length }) + (skipped ? ` · ${t('{count} Duplikate übersprungen', { count: skipped })}` : ''));
       close();
       if (r.errors?.length) modal(t('Nicht importiert'), h('pre', { class: 'errors' }, r.errors.join('\n')));

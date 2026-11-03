@@ -253,6 +253,9 @@ export class McpService {
           ...(item.type === 'card' ? { card: item.card } : {}),
           ...(item.type === 'certificate' ? { certificate: { subject: item.cert?.subject, notAfter: item.cert?.notAfter, note: 'certificate file not exported' } } : {}),
           passkeys: item.passkeys.length,
+          // Signs in with another entry (domain or Microsoft login): only the reference – reading that entry is a
+          // request of its own (own confirmation, own "never ask again").
+          ...(item.loginLink ? { signInFrom: { vaultId: item.loginLink.split('/')[0], entryId: item.loginLink.split('/')[1], note: 'user name and password come from this entry – read it with get_entry' } } : {}),
         };
       }
 
