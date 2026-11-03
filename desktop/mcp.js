@@ -121,9 +121,10 @@ export class McpService {
    * scope(): released vaults/folders (see scopeAllows; without it everything is released).
    * trusted(agent, vaultId, entryId) → boolean, trust({ agent, vaultId, entryId, title }): entries the user released
    * for an agent with "never ask again" (stored by the app, revoked from the entry's context menu).
+   * waitUnlock() → boolean: the app is locked – it comes to the front with its unlock screen; true once unlocked.
    */
-  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }), trusted = () => false, trust = () => {} }) {
-    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy, trusted, trust });
+  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }), trusted = () => false, trust = () => {}, waitUnlock = async () => false }) {
+    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy, trusted, trust, waitUnlock });
     this.clients = new Set();
     this.grants = new WeakMap();
     // Timed grants by agent name ("for 1 hour"): survive a restart of the agent process, end when the app locks.
@@ -154,14 +155,14 @@ export class McpService {
     return [...best].map(([agent, until]) => ({ agent, until: new Date(until).toISOString() }));
   }
 
-  session() {
-    const v = this.vault();
+  async session() {
+    const v = this.vault() || ((await this.waitUnlock()) ? this.vault() : null);
     if (!v) throw fail(t('Keevault ist gesperrt – bitte in der App entsperren und erneut versuchen.'));
     return v;
   }
 
   async container(vaultId) {
-    const c = (await this.session().containers()).find((x) => x.id === vaultId);
+    const c = (await (await this.session()).containers()).find((x) => x.id === vaultId);
     if (!c || !vaultInScope(this.scope(), c.id)) throw fail(t('Dieser Tresor ist für KI-Agenten nicht freigegeben.'));
     if (c.locked) throw fail(t('Der Tresor ist gesperrt – bitte in der App entsperren.'));
     return c;
@@ -204,7 +205,7 @@ export class McpService {
     switch (tool) {
       case 'list_vaults': {
         const scope = this.scope();
-        return (await this.session().containers()).filter((c) => vaultInScope(scope, c.id)).map((c) => {
+        return (await (await this.session()).containers()).filter((c) => vaultInScope(scope, c.id)).map((c) => {
           const folders = scope.all ? [] : scope.scopes.filter((s) => s.vaultId === c.id).map((s) => s.folder);
           return {
             id: c.id, name: c.name, kind: c.kind, locked: !!c.locked, writable: c.access?.write !== false && !c.error, error: c.error?.message || undefined,
@@ -215,7 +216,7 @@ export class McpService {
       }
 
       case 'search_entries': {
-        const v = this.session();
+        const v = await this.session();
         const names = new Map((await v.containers()).map((c) => [c.id, c.name]));
         const q = String(a.query || '').trim().toLowerCase();
         const limit = Math.min(SEARCH_LIMIT, Math.max(1, Number(a.limit) || 25));
@@ -236,7 +237,7 @@ export class McpService {
       case 'get_entry':
       case 'get_totp': {
         const c = await this.container(a.vaultId);
-        const item = await this.session().getItem(c.id, a.entryId, { fresh: true });
+        const item = await (await this.session()).getItem(c.id, a.entryId, { fresh: true });
         this.requireScope(c.id, item.folder);
         await this.requireRead(client, item, c);
         if (tool === 'get_totp') {
@@ -260,7 +261,7 @@ export class McpService {
         if (this.policy(client.agent)?.write === false) throw fail(t('Dieser Agent darf nur lesen (Einstellungen → KI-Agenten).'));
         const c = await this.container(a.vaultId);
         if (c.access?.write === false) throw fail(t('Kein Schreibrecht in diesem Tresor'));
-        const v = this.session();
+        const v = await this.session();
         const before = tool === 'update_entry' ? await v.getItem(c.id, a.entryId, { fresh: true }) : null;
         if (before) this.requireScope(c.id, before.folder);
         const patch = {};

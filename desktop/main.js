@@ -15,6 +15,7 @@ import { FileContainers } from './files.js';
 import { hashPin, verifyPin, PinGuard, MIN_PIN_LENGTH } from './pin.js';
 import { typeText, copySecret, warmUpAutoType, stopAutoType } from './autotype.js';
 import { featureChecks } from './smoke-features.js';
+import { decryptKdbx } from './kdbx.js';
 import { totpCode } from '../extension/core/totp.js';
 import { BrowserBridge, launchPath, pipePath, registerNativeHost, unregisterNativeHost } from './bridge.js';
 import { Updater, UPDATE_MODES } from './updater.js';
@@ -1311,6 +1312,26 @@ async function askInApp(spec) {
   }
 }
 
+/**
+ * A request (AI agent) while Keevault is locked: the window comes to the front with its unlock screen – above all
+ * other windows, taskbar flashing – and the request waits up to two minutes instead of failing at once.
+ */
+async function waitForUnlock({ ms = 120_000, isOpen = () => opened } = {}) {
+  if (isOpen()) return true;
+  showWindow();
+  win.setAlwaysOnTop(true, 'floating');
+  win.flashFrame(true);
+  try {
+    for (const until = Date.now() + ms; !isOpen() && Date.now() < until && !win.isDestroyed();) await new Promise((r) => setTimeout(r, 250));
+    return isOpen();
+  } finally {
+    if (!questions.size && win && !win.isDestroyed()) {
+      win.setAlwaysOnTop(false);
+      win.flashFrame(false);
+    }
+  }
+}
+
 /** Log of agent calls (no secret values) in the profile; rotates at 1 MB. */
 async function auditAgent(entry) {
   const file = path.join(app.getPath('userData'), 'mcp-audit.log');
@@ -2447,6 +2468,11 @@ const api = {
     await fs.writeFile(filePath, SAMPLE_CSV, 'utf8');
     return filePath;
   },
+  /** KeePass database for the import: decrypted here (never leaves the app), returned as KeePass XML. */
+  decryptKdbx(bytes, { password = '', keyFile = null } = {}) {
+    requireOpen();
+    return decryptKdbx(Buffer.from(bytes), { password: String(password || ''), keyFile: keyFile ? Buffer.from(keyFile) : null });
+  },
   async importItems(containerId, items) {
     requireOpen();
     await requireFeature(containerId, 'import');
@@ -2837,6 +2863,7 @@ app.whenReady().then(async () => {
     policy: (agent) => config.get().agentRules?.[agent] || { write: true },
     trusted: (agent, vaultId, entryId) => mcpTrusted().some((x) => x.agent === agent && x.vaultId === vaultId && x.entryId === entryId),
     trust: trustAgentEntry,
+    waitUnlock: () => waitForUnlock(),
     scope: () => {
       const s = config.get();
       const scopes = (Array.isArray(s.mcpScopes) ? s.mcpScopes : []).filter((x) => x && typeof x.vaultId === 'string')
@@ -3626,6 +3653,8 @@ function runSmokeTest() {
           clearSignIns: () => { signInJobs = []; },
           adminCenterUrl,
           lastAdminUrl: () => lastAdminUrl,
+          confirmAgentRead,
+          waitForUnlock,
           signInDone: (host) => browserHandlers.signInDone({ host }),
           // The feature checks use PIN 2468 (the personal vault check sets the same one).
           ensurePin: async () => {
