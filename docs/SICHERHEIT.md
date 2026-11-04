@@ -268,6 +268,26 @@ Erweiterungs-IDs startbar. Die Named Pipe lässt andere Benutzer nicht schreiben
 der Desktop-App einmal erlaubt werden. Gegen Schadsoftware, die als derselbe Benutzer läuft, schützt das – wie
 bei jedem Passwortmanager – nicht.
 
+## KI-Agenten und eigene Tools (MCP)
+
+- **Ab Werk aus**, per Richtlinie (`McpEnabled`) sperr- oder vorgebbar. Der Agent startet `keevault-mcp.cjs`, das
+  nur über die Named Pipe (macOS/Linux: Unix-Socket) mit der laufenden, entsperrten App spricht – kein Netzwerk-Port, keine eigene Anmeldung.
+- **Sichtbarkeit:** nur für Agenten freigegebene Tresore/Ordner (die App setzt die Grenze durch). Jeder Agent wird
+  einmal zugelassen (Lesen und Schreiben oder Nur lesen, befristbar); Passwörter nur mit Freigabe, Anlegen/Ändern
+  jedes Mal bestätigt, Löschen nicht möglich. Sperren der App beendet jede Freigabe.
+- **Passkey-Anmeldung** (`sign_in_with_passkey`, ab 0.9.22): eigener Schalter, ab Werk aus. Keevault signiert eine
+  einzelne WebAuthn-Anmeldung und gibt nur die Antwort zurück, nie den privaten Schlüssel. Die Herkunft muss https
+  sein, ohne Port, und gleich der rpId oder eine Subdomain davon; die Challenge muss mindestens 16 Byte haben. Jede
+  Nutzung wird einzeln bestätigt (Agent, Eintrag, Website) – keine Freigabe für die Sitzung. Registrieren ist nicht
+  möglich.
+- **Microsoft-Anmeldung für Tools** (`request_microsoft_login`, ab 0.9.22): eigener Schalter, ab Werk aus. Keevault
+  bietet nur Microsoft-Logins aus den freigegebenen Bereichen an; der Nutzer wählt das Konto in der App, nur dieses
+  geht einmalig an das Tool (Benutzername, Passwort, aktueller Einmalcode). Ohne Wahl oder mit einem nicht
+  angebotenen Konto bekommt das Tool nichts.
+- **Protokoll:** jeder Aufruf in `mcp-audit.log`, ohne Passwörter.
+- **Grenze:** Ein zugelassener Agent läuft als derselbe Windows-Benutzer; was er nach einer Freigabe erhält, liegt in
+  seiner Verantwortung. Deshalb gibt es keine Dauer-Freigaben für Passkeys und Microsoft-Anmeldungen.
+
 ## Updates, Programmintegrität und Lieferkette
 
 - **Signierte Update-Manifeste:** Neue Versionen erfährt die App nur über `latest.yml`, das beim Release mit einem
