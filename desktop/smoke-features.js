@@ -918,6 +918,31 @@ export async function featureChecks(ctx) {
       else if (m.indent > 2 || m.border !== '0px') fail('passkeynarrow', `passkey indented in a narrow window: ${JSON.stringify(m)}`);
     });
 
+    // ---- narrow list column (#322): vault name on one line ("…" instead of letter-by-letter breaks), badges below it,
+    // and at the narrowest the "New" label gives way to the plus alone
+    await step('listnarrow', async () => {
+      const measure = async (width) => {
+        await js(`document.querySelector(".list-pane").style.width = "${width}px"; true`);
+        await sleep(300);
+        return JSON.parse(await js(`JSON.stringify((() => {
+          const h2 = document.querySelector(".list-head .list-title h2");
+          if (!h2) return { missing: true };
+          const badges = document.querySelector(".list-head .head-badges");
+          const shown = badges && getComputedStyle(badges).display !== "none" && badges.getBoundingClientRect().height > 0;
+          const label = document.querySelector(".list-head .new-label");
+          return { pane: Math.round(document.querySelector(".list-pane").clientWidth), lines: Math.round(h2.getBoundingClientRect().height / parseFloat(getComputedStyle(h2).lineHeight)),
+            badgesBelow: shown ? badges.getBoundingClientRect().top >= h2.getBoundingClientRect().bottom - 1 : null, newLabel: label ? getComputedStyle(label).display : "missing" };
+        })())`));
+      };
+      const mid = await measure(380);
+      const tight = await measure(260);
+      await js('document.querySelector(".list-pane").style.width = ""; true');
+      if (mid.missing) fail('listnarrow', 'no vault heading in the list');
+      else if (mid.lines !== 1 || tight.lines !== 1) fail('listnarrow', `vault name breaks over several lines: ${JSON.stringify({ mid, tight })}`);
+      else if (mid.badgesBelow === false) fail('listnarrow', `badges squeeze the name instead of moving below it: ${JSON.stringify(mid)}`);
+      else if (mid.newLabel === 'none' || mid.newLabel === 'missing' || tight.newLabel !== 'none') fail('listnarrow', `"New" label not adapted to the width: ${JSON.stringify({ mid, tight })}`);
+    });
+
     await step('passkeydrag', async () => {
       const grafana = (await vault.summaries()).find((x) => x.containerId === kvc.id && x.title === 'Grafana' && x.rpIds?.length);
       if (!grafana) return;

@@ -344,7 +344,8 @@ export class McpService {
           throw fail(t('Der Passkey gilt nur für {rpId} (https) – nicht für {origin}.', { rpId: passkey.rpId, origin: origin.origin }));
         }
         const challenge = String(a.challenge || '');
-        if (!/^[A-Za-z0-9_-]{22,512}={0,2}$/.test(challenge)) throw fail(t('Ungültige Challenge (base64url, mindestens 16 Byte)'));
+        // Microsoft sends a signed token as challenge (about 1,300 characters, #321) – 4096 leaves room, still bounded.
+        if (!/^[A-Za-z0-9_-]{22,4096}={0,2}$/.test(challenge)) throw fail(t('Ungültige Challenge (base64url, mindestens 16 Byte)'));
         const ok = await this.confirmPasskey({ agent: client.agent, title: item.title, vault: c.name, rpId: passkey.rpId, origin: origin.origin });
         if (!ok) throw fail(t('Vom Benutzer abgelehnt'));
         const { response, signCount } = await getAssertion({ origin: origin.origin, rpId: passkey.rpId, challenge, passkey });

@@ -301,6 +301,15 @@ test('mcp: passkey sign-in for an agent – off by default, own site only, every
   assert.ok(!JSON.stringify(r).includes(passkey.privateKey), 'never the private key');
   const auth = await verifyAuthenticationResponse({ response: r.credential, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: 'github.com', credential: reg.registrationInfo.credential });
   assert.equal(auth.verified, true);
+  // #321: Microsoft's challenge is a signed token of about 1,300 characters – signed and verifiable; too short or too long is refused
+  const longChallenge = b64uEncode(randomBytes(980));
+  assert.ok(longChallenge.length > 1300);
+  const long = await mcp.call(client, 'sign_in_with_passkey', { ...args, challenge: longChallenge });
+  const longAuth = await verifyAuthenticationResponse({ response: long.credential, expectedChallenge: longChallenge, expectedOrigin: origin, expectedRPID: 'github.com', credential: reg.registrationInfo.credential });
+  assert.equal(longAuth.verified, true, 'long challenge verifies');
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', { ...args, challenge: 'a'.repeat(21) }), /Ungültige Challenge/);
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', { ...args, challenge: 'a'.repeat(4097) }), /Ungültige Challenge/);
+  assert.equal(asked.length, 3, 'invalid challenges are refused before asking');
 });
 
 test('mcp: Microsoft sign-in for a tool – off by default, the user picks the account, nothing without a choice (#315)', async () => {
