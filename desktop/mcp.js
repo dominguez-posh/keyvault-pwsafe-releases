@@ -11,6 +11,7 @@
 //   - every call is logged without secret values
 
 import { generatePassword } from '../extension/core/generator.js';
+import { getAssertion } from '../extension/core/webauthn.js';
 import { totpCode } from '../extension/core/totp.js';
 import { normalizeItem, normalizeFolder } from '../extension/core/model.js';
 import { t } from '../extension/core/i18n.js';
@@ -92,6 +93,37 @@ export const MCP_TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   {
+    name: 'sign_in_with_passkey',
+    title: 'Mit Passkey anmelden',
+    description: 'Signs one WebAuthn sign-in (navigator.credentials.get) with the passkey stored in an entry and returns the PublicKeyCredential as JSON – for an agent that drives a browser itself. The private key never leaves Keevault. Only for the passkey\'s own site (https origin of its rpId), only sign-ins (no registration). Off by default (Keevault settings → AI agents) and the user confirms every single use in the app.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        vaultId: str,
+        entryId: str,
+        origin: { type: 'string', description: 'https origin of the page asking, e.g. https://github.com – must be the passkey\'s rpId or a subdomain of it.' },
+        challenge: { type: 'string', description: 'The challenge of the request (base64url, as the page passed it to navigator.credentials.get).' },
+        rpId: { type: 'string', description: 'rpId of the request (default: the passkey\'s).' },
+        credentialId: { type: 'string', description: 'Only this credential (base64url), if the entry holds several passkeys for the site.' },
+      },
+      required: ['vaultId', 'entryId', 'origin', 'challenge'],
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'request_microsoft_login',
+    title: 'Microsoft-Anmeldung anfordern',
+    description: 'Asks the user for a Microsoft sign-in: Keevault comes to the front, the user approves and picks the Microsoft account; the tool gets that account\'s user name, password and current one-time code (if any). Nothing is returned without the user\'s choice. Off by default (Keevault settings → AI agents).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        purpose: { type: 'string', description: 'What the sign-in is for – shown to the user (e.g. "Graph report for contoso.com").' },
+        tenant: { type: 'string', description: 'Only accounts of this domain, e.g. contoso.com (optional).' },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'generate_password',
     title: 'Passwort erzeugen',
     description: 'Generates a strong random password without storing it.',
@@ -123,8 +155,12 @@ export class McpService {
    * for an agent with "never ask again" (stored by the app, revoked from the entry's context menu).
    * waitUnlock() → boolean: the app is locked – it comes to the front with its unlock screen; true once unlocked.
    */
-  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }), trusted = () => false, trust = () => {}, waitUnlock = async () => false }) {
-    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy, trusted, trust, waitUnlock });
+  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }), trusted = () => false, trust = () => {}, waitUnlock = async () => false,
+    features = () => ({}), confirmPasskey = async () => false, chooseMicrosoft = async () => null }) {
+    // features(): { passkeys, microsoft } – both off unless turned on in the settings (#308, #315).
+    // confirmPasskey({ agent, title, vault, rpId, origin }) → boolean, asked for every single use.
+    // chooseMicrosoft({ agent, purpose, accounts: [{ key, title, username, vault }] }) → key of the chosen account or null.
+    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy, trusted, trust, waitUnlock, features, confirmPasskey, chooseMicrosoft });
     this.clients = new Set();
     this.grants = new WeakMap();
     // Timed grants by agent name ("for 1 hour"): survive a restart of the agent process, end when the app locks.
@@ -288,6 +324,59 @@ export class McpService {
         const item = normalizeItem({ ...(before || { type: 'login' }), ...patch });
         const saved = await v.saveItem(c.id, item, before ? { expectedVersion: before.version } : {});
         return { vaultId: c.id, entryId: saved.id, title: saved.title, changed, passwordGenerated: !!a.generatePassword };
+      }
+
+      case 'sign_in_with_passkey': {
+        // #308: the assertion for one sign-in, never the key. Only the passkey's own site over https, every use confirmed.
+        if (!this.features().passkeys) throw fail(t('Passkeys für KI-Agenten sind ausgeschaltet (Keevault → Einstellungen → KI-Agenten).'));
+        const c = await this.container(a.vaultId);
+        const v = await this.session();
+        const item = await v.getItem(c.id, a.entryId, { fresh: true });
+        this.requireScope(c.id, item.folder);
+        let origin;
+        try { origin = new URL(String(a.origin || '')); } catch { throw fail(t('Ungültige Herkunft (origin)')); }
+        const rpId = String(a.rpId || '').toLowerCase();
+        const want = String(a.credentialId || '');
+        const passkey = (item.passkeys || []).find((p) => (!rpId || p.rpId === rpId) && (!want || p.credentialId === want));
+        if (!passkey) throw fail(t('Kein passender Passkey in diesem Eintrag'));
+        const host = origin.hostname.toLowerCase();
+        if (origin.protocol !== 'https:' || origin.port || (host !== passkey.rpId && !host.endsWith(`.${passkey.rpId}`))) {
+          throw fail(t('Der Passkey gilt nur für {rpId} (https) – nicht für {origin}.', { rpId: passkey.rpId, origin: origin.origin }));
+        }
+        const challenge = String(a.challenge || '');
+        if (!/^[A-Za-z0-9_-]{22,512}={0,2}$/.test(challenge)) throw fail(t('Ungültige Challenge (base64url, mindestens 16 Byte)'));
+        const ok = await this.confirmPasskey({ agent: client.agent, title: item.title, vault: c.name, rpId: passkey.rpId, origin: origin.origin });
+        if (!ok) throw fail(t('Vom Benutzer abgelehnt'));
+        const { response, signCount } = await getAssertion({ origin: origin.origin, rpId: passkey.rpId, challenge, passkey });
+        // A counting passkey keeps counting (synced ones stay at 0).
+        if (signCount > 0 && c.access?.write !== false) {
+          await v.saveItem(c.id, { ...item, passkeys: item.passkeys.map((p) => (p === passkey ? { ...p, signCount } : p)) }, { expectedVersion: item.version }).catch(() => {});
+        }
+        return { credential: response, rpId: passkey.rpId, origin: origin.origin };
+      }
+
+      case 'request_microsoft_login': {
+        // #315: the user approves and picks the account in Keevault; without a choice nothing is returned.
+        if (!this.features().microsoft) throw fail(t('Microsoft-Anmeldungen für Tools sind ausgeschaltet (Keevault → Einstellungen → KI-Agenten).'));
+        const v = await this.session();
+        const names = new Map((await v.containers()).map((c) => [c.id, c.name]));
+        const tenant = String(a.tenant || '').trim().toLowerCase().replace(/^@/, '');
+        const scope = this.scope();
+        const accounts = (await v.summaries())
+          .filter((s) => s.type === 'login' && (s.msAdmin || (s.hosts || []).some((h) => /(^|\.)(microsoftonline|microsoft|office|live|azure)\.(com|net)$/i.test(h))))
+          .filter((s) => scopeAllows(scope, s.containerId, s.folder))
+          .filter((s) => !tenant || String(s.username || '').toLowerCase().endsWith(`@${tenant}`))
+          .sort((x, y) => Number(!!y.msAdmin) - Number(!!x.msAdmin) || x.title.localeCompare(y.title))
+          .map((s) => ({ key: `${s.containerId}/${s.id}`, title: s.title, username: s.username, vault: names.get(s.containerId) || '' }));
+        if (!accounts.length) throw fail(t('Kein Microsoft-Login in den für Agenten freigegebenen Tresoren'));
+        const key = await this.chooseMicrosoft({ agent: client.agent, purpose: String(a.purpose || '').slice(0, 200), accounts });
+        const chosen = accounts.find((x) => x.key === key);
+        if (!chosen) throw fail(t('Vom Benutzer abgelehnt'));
+        const [vaultId, entryId] = [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)];
+        const item = await v.getItem(vaultId, entryId, { fresh: true });
+        const otp = item.totp ? await totpCode(item.totp) : null;
+        return { vaultId, entryId, title: item.title, username: item.username, password: item.password,
+          ...(otp ? { totp: otp.code, totpValidForSeconds: otp.remaining } : {}), passkey: !!item.passkeys?.length };
       }
 
       case 'generate_password':

@@ -207,10 +207,13 @@ body { overflow: hidden; }
 .table td.row-actions { text-align: right; white-space: nowrap; }
 /* Reports (access report, password check): wide dialog, the table wraps instead of scrolling sideways; for many rows
    only the dialog scrolls, the header row stays on top of the table (#24). */
-.report-modal { width: min(1100px, calc(100vw - 32px)); }
-.report-modal .modal-body { overflow-x: hidden; max-height: calc(100vh - 150px); }
+/* One scrollbar only (#310): the dialog itself never scrolls, its body does; words break only where they must
+   ("ForeignGroup" stays whole, long accounts still wrap). */
+.report-modal[open] { display: flex; flex-direction: column; width: min(1100px, calc(100vw - 32px)); overflow: hidden; }
+.report-modal .modal-body { flex: 1; min-height: 0; overflow-x: hidden; max-height: calc(100vh - 150px); }
 .report-modal .table { max-height: none; overflow: visible; }
-.report-modal .table td { overflow-wrap: anywhere; }
+.report-modal .table td { overflow-wrap: break-word; word-break: normal; }
+.report-modal .table td:first-child, .report-modal .table td:nth-child(3) { overflow-wrap: anywhere; }
 .notice.ok { display: flex; align-items: center; color: var(--ok, #1a7f37); }
 .badge.expiry { margin-top: 4px; }
 .field-row input[type="date"] { flex: 0 0 170px; }
@@ -477,6 +480,13 @@ body { overflow: hidden; }
 
 /* View section of the main menu: zoom stepper and transparency switch (the menu stays open while adjusting). */
 .view-row { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 0 10px; }
+/* Help: bug report and feature request (#311). */
+.help-feedback { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+/* Pickers (#312): range and kind above the list, like the search's Vault/All switch. */
+.pick-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0 4px; }
+.pick-seg button { display: inline-flex; align-items: center; min-height: 26px; padding: 0 10px; border: 0; border-radius: 7px; background: none; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.pick-seg button.on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(20, 26, 38, .12); }
+.link-pick-row:disabled { opacity: .5; cursor: not-allowed; }
 /* Settings → View: the same switches as in the menu (#18). */
 .view-settings { display: grid; gap: 2px; }
 .view-settings .view-row { padding: 0; }

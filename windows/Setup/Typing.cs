@@ -20,22 +20,30 @@ namespace Keevault.Setup
         [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hWnd, StringBuilder text, int count);
 
-        private static string ForegroundTitle()
+        /// <summary>
+        /// Waits up to 30 s until the window in front matches one of "A|B|class:C": a title part, or with "class:" a
+        /// window class (Windows' credential dialog has no telling title of its own – #316). False if it never comes.
+        /// </summary>
+        private static bool WaitForWindow(string wanted)
         {
-            var sb = new StringBuilder(256);
-            GetWindowText(GetForegroundWindow(), sb, sb.Capacity);
-            return sb.ToString();
-        }
-
-        /// <summary>Waits up to 30 s until the window in front has one of the titles ("A|B"); false if it never comes.</summary>
-        private static bool WaitForWindow(string titles)
-        {
-            var wanted = titles.Split('|');
+            var parts = wanted.Split('|');
             for (var i = 0; i < 300; i++)
             {
-                var title = ForegroundTitle();
-                foreach (var w in wanted) if (w.Length > 0 && title.IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                var hwnd = GetForegroundWindow();
+                var title = new StringBuilder(256);
+                var cls = new StringBuilder(256);
+                GetWindowText(hwnd, title, title.Capacity);
+                GetClassName(hwnd, cls, cls.Capacity);
+                foreach (var w in parts)
+                {
+                    if (w.StartsWith("class:", StringComparison.Ordinal))
+                    {
+                        if (cls.ToString().IndexOf(w.Substring(6), StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                    }
+                    else if (w.Length > 0 && title.ToString().IndexOf(w, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                }
                 Thread.Sleep(100);
             }
             return false;

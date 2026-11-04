@@ -921,7 +921,10 @@ function typeIntoCredentialDialog(password) {
   const exe = helperExe();
   if (!exe) return Promise.reject(new Error('no helper'));
   return new Promise((resolve, reject) => {
-    const child = spawn(exe, ['--type', '--wait-window', 'Windows-Sicherheit|Windows Security|Sécurité Windows|Seguridad de Windows'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    // By title (localised) or by the window class of Windows' credential dialog – its own title is often empty (#316).
+    const wanted = 'Windows-Sicherheit|Windows Security|Sécurité Windows|Seguridad de Windows|class:Credential Dialog Xaml Host';
+    const child = spawn(exe, ['--type', '--wait-window', wanted], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    child.on('exit', (code) => diag(`RDP credential dialog typing: exit ${code}`));
     child.on('error', reject);
     child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
     child.stdin.end(Buffer.from(`${password}\n`, 'utf8'));
@@ -1099,7 +1102,9 @@ let shortcutsActive = '';
 /** Value of the selected entry for auto-type ('u' user name, 'p' password, 'o' one-time code). */
 async function autoTypeValue(key, what) {
   const i = key.indexOf('/');
-  const item = await vault.getItem(key.slice(0, i), key.slice(i + 1));
+  let item = await usableItem(key.slice(0, i), key.slice(i + 1));
+  // An asset types its connection account (#316): the linked RDP/SSH login (e.g. the AD account), else its own values.
+  if (item.type === 'server') item = { ...item, ...(await serverAccount(item, item.server?.rdpLink)) };
   const value = what === 'u' ? item.username : what === 'p' ? item.password : item.totp ? (await totpCode(item.totp))?.code : '';
   if (!value) throw new Error({ u: t('Kein Benutzername hinterlegt'), p: t('Kein Passwort hinterlegt'), o: t('Kein Einmalcode (TOTP) hinterlegt') }[what] || t('Nicht gefunden'));
   return value;
@@ -1425,6 +1430,36 @@ async function confirmAgentRead({ agent, title, vault: vaultName }) {
   });
 }
 
+/** #308: every single passkey sign-in of an agent – no "for this session", no "never ask again". */
+async function confirmAgentPasskey({ agent, title, vault: vaultName, rpId, origin }) {
+  return (await askInApp({
+    kind: 'agent-passkey',
+    agent,
+    title: t('„{agent}“ möchte sich mit einem Passkey anmelden', { agent }),
+    lead: t('Website: {origin} (Passkey für {rpId}). Keevault signiert nur diese eine Anmeldung, der Passkey selbst bleibt im Tresor.', { origin, rpId }),
+    entry: title,
+    vault: vaultName,
+    note: t('Nur erlauben, wenn du diese Anmeldung gerade erwartest.'),
+    allow: t('Diese Anmeldung erlauben'),
+    cancel: 'deny',
+  })) === 'allow';
+}
+
+/** #315: a tool asks for a Microsoft sign-in – the user picks the account (or refuses). → entry key or null */
+async function chooseAgentMicrosoft({ agent, purpose, accounts }) {
+  const answer = await askInApp({
+    kind: 'agent-microsoft',
+    agent,
+    title: t('„{agent}“ möchte sich bei Microsoft anmelden', { agent }),
+    lead: purpose ? t('Zweck laut Tool: {purpose}', { purpose }) : t('Wähle das Konto, mit dem sich das Tool anmelden soll.'),
+    choices: accounts.slice(0, 20).map((a) => ({ value: a.key, label: a.title, hint: [a.username, a.vault].filter(Boolean).join(' · ') })),
+    note: t('Das Tool bekommt Benutzername, Passwort und den aktuellen Einmalcode dieses Kontos – nur dieses eine Mal.'),
+    allow: t('Mit diesem Konto anmelden'),
+    cancel: 'deny',
+  });
+  return accounts.some((a) => a.key === answer) ? answer : null;
+}
+
 async function confirmAgentWrite({ agent, action, title, vault: vaultName, fields }) {
   return (await askInApp({
     kind: 'agent-write',
@@ -1735,6 +1770,11 @@ const api = {
   /** Admin mode on: only with the app PIN (no PIN set → not possible). Returns the settings. */
   async activateAdminMode(pin) {
     requireOpen();
+    // Demo (#309): admin mode to try out without a PIN – there is nothing real to protect. The smoke test keeps the PIN.
+    if (demo && !smokeTest) {
+      config.update({ adminTools: true, pimButton: false });
+      return config.get();
+    }
     if (!config.get().appPin) throw new Error(t('Für den Admin-Modus brauchst du eine App-PIN – lege sie unter Einstellungen fest.'));
     await api.verifyPin(String(pin || ''));
     config.update({ adminTools: true, pimButton: false });
@@ -1901,6 +1941,8 @@ const api = {
     return saved;
   },
   delete: (containerId, id) => vault.deleteItem(containerId, id),
+  /** Entries (assets, linked logins) that use this login – "Show linked assets" in admin mode (#307). */
+  linkedEntries: (containerId, id) => vault.linkedEntries(containerId, id),
   move: (fromId, toId, id, opts) => vault.moveItem(fromId, toId, id, opts),
   /**
    * Moves a passkey to another login (saved in the wrong entry). Added to the target first, removed from the source
@@ -3092,6 +3134,10 @@ app.whenReady().then(async () => {
     trusted: (agent, vaultId, entryId) => mcpTrusted().some((x) => x.agent === agent && x.vaultId === vaultId && x.entryId === entryId),
     trust: trustAgentEntry,
     waitUnlock: () => waitForUnlock(),
+    // Off unless turned on in Settings → AI agents (#308, #315).
+    features: () => ({ passkeys: !!config.get().mcpPasskeys, microsoft: !!config.get().mcpMicrosoft }),
+    confirmPasskey: confirmAgentPasskey,
+    chooseMicrosoft: chooseAgentMicrosoft,
     scope: () => {
       const s = config.get();
       const scopes = (Array.isArray(s.mcpScopes) ? s.mcpScopes : []).filter((x) => x && typeof x.vaultId === 'string')

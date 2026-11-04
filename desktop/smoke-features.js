@@ -73,7 +73,10 @@ export async function featureChecks(ctx) {
   const openItem = async (title) => {
     await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
     await sleep(300);
-    await js(`[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.querySelector(".row-title, .t, b")?.textContent.trim() === ${JSON.stringify(title)} || r.textContent.includes(${JSON.stringify(title)}))?.click()`);
+    // The list redraws after a save: wait until the entry is in it, then open it.
+    const find = `[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.querySelector(".row-title, .t, b")?.textContent.trim() === ${JSON.stringify(title)} || r.textContent.includes(${JSON.stringify(title)}))`;
+    for (let i = 0; i < 15 && !(await js(`!!${find}`)); i++) await sleep(200);
+    await js(`${find}?.click()`);
     await sleep(600);
   };
   // Each area at most 45 s: a step that hangs is reported and the run goes on (never a smoke test without an end).
@@ -102,6 +105,12 @@ export async function featureChecks(ctx) {
       const [vw, vh] = view.split('x').map(Number);
       if (Math.abs(cw - w) <= 4 && Math.abs(ch - h) <= 4 && (!want || (Math.abs(vw - want[0]) <= 8 && Math.abs(vh - want[1]) <= 8))) return;
       if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[features] ${area} window ${cw}x${ch} (page ${view}) → ${w}x${h}`);
+      // Window right, page stuck at the old size (seen after switching the see-through material): a real second
+      // resize – a pixel smaller, then back – makes the page follow.
+      if (Math.abs(cw - w) <= 4 && Math.abs(ch - h) <= 4) {
+        win.setSize(w - 8, h - 8);
+        await sleep(300);
+      }
       win.setSize(w, h);
       await sleep(700);
     }
@@ -227,13 +236,8 @@ export async function featureChecks(ctx) {
       await segClick('Design', 'Hell');
       if (updaterTheme() !== 'light') fail('mainmenu', `update window not light with the light theme (${ctx.updaterArgs().join(' ')})`);
       await segClick('Design', 'System');
-      await segClick('Transparenz', 'Stark');
-      if (config.get().transparency !== 'strong') fail('mainmenu', `transparency not switched (${config.get().transparency})`);
-      if (Math.abs(win.getOpacity() - 0.95) > 0.01) fail('mainmenu', `strong transparency is not 95 % (${win.getOpacity()})`);
-      await segClick('Transparenz', 'Leicht');
-      // Light (the default) is barely see-through.
-      if (Math.abs(win.getOpacity() - 0.985) > 0.01) fail('mainmenu', `light transparency is not 98.5 % (${win.getOpacity()})`);
-      // Small window: the menu ends inside the window and scrolls.
+      // Small window: the menu ends inside the window and scrolls. Checked before the transparency is switched – a
+      // window resized right after switching the see-through material kept its page at the small size.
       const [w, h] = win.getSize();
       win.setSize(900, 520);
       await sleep(900);
@@ -244,6 +248,12 @@ export async function featureChecks(ctx) {
       await resizeTo(w, h, "mainmenu");
       // The resize event arrives late and closes open context menus – wait until it is through.
       await sleep(1000);
+      await segClick('Transparenz', 'Stark');
+      if (config.get().transparency !== 'strong') fail('mainmenu', `transparency not switched (${config.get().transparency})`);
+      if (Math.abs(win.getOpacity() - 0.95) > 0.01) fail('mainmenu', `strong transparency is not 95 % (${win.getOpacity()})`);
+      await segClick('Transparenz', 'Leicht');
+      // Light (the default) is barely see-through.
+      if (Math.abs(win.getOpacity() - 0.985) > 0.01) fail('mainmenu', `light transparency is not 98.5 % (${win.getOpacity()})`);
     });
 
     // ---- trash: reachable from the main menu, a deleted entry is listed there and the button restores it
@@ -474,6 +484,18 @@ export async function featureChecks(ctx) {
       if (!ed.own || ed.pick !== 'Smoke Domain') fail('loginlink', `editor of a linked login: ${JSON.stringify(ed)}`);
       // The type of an existing entry is fixed (#263).
       if (!(await js('!!document.querySelector(".detail-pane select[name=type]")?.disabled'))) fail('loginlink', 'type of an existing entry can be changed');
+      // Picker filters (#312): "Current vault" by default, kinds narrow the list (Microsoft: only the Microsoft login).
+      await js('document.querySelector(".detail-pane .link-pick[data-name=loginLink]")?.click()');
+      await sleep(400);
+      const pick = async () => JSON.parse(await js('JSON.stringify({ all: document.querySelector("dialog[open] .pick-filters [data-filter=all] button.on")?.dataset.value, rows: [...document.querySelectorAll("dialog[open] .link-pick-row:not(:disabled) .link-pick-text")].map((e) => e.textContent) })'));
+      let pk = await pick();
+      if (pk.all !== 'false') fail('loginlink', `picker does not start at the current vault: ${JSON.stringify(pk)}`);
+      await js('document.querySelector("dialog[open] .pick-filters [data-filter=kind] button[data-value=microsoft]")?.click()');
+      await sleep(200);
+      pk = await pick();
+      if (!pk.rows.includes('Smoke MS Link') || pk.rows.includes('Smoke Domain')) fail('loginlink', `Microsoft filter of the picker: ${JSON.stringify(pk.rows)}`);
+      await js('document.querySelector("dialog[open] .modal-head .icon-btn")?.click()');
+      await sleep(200);
       await js('[...document.querySelectorAll(".detail-pane button")].find((b) => /^(Abbrechen|Cancel)$/.test(b.textContent.trim()))?.click()');
       await sleep(300);
       const stored = await vault.getItem(kvc.id, intranet.id);
@@ -796,6 +818,40 @@ export async function featureChecks(ctx) {
     });
 
     // ---- passkey: drag it from the entry onto another login in the list – it moves there (after one confirmation)
+    // ---- AI agents (#308, #315): passkey sign-ins and Microsoft sign-ins for tools are two switches, off by default
+    await step('mcpextra', async () => {
+      const before = config.get().mcpEnabled;
+      config.update({ mcpEnabled: true });
+      changed();
+      // The window takes the setting over with its next reload: open the settings until the agent page shows it.
+      let sw = [null, null];
+      for (let attempt = 0; attempt < 4 && sw[0] === null; attempt++) {
+        await sleep(700);
+        await closeDialogs();
+        await js('document.querySelector(".menu-btn")?.click()');
+        await sleep(300);
+        await js('document.querySelector(".main-menu [data-action=settings]")?.click()');
+        await sleep(500);
+        await js('[...document.querySelectorAll("dialog[open] .tabs button")].find((b) => /KI-Agenten|AI agents/.test(b.textContent))?.click()');
+        await sleep(300);
+        sw = JSON.parse(await js('JSON.stringify(["mcpPasskeys", "mcpMicrosoft"].map((n) => { const c = document.querySelector(`dialog[open] input[name=${n}]`); return c ? c.checked : null; }))'));
+      }
+      if (sw[0] !== false || sw[1] !== false) fail('mcpextra', `agent switches missing or on by default: ${JSON.stringify(sw)}`);
+      if (config.get().mcpPasskeys || config.get().mcpMicrosoft) fail('mcpextra', 'agent passkeys / Microsoft sign-ins on by default');
+      await closeDialogs();
+      config.update({ mcpEnabled: before });
+      changed();
+    });
+
+    // ---- help: "Report a bug" and "Feature request" lead to the form on keevault.de (#311)
+    await step('helpfeedback', async () => {
+      await js('document.querySelector(".sidebar-foot .help-btn")?.click()');
+      await sleep(400);
+      const fb = String(await js('[...document.querySelectorAll("dialog[open] [data-feedback]")].map((b) => b.dataset.feedback).join()'));
+      if (fb !== 'bug,feature') fail('helpfeedback', `help without "Report a bug" / "Feature request" (${fb})`);
+      await closeDialogs();
+    });
+
     // ---- a short entry shows no scrollbar in the detail pane (#25); the access report needs no sideways scrolling (#24)
     await step('noscroll', async () => {
       await save({ type: 'login', title: 'Smoke Kurz', username: 'kurz', password: 'x' });
@@ -812,10 +868,10 @@ export async function featureChecks(ctx) {
       let report = null;
       for (let i = 0; i < 20 && !report?.rows; i++) {
         await sleep(300);
-        report = JSON.parse(await js('JSON.stringify((() => { const d = document.querySelector("dialog[open].report-modal"); const tb = d?.querySelector(".table"); const b = d?.querySelector(".modal-body"); return d ? { rows: d.querySelectorAll(".table tbody tr").length, tableX: tb ? tb.scrollWidth - tb.clientWidth : 0, bodyX: b.scrollWidth - b.clientWidth, tableY: tb ? tb.scrollHeight - tb.clientHeight : 0 } : null; })())'));
+        report = JSON.parse(await js('JSON.stringify((() => { const d = document.querySelector("dialog[open].report-modal"); const tb = d?.querySelector(".table"); const b = d?.querySelector(".modal-body"); return d ? { rows: d.querySelectorAll(".table tbody tr").length, tableX: tb ? tb.scrollWidth - tb.clientWidth : 0, bodyX: b.scrollWidth - b.clientWidth, tableY: tb ? tb.scrollHeight - tb.clientHeight : 0, dialogY: d.scrollHeight - d.clientHeight } : null; })())'));
       }
       if (!report?.rows) fail('noscroll', `access report did not show its table (${JSON.stringify(report)})`);
-      else if (report.tableX > 1 || report.bodyX > 1 || report.tableY > 1) fail('noscroll', `access report scrolls: ${JSON.stringify(report)}`);
+      else if (report.tableX > 1 || report.bodyX > 1 || report.tableY > 1 || report.dialogY > 1) fail('noscroll', `access report scrolls (or two scrollbars, #310): ${JSON.stringify(report)}`);
       await closeDialogs();
       // Password check (#26): a login on a website of the passkey directory without a passkey is recommended one.
       process.env.KVPWSAFE_TEST_PASSKEY_DIRECTORY = JSON.stringify({ 'smoke-passkey.example': { passwordless: 'allowed', documentation: 'https://smoke-passkey.example/help' } });
@@ -844,9 +900,10 @@ export async function featureChecks(ctx) {
         await openItem('Smoke Passkey schmal');
         for (let j = 0; j < 10 && !(await js('!!document.querySelector(".detail-pane .passkey-row")')); j++) await sleep(300);
       }
-      const [w, h] = win.getSize();
-      win.setSize(1000, 700);
-      await sleep(900);
+      // A narrow detail pane – made narrow itself instead of shrinking the window (a window grown back after a resize
+      // kept its page at the small size in the test environment).
+      await js('document.querySelector(".detail-pane").style.width = "380px"; true');
+      await sleep(300);
       const m = JSON.parse(await js(`JSON.stringify((() => {
         const row = document.querySelector(".detail-pane .field-card .passkey-row");
         const label = row?.closest(".field")?.querySelector("label");
@@ -855,8 +912,7 @@ export async function featureChecks(ctx) {
         return { indent: Math.round(row.getBoundingClientRect().left - label.getBoundingClientRect().left), border: getComputedStyle(row).borderTopWidth,
           pane: Math.round(document.querySelector(".detail-pane").clientWidth), lines: Math.round(text.getBoundingClientRect().height / parseFloat(getComputedStyle(text).lineHeight || "20")) };
       })())`));
-      await resizeTo(w, h, "passkeynarrow");
-      await sleep(1000);
+      await js('document.querySelector(".detail-pane").style.width = ""; true');
       if (m.missing) fail('passkeynarrow', `passkey row not shown: ${String(await js('document.querySelector(".detail-pane")?.innerText.slice(0, 160) || "no detail pane"')).replace(/\s+/g, ' ')}`);
       else if (m.pane > 520) fail('passkeynarrow', `detail pane not narrow in the small window: ${JSON.stringify(m)}`);
       else if (m.indent > 2 || m.border !== '0px') fail('passkeynarrow', `passkey indented in a narrow window: ${JSON.stringify(m)}`);
@@ -987,6 +1043,16 @@ export async function featureChecks(ctx) {
       const az = await save({ type: 'server', title: 'Smoke AZ', server: { kind: 'azurevm', host: 'az', bastionUrl: 'https://portal.azure.com/#@contoso.com/resource/x/connect' } });
       const methods = async (id) => (await vault.summaries()).find((x) => x.id === id)?.methods || [];
       if (!(await methods(win1.id)).includes('rdp')) fail('devices', 'Windows server without RDP');
+      // "Show linked assets" (#307): the firewall login lists the server that uses it for RDP.
+      if (fw) {
+        const used = await api.linkedEntries(kvc.id, fw.id);
+        if (!used.some((e) => e.title === 'Smoke WIN' && e.uses.includes('rdp'))) fail('devices', `linked assets of a login: ${JSON.stringify(used)}`);
+      }
+      // Auto-type on an asset (#316): Ctrl+Shift+P types the linked RDP account's password (the server has none itself).
+      if (fw) {
+        const typed = await api.autoType(kvc.id, win1.id, 'p').then(() => 'ok', (e) => e.message);
+        if (typed !== 'ok') fail('devices', `auto-type on an asset does not use its RDP account (${typed})`);
+      }
       // Credential Guard (#29): no saved credential for mstsc, the linked account's password goes to the clipboard.
       process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD = '1';
       const cg = await api.connectServer({ containerId: kvc.id, id: win1.id, method: 'rdp' }).catch((e) => ({ error: e.message }));

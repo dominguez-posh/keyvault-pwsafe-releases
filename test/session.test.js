@@ -508,3 +508,13 @@ test('an existing entry keeps its type (#263)', async () => {
   const saved = await session.saveItem(cid, { ...server, title: 'SRV 2' });
   assert.equal(saved.type, 'server');
 });
+
+test('linked entries of a login name each user and how it uses the login (#307)', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  const login = await session.saveItem(cid, { type: 'login', title: 'Admin', username: 'a', password: 'x' });
+  await session.saveItem(cid, { type: 'server', title: 'VM01', server: { kind: 'azurevm', rdpLink: `${cid}/${login.id}`, bastionVmLink: `${cid}/${login.id}` } });
+  await session.saveItem(cid, { type: 'login', title: 'Portal', loginLink: `${cid}/${login.id}` });
+  const used = await session.linkedEntries(cid, login.id);
+  assert.deepEqual(used.map((e) => [e.title, e.type, e.uses]), [['Portal', 'login', ['login']], ['VM01', 'server', ['rdp', 'bastionVm']]]);
+});
