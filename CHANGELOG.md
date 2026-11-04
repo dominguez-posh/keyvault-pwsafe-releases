@@ -4,6 +4,14 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.24 – 2026-11-04
+- Schmale Listenspalte: Der Tresorname bleibt einzeilig und endet mit „…“ (voller Name als Tooltip), statt Buchstabe für Buchstabe umzubrechen; die Kennzeichen wandern unter den Namen, ganz schmal zeigt „Neu“ nur noch das Plus (#322).
+- Live-Demo: Im Admin-Modus fehlte das Logo (#319).
+
+### English
+- Narrow list column: the vault name stays on one line and ends in "…" (full name as tooltip) instead of breaking letter by letter; the badges move below the name, and at the narrowest "New" shows just the plus (#322).
+- Live demo: the logo was missing in admin mode (#319).
+
 ## 0.9.23 – 2026-11-04
 - KI-Agenten: Die Anmeldung mit Passkey klappt jetzt auch bei Microsoft (Entra ID). Die lange Challenge von login.microsoft.com wurde bisher als ungültig abgelehnt (#321).
 

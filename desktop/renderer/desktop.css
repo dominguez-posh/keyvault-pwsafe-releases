@@ -598,6 +598,21 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .list-title .title-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .list-title .title-row h2 { flex: 0 1 auto; min-width: 0; }
 .list-title .title-row .head-badges { flex: 0 0 auto; flex-wrap: nowrap; }
+/* Narrow list column (#322): the name stays on one line and ends in "…" (full name as tooltip) instead of breaking
+   letter by letter; the badges move below the name, and when it gets really tight they and the "New" label give way. */
+.list-pane { container: listpane / inline-size; }
+.list-title h2, .list-head .list-title h2 { display: block; white-space: nowrap; text-overflow: ellipsis; overflow-wrap: normal; }
+@container listpane (max-width: 440px) {
+  .list-title .title-row { flex-wrap: wrap; row-gap: 6px; }
+  .list-title .title-row h2 { flex: 1 1 0; }
+  .list-title .title-row .head-badges { flex-basis: 100%; }
+  .list-title .title-row .role-mark + h2 + .head-badges { padding-left: 36px; }
+}
+@container listpane (max-width: 300px) {
+  .list-title .title-row .head-badges, .list-head .mode-badge { display: none; }
+  .new-split .new-label { display: none; }
+  .new-split .new-main { padding: 0 6px; }
+}
 .role-mark { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; color: var(--muted); background: var(--accent-soft); cursor: help; }
 .role-mark.role-write, .role-mark.role-admin { color: var(--accent); }
 .role-mark.role-owner { color: #b7791f; background: rgba(214, 158, 46, .14); }

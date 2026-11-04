@@ -1413,7 +1413,7 @@ function renderList() {
   // "New" at the top right of the list: a click creates a login, the arrow offers the other kinds and a folder.
   const newButton = h('span', { class: 'new-split' },
     h('button', { type: 'button', class: 'new-main', title: t('Neuer Eintrag (Strg+N)'), onclick: () => (deviceMode() ? newItem('server', { type: 'server', server: { kind: 'windows' } }) : newItem('login')) },
-      h('span', { class: 'new-plus' }, icon('plus', 15)), t('Neu')),
+      h('span', { class: 'new-plus' }, icon('plus', 15)), h('span', { class: 'new-label' }, t('Neu'))),
     h('button', { type: 'button', class: 'new-more', title: t('Was anlegen?'), 'aria-label': t('Was anlegen?'), onclick: (e) => {
       const r = e.currentTarget.closest('.new-split').getBoundingClientRect();
       contextMenu({ preventDefault() {}, clientX: r.left, clientY: r.bottom + 6 }, newMenuItems(container));
