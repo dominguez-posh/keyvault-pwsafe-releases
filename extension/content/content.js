@@ -691,6 +691,13 @@
   async function useLogin(entry) {
     const target = anchor;
     hideMenu();
+    // Microsoft's sign-in page (#334): a Microsoft account from the field menu signs in step by step like the bar –
+    // name, passkey (if the account has one) or password, one-time code. Other entries are only filled in.
+    if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) {
+      const ids = { containerId: entry.containerId, id: entry.id };
+      const job = await call('cs:msAccount', ids).catch(() => null);
+      if (job) return runSignIn(job, () => call('cs:msAccount', ids).catch(() => null));
+    }
     try {
       const creds = await call('cs:fill', { containerId: entry.containerId, id: entry.id });
       fill(creds, target);

@@ -1828,6 +1828,7 @@ export default {
   'Microsoft-Anmeldungen für Tools sind ausgeschaltet (Keevault → Einstellungen → KI-Agenten).': 'Microsoft sign-ins for tools are switched off (Keevault → Settings → AI agents).',
   'Mit Passkey': 'With passkey',
   'Mit diesem Konto anmelden': 'Sign in with this account',
+  'anderer Tenant': 'other tenant',
   'Nur Einträge aus demselben Tresor lassen sich verknüpfen.': 'Only entries of the same vault can be linked.',
   'Nur erlauben, wenn du diese Anmeldung gerade erwartest.': 'Only allow it if you are expecting this sign-in right now.',
   'Passkeys für KI-Agenten sind ausgeschaltet (Keevault → Einstellungen → KI-Agenten).': 'Passkeys for AI agents are switched off (Keevault → Settings → AI agents).',

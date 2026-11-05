@@ -41,11 +41,16 @@ export function typeViaHelperExe(text) {
   const exe = helperExe();
   if (!exe) return Promise.resolve(false);
   return new Promise((resolve, reject) => {
-    const child = spawn(exe, ['--type'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+    // stdout: "window <program>/<class> remote|unicode" – which window and how it was typed (#332), never the value.
+    const child = spawn(exe, ['--type'], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
     let started = false;
+    let window = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { window += chunk; });
     child.on('spawn', () => { started = true; });
     child.on('error', (e) => (started ? reject(e) : resolve(false)));
     child.on('exit', (code) => {
+      diag(`AUTOTYPE ${window.trim().slice(0, 200) || 'window ?'} exit ${code}`);
       if (code === 0) resolve(true);
       else reject(new Error(code === 3 ? t('Das Zielfenster nimmt keine Eingaben an (läuft es als Administrator?)') : t('Auto-Type fehlgeschlagen')));
     });

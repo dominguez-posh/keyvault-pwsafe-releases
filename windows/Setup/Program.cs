@@ -8,6 +8,7 @@
 //   Keevault-Update.exe --clipboard            stdin text → clipboard, kept out of history and cloud clipboard (Clip.cs)
 //   Keevault-Update.exe --clipboard-clear      clears the clipboard if it still holds the stdin text (Clip.cs)
 //   Keevault-Update.exe --type                 stdin text → typed into the focused window (auto-type, Typing.cs)
+//   Keevault-Update.exe --type-selftest        checks the key plan for remote desktop/VM windows, types nothing
 //   Keevault-Update.exe --rdp                  stdin host/port/user/password → mstsc with a temporary credential (Rdp.cs)
 //   … --screenshot <png> --page welcome|progress|done|error|update|updated [--theme light|dark] [--lang de|en]
 //                                              renders one page into a PNG without showing a window (tests, docs)
@@ -45,6 +46,8 @@ namespace Keevault.Setup
             if (args.Has("clipboard")) return Clip.Run();
             // Auto-type into the focused window (no window, no WPF).
             // --wait-window "A|B": only once a window with one of these titles is in front (RDP sign-in under Credential Guard).
+            // --type-selftest: key plan for remote windows (#332), fixed sample, types nothing (test/autotype-keys.test.js).
+            if (args.Has("type-selftest")) return Typing.SelfTest();
             if (args.Has("type")) return Typing.Run(args.Get("wait-window"));
             // Exclude the app from Windows Error Reporting (no crash dumps with decrypted data).
             if (args.Has("wer-exclude")) return Wer.Exclude(args.Get("wer-exclude"));
