@@ -21,3 +21,18 @@ test('auto-type detects remote desktop and VM windows, and logs the window but n
   assert.match(js, /diag\(`AUTOTYPE \$\{window/);
   assert.doesNotMatch(js, /diag\([^)]*\btext\b/);
 });
+
+test("Windows' credential dialog: nothing typed, the value goes to the protected clipboard (#336)", () => {
+  const cs = readFileSync(fileURLToPath(new URL('../windows/Setup/Typing.cs', import.meta.url)), 'utf8');
+  // Checked before anything is sent: exit code 5, no SendInput for this window.
+  const run = cs.slice(cs.indexOf('public static int Run('));
+  assert.ok(run.indexOf('SecureDialogClass') > 0 && run.indexOf('SecureDialogClass') < run.indexOf('foreach (var c in text)'));
+  assert.match(cs, /SecureDialogClass = "Credential Dialog Xaml Host"/);
+  const js = readFileSync(fileURLToPath(new URL('../desktop/main/typing.js', import.meta.url)), 'utf8');
+  assert.match(js, /code === 5\) reject\(Object\.assign\(new Error\('secure dialog'\), \{ code: SECURE_DIALOG \}\)\)/);
+  assert.match(js, /if \(e\.code !== SECURE_DIALOG\) throw e;\s*await copyToClipboard\(text\);\s*showHint\(\{ kind: 'secure', what \}\);/);
+  // RDP under Credential Guard: no typing attempt any more, the password is on the clipboard before mstsc starts.
+  const dev = readFileSync(fileURLToPath(new URL('../desktop/main/devices.js', import.meta.url)), 'utf8');
+  assert.doesNotMatch(dev, /typeIntoCredentialDialog/);
+  assert.match(dev, /credentialGuardRunning\(\)\)\) \{\s*await copyToClipboard\(password\);/);
+});

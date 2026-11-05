@@ -4,6 +4,20 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.27 – 2026-11-05
+- Update: Das Update-Fenster bleibt vorne, bis die neue Version startet. Bisher konnte es hinter anderen Fenstern verschwinden. Es nimmt dabei niemandem die Eingabe weg, der gerade in einem anderen Programm tippt (#335).
+- Abtippen in den Windows-Sicherheitsdialog (z. B. die Kennwortabfrage vor einer Remotedesktop-Verbindung): Windows lässt dort bewusst kein Programm tippen, das Passwort kam deshalb nie an. Keevault legt den Wert jetzt in die geschützte Zwischenablage und sagt „mit Strg+V einfügen“. Beim Remotedesktop-Start unter Credential Guard liegt das Passwort gleich in der Zwischenablage (#336).
+- Klappt die automatische Anmeldung nicht, erklärt jetzt ein kleines Fenster oben rechts, warum, und was zu tun ist (Konto prüfen, ins Kennwortfeld klicken, Strg+V, OK). Es nimmt dem Windows-Dialog nicht den Fokus (#338).
+- Zwischenablage: Auch die Browser-Erweiterung kopiert jetzt geschützt über die App, also nicht in den Windows-Verlauf und nicht in die Cloud-Zwischenablage. Das gilt für Popup und Einmalcode nach dem Ausfüllen. Ist die geschützte Zwischenablage nicht verfügbar, kopiert Keevault nichts und meldet das, statt den Wert ungeschützt abzulegen (#337).
+- KI-Agenten: Die Kontoauswahl bei „… möchte sich bei Microsoft anmelden“ hat jetzt eine Suche (Titel, Benutzername, Tresor) und einen Tresorfilter. Die Liste scrollt und zeigt alle Konten, nicht mehr höchstens 20 (#339).
+
+### English
+- Update: the update window stays in front until the new version starts. Until now it could disappear behind other windows. It doesn't take the input away from anyone typing in another program (#335).
+- Auto-type into the Windows Security dialog (e.g. the password prompt before a remote desktop connection): Windows deliberately lets no program type there, so the password never arrived. Keevault now puts the value on the protected clipboard and says to paste it with Ctrl+V. When remote desktop is started under Credential Guard, the password is on the clipboard right away (#336).
+- When the automatic sign-in is not possible, a small window at the top right now explains why and what to do (check the account, click into the password field, Ctrl+V, OK). It doesn't take the focus from the Windows dialog (#338).
+- Clipboard: the browser extension now also copies through the app's protected clipboard, so nothing goes into the Windows history or the cloud clipboard. This covers the popup and the one-time code after filling. If the protected clipboard is unavailable, Keevault copies nothing and says so, instead of putting the value there unprotected (#337).
+- AI agents: the account choice for "… wants to sign in to Microsoft" now has a search (title, user name, vault) and a vault filter. The list scrolls and shows all accounts, no longer at most 20 (#339).
+
 ## 0.9.26 – 2026-11-05
 - Abtippen (Strg+Umschalt+U/P/O) funktioniert jetzt auch in Remotedesktop-Fenstern und VM-Konsolen, auch im Anmeldebildschirm des anderen Computers. Dort drückt Keevault jede Taste einzeln wie eine echte Tastatur, statt Unicode-Zeichen zu schicken, die diese Fenster nicht weitergeben (#332).
 - Microsoft-Anmeldung: Ein Konto aus dem Keevault-Menü am Namensfeld meldet jetzt vollständig an, wie die Leiste oben rechts. Hat der Eintrag einen Passkey, meldet Keevault damit an, sonst mit Passwort und Einmalcode. Bisher wurde nur der Name eingetragen (#334).

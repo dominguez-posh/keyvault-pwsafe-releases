@@ -8,7 +8,8 @@ import { featureChecks } from '../smoke-features.js';
 import { t } from '../../extension/core/i18n.js';
 import { appRoot, demo, missingFiles, screenshot } from './boot.js';
 import { config, files, opened, updater, vault, win, windows } from './state.js';
-import { askInApp, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, trustAgentEntry, waitForUnlock } from './agents.js';
+import { hintContent, hintsShown } from './hint-window.js';
+import { askInApp, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, trustAgentEntry, waitForUnlock } from './agents.js';
 import { api } from './api/index.js';
 import { browserHandlers } from './browser.js';
 import { copyViaHelperExe } from './clipboard.js';
@@ -822,6 +823,10 @@ export function runSmokeTest() {
           lastAdminUrl: () => lastAdminUrl,
           confirmAgentRead,
           confirmAgentPasskey,
+          chooseAgentMicrosoft,
+          hintsShown,
+          hintContent,
+          browserCopy: (text) => browserHandlers.copy({ text }),
           waitForUnlock,
           lockIfWindowsLocked,
           signInDone: (host) => browserHandlers.signInDone({ host }),

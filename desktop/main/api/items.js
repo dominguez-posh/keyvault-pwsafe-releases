@@ -136,7 +136,7 @@ export const itemsApi = {
     }
     win?.minimize();
     await new Promise((r) => setTimeout(r, 400));
-    await autoTypeText(value);
+    await autoTypeText(value, what);
     return true;
   },
   // No export: entries never leave the app as a plain file (only encrypted owner backups, see createBackup). The only file the

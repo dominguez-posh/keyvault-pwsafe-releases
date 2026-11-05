@@ -279,6 +279,12 @@ namespace Keevault.Setup
 
             if (updateMode) ShowUpdate();
             else ShowWelcome();
+            // Visible update: in front and on top until the new version starts (#335); a silent one stays invisible.
+            if (args.Has("update") && !args.Has("silent"))
+            {
+                ContentRendered += (s, e) => UpdateLog.Write($"window shown, in front: {KeepInFront.Bring(this)}");
+                KeepInFront.Hold(this);
+            }
             if (args.Has("update")) ContentRendered += async (s, e) => await RunUpdate(false);
             Closed += (s, e) => { if (startAppOnClose) StartApp(null); };
         }
@@ -753,11 +759,15 @@ namespace Keevault.Setup
             {
                 if (!retry && int.TryParse(args.Get("pid"), out var pid))
                 {
+                    var waited = Stopwatch.StartNew();
                     try
                     {
                         using (var app = Process.GetProcessById(pid)) await Task.Run(() => app.WaitForExit(30000));
                     }
                     catch (ArgumentException) { /* already gone */ }
+                    UpdateLog.Write($"app ended after {waited.ElapsedMilliseconds} ms{(args.Has("silent") ? " (silent)" : "")}");
+                    // The old app's window is gone: take the foreground once more (#335).
+                    if (!args.Has("silent")) KeepInFront.Bring(this);
                 }
                 if (args.Get("to") != null) status.Text = Text.T("Neue Version wird installiert …");
                 if (string.IsNullOrEmpty(setup) || !File.Exists(setup)) { FailUpdate(SetupError.UpdateFileMissing(), false, null); return; }

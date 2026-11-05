@@ -51,9 +51,46 @@ export function questionDialog(q) {
   let choice = q.choices?.[0]?.value || 'allow';
   const options = (q.choices || []).map((c, i) => {
     const input = h('input', { type: 'radio', name: `q${q.id}`, value: c.value, checked: i === 0, onchange: () => { choice = c.value; } });
-    return h('label', { class: 'q-option' }, input,
+    const label = h('label', { class: 'q-option' }, input,
       h('span', { class: 'q-option-text' }, h('span', { class: 'q-option-label' }, c.label), c.hint ? h('span', { class: 'q-option-hint' }, c.hint) : null));
+    label.kvChoice = { ...c, input };
+    return label;
   });
+  // #339: search (title, user name, vault) and vault filter for the account choice – only with more than one account.
+  // A hidden choice is never sent: the first visible one is selected, none visible disables "Allow".
+  let filterBar = null;
+  let noHits = null;
+  let applyFilter = () => {};
+  if (q.filter && options.length > 1) {
+    const vaults = [...new Set(options.map((o) => o.kvChoice.vault).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const search = h('input', { type: 'search', class: 'q-search', placeholder: t('Konto suchen …'), 'aria-label': t('Konto suchen …') });
+    const vaultSelect = vaults.length > 1
+      ? h('select', { class: 'q-vault', 'aria-label': t('Tresor') }, h('option', { value: '' }, t('Alle Tresore')), ...vaults.map((v) => h('option', { value: v }, v)))
+      : null;
+    noHits = h('p', { class: 'q-nohits muted', hidden: true }, t('Kein Konto passt zur Suche.'));
+    applyFilter = () => {
+      const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const vault = vaultSelect?.value || '';
+      let firstVisible = null;
+      for (const o of options) {
+        const c = o.kvChoice;
+        o.hidden = !(words.every((w) => c.search.includes(w)) && (!vault || c.vault === vault));
+        if (!o.hidden && !firstVisible) firstVisible = o;
+      }
+      const current = options.find((o) => o.kvChoice.value === choice);
+      if ((!current || current.hidden) && firstVisible) {
+        firstVisible.kvChoice.input.checked = true;
+        choice = firstVisible.kvChoice.value;
+      }
+      noHits.hidden = !!firstVisible;
+      allow.disabled = !firstVisible;
+    };
+    search.addEventListener('input', applyFilter);
+    vaultSelect?.addEventListener('change', applyFilter);
+    // Enter in the search takes the selected (first visible) account.
+    search.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !allow.disabled) { e.preventDefault(); allow.click(); } });
+    filterBar = h('div', { class: 'q-filter' }, h('span', { class: 'q-search-wrap' }, icon('search', 14), search), vaultSelect);
+  }
   const target = q.entry ? h('div', { class: 'q-target' },
     h('span', { class: 'q-target-icon' }, icon(q.kind === 'agent-read' || q.kind === 'agent-passkey' ? 'key' : 'edit', 16)),
     h('div', { class: 'q-target-text' }, h('div', { class: 'q-target-entry' }, q.entry),
@@ -70,7 +107,8 @@ export function questionDialog(q) {
         h('div', { class: 'q-title' }, q.title))),
     q.lead ? h('p', { class: 'q-lead' }, q.lead) : null,
     target,
-    options.length ? h('div', { class: 'q-options', role: 'radiogroup' }, ...options) : null,
+    filterBar,
+    options.length ? h('div', { class: `q-options${filterBar ? ' q-options-scroll' : ''}`, role: 'radiogroup' }, ...options, noHits) : null,
     q.note ? h('p', { class: 'q-note' }, icon('shield', 13), q.note) : null,
     h('div', { class: 'q-actions' },
       h('button', { type: 'button', class: 'btn', onclick: () => { answer(q.cancel); close(); } }, t('Ablehnen')),
@@ -79,7 +117,8 @@ export function questionDialog(q) {
   dialog.classList.add('question-modal');
   dialog.addEventListener('close', () => answer(q.cancel));
   openQuestions.set(q.id, () => { answered = true; close(); });
-  allow.focus();
+  // With a search the cursor starts there (type, Enter); otherwise on the main button.
+  (filterBar?.querySelector('.q-search') || allow).focus();
 }
 
 /** Success moment after a passkey request from Windows: centred badge animation, gone after about a second. */
