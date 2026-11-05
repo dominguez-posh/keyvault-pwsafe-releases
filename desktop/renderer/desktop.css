@@ -157,6 +157,7 @@ body { overflow: hidden; }
 .q-target-text { min-width: 0; flex: 1; }
 .q-target-entry { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .q-target-vault { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.q-target-user { display: flex; align-items: center; gap: 5px; font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
 .q-fields { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
 .q-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); }
 .q-options { display: grid; gap: 8px; margin-top: 16px; }
@@ -674,6 +675,8 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .link-pick-empty { padding: 8px; margin: 0; }
 .connect-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .value.linked { display: inline-flex; align-items: center; gap: 4px; }
+.value.linked.missing { color: var(--danger); }
+.expired-title { text-decoration: line-through; opacity: .7; }
 
 /* ---------------------------------------------------------------- menus (main menu, context menus, New menu)
    One look for all of them: a frosted surface with a soft layered shadow, calm 34 px rows, neutral hover, the icon

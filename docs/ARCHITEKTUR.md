@@ -12,6 +12,124 @@
 Beide Clients sprechen direkt mit Entra ID und Key Vault. Es gibt keinen eigenen Server und keine Verbindung
 zwischen Desktop-App und Erweiterung.
 
+## Code-Struktur
+
+Der Code ist nach Themen in Module aufgeteilt, damit mehrere Personen parallel arbeiten können, ohne dieselbe Datei
+anzufassen. Jedes Modul beginnt mit einem Kommentar, der sagt, wofür es zuständig ist. Die Regeln unten prüft
+`npm run check` automatisch (`scripts/check.mjs`, Abschnitt „structure rules“); ein Verstoß bricht CI ab.
+
+### Schichten: wer wen importieren darf
+
+| Schicht | Ort | Darf importieren |
+| --- | --- | --- |
+| Kern | `extension/core/` | nur `extension/core/`, keine Pakete (läuft in Browser und Node) |
+| Erweiterung | `extension/` | nur `extension/`, keine Pakete (kein Build-Schritt) |
+| Fenster (Renderer) | `desktop/renderer/` | `desktop/renderer/` und `extension/core/`, kein Node, kein Electron |
+| Dienste des Hauptprozesses | `desktop/*.js` (auth, files, bridge, mcp …) | `desktop/*.js`, `extension/core/`, Pakete – nicht `desktop/main/`, nicht das Fenster |
+| Module des Hauptprozesses | `desktop/main/` | `desktop/main/`, die Dienste, `extension/core/`, Pakete – nicht `main.js`, nicht das Fenster |
+| Startdateien | `desktop/main.js`, `desktop/renderer/app.js` | ihre Module; niemand importiert die Startdateien |
+
+Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name', …)` auf
+(`desktop/renderer/app/ipc.js`), der Hauptprozess bietet die Funktion in `desktop/main/api/` an.
+
+### Hauptprozess: `desktop/main/`
+
+`desktop/main.js` ist nur der Start (App bereit, Reaktion auf App-Ereignisse). Alles andere liegt hier:
+
+| Modul | Thema |
+| --- | --- |
+| `boot.js` | Erstes im Prozess: Schalter der Kommandozeile, Profilordner, Einzelinstanz |
+| `state.js` | Gemeinsame Handles: Fenster, Einstellungen, Anmeldung, Tresor-Sitzung, gestartete Dienste |
+| `session.js` | Tresor-Sitzung: Sprache, Sitzung anlegen, Sperren, Aktualisieren, Offline-Spiegel |
+| `guards.js` | Prüfungen vor einer Aktion: App offen, Funktion im Tresor erlaubt, PIN, Subscription-Owner |
+| `window.js` | Hauptfenster und Tray-Symbol, Titelleiste, Ansicht, Autostart, Links (`kvpwsafe://`) |
+| `passkey-window.js` | Verstecktes Fenster für WebAuthn mit PRF, Ausliefern der App-Dateien |
+| `personal.js` | Persönlicher Tresor: Speicherort, Anlegen, Schlüssel an die PIN gebunden |
+| `settings-sync.js` | Einstellungen, die im persönlichen Tresor mitwandern |
+| `clipboard.js` | Kopieren von Geheimnissen ohne Verlauf und Cloud, Ausschluss von der Fehlerberichterstattung |
+| `typing.js` | Auto-Type, globale Tastenkürzel, ausgewählter Eintrag |
+| `signin.js` | Ein-Klick-Anmeldung über die Erweiterung (Microsoft, Bastion, Admin Center) |
+| `devices.js` | Assets: verknüpfte Konten und Verbindungen (RDP, SSH, TeamViewer) |
+| `browser.js` | Browser-Erweiterung über die Desktop-App: Freigabe, Befehle, Native Messaging |
+| `windows-passkeys.js` | Windows-Passkey-Anbieter: Anfragen und Registrierung |
+| `agents.js` | KI-Agenten (MCP): Freigabe, Bestätigungen, Protokoll |
+| `backup.js` | Verschlüsselte Backups: laufendes Backup/Restore, Druckblatt |
+| `diag.js` | Diagnoseprotokoll, Zeitmessung langsamer Netzwerkanfragen |
+| `install.js` | Erkennt eine zweite Installation |
+| `smoke.js` | Smoke-Test der ganzen App (`npm run smoke`) |
+| `api/index.js` | Die API für das Fenster: fügt die Teile unten zusammen und nimmt die Aufrufe an |
+| `api/app.js` | Zustand, Einstellungen, PIN, Admin-Modus, Entsperren, An- und Abmelden, Updates |
+| `api/items.js` | Einträge: lesen, speichern, verschieben, Versionen, Papierkorb, Import, Export |
+| `api/vaults.js` | Key-Vault-Tresore: anlegen, Zugriff, Mitglieder, Tenants, Tresor-Einstellungen, Lizenz |
+| `api/files.js` | Datei-Tresore, persönlicher Tresor, zusätzlicher Schutz |
+| `api/folders.js` | Ordner und ihre Symbole |
+| `api/backup.js` | Backup und Wiederherstellung |
+| `api/admin.js` | Admin-Werkzeuge: Microsoft-Anmeldung, Admin Center, Verbindungen zu Assets |
+| `api/integrations.js` | Windows-Passkey-Anbieter und KI-Agenten |
+| `api/reports.js` | Passwort-Check, Zugriffsbericht, Berichte speichern |
+
+### Fenster: `desktop/renderer/app/`
+
+`desktop/renderer/app.js` ist nur der Start (Module laden, Fenster zum ersten Mal zeichnen).
+
+| Modul | Thema |
+| --- | --- |
+| `ipc.js` | Aufrufe in den Hauptprozess (`call`) |
+| `state.js` | Was das Fenster gerade weiß: App-Zustand (`st`), Einträge (`items`), Auswahl (`ui`) |
+| `layout.js` | Rahmen des Fensters: drei Spalten, Trenner, obere Leiste |
+| `shell.js` | Fenster als Ganzes zeichnen, Daten laden und neu laden |
+| `events.js` | Ereignisse aus dem Hauptprozess (gesperrt, geändert, Fortschritt …) |
+| `keyboard.js` | Tastenkürzel im Fenster |
+| `helpers.js` | Kleine Helfer: Kopieren mit Bestätigung, Datum, Formularzeile, Tabs |
+| `menus.js` | Das Kontextmenü selbst |
+| `icons.js` | Symbole der Einträge und Logos der Tresore |
+| `start.js` | Vor dem Öffnen: Ersteinrichtung und gesperrter Bildschirm |
+| `admin-mode.js` | Admin-Modus ein und aus, PIN-Dialoge |
+| `modes.js` | Passwörter oder Assets: Umschalter, Ordner beider Seiten, Typfilter |
+| `sidebar.js` | Seitenleiste: Ansichten, Tresorliste, Kennzeichen |
+| `main-menu.js` | Hauptmenü (☰) mit den Ansichtseinstellungen |
+| `list.js` | Liste in der Mitte: Kopf, Suche, Zeilen, „Neu“ |
+| `folders.js` | Ordner in der Liste: Zeilen, Menü, Symbole |
+| `dragdrop.js` | Ziehen und Ablegen von Einträgen, Ordnern, Passkeys und Tresoren |
+| `multi.js` | Mehrere Einträge auf einmal |
+| `detail.js` | Detailspalte: Eintrag anzeigen und bearbeiten |
+| `item-actions.js` | Aktionen eines Eintrags: Menü, Generator, Versionen, Verschieben, Import |
+| `item-links.js` | Links auf einen Eintrag |
+| `trash.js` | Papierkorb |
+| `vault-menu.js` | Menü eines Tresors und wann welche Funktion angeboten wird |
+| `vault-dialogs.js` | Dialoge eines Tresors: Lizenz, Name, Logo, Tresor-Einstellungen, Export |
+| `vault-wizard.js` | Key-Vault-Tresor hinzufügen und anlegen |
+| `share.js` | Tresor teilen |
+| `file-vaults.js` | Datei-Tresore: anlegen, Passkey, Mitglieder, Änderungsprotokoll |
+| `personal.js` | Persönlicher Tresor: Assistent, erster Start |
+| `protection.js` | Zusätzlicher Schutz für die gemeinsamen Dialoge |
+| `backup.js` | Backup und Wiederherstellung |
+| `admin-tools.js` | Admin-Werkzeuge: Verbindungen, Admin Center, Passkeys verschieben |
+| `agents.js` | KI-Agenten: freigegebene Tresore und Ordner |
+| `requests.js` | Anfragen an das Fenster: Passkeys von Windows, Fragen von KI-Agenten |
+| `health.js` | Kontext der Berichte, Erinnerung an abgelaufene Einträge |
+| `updates.js` | Updates und Hinweis auf eine zweite Installation |
+| `settings.js` | Einstellungsdialog |
+| `help.js` | Hilfe, Bug melden, Feature-Wunsch |
+
+Daneben liegen wie bisher `reports.js` (Berichte) und `progress.js` (Fortschrittskarte).
+
+### Gemeinsamer Zustand
+
+- Hauptprozess: `desktop/main/state.js`. Fenster: `desktop/renderer/app/state.js`.
+- Andere Module lesen diese Werte direkt (`import { vault } from './state.js'`) und ändern sie nur über die
+  `set…`-Funktionen des Moduls, dem der Wert gehört. Importierte Werte lassen sich in JavaScript nicht direkt zuweisen.
+- Was nur ein Thema braucht, bleibt in dessen Modul und wird nicht exportiert.
+
+### Regeln für neuen Code
+
+1. Neuer Code kommt in das Modul seines Themas. Gibt es keins, entsteht ein neues Modul mit Kopfkommentar und einer
+   Zeile in den Tabellen oben. In die Startdateien kommt nichts Neues.
+2. Eine neue Funktion für das Fenster steht in `desktop/main/api/<thema>.js` und wird im Fenster über `call` aufgerufen.
+3. Eine Datei hat höchstens 600 Zeilen. Wer die Grenze erreicht, teilt nach Thema auf. Die bekannten Ausnahmen stehen
+   mit ihrer Obergrenze in `scripts/check.mjs` (`LINE_LIMITS`); sie dürfen schrumpfen und werden nur bewusst angehoben.
+4. Importe folgen der Tabelle „Schichten“.
+
 ## Datenmodell
 
 **Container** = Azure Key Vault mit RBAC-Autorisierung. Erkannt wird er über das Ressourcen-Tag

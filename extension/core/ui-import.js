@@ -6,6 +6,9 @@
 import { h, icon, modal, toast, setChildren } from './dom.js';
 import { parseImport, applyCsvMapping, CSV_TARGETS, CSV_TARGET_LABELS, duplicateKey } from './importer.js';
 import { SAMPLE_CSV } from './import-sample.js';
+import { MAX_FOLDER_DEPTH, folderDepth } from './model.js';
+import { isImageDataUrl, ICON_MAX_CHARS } from './image.js';
+import { normalizeFolderIcon, isFolderImage, MAX_FOLDER_IMAGE } from './folder-icons.js';
 import { t } from './i18n.js';
 
 const FORMATS = [
@@ -41,6 +44,38 @@ const BROWSER_GUIDES = [
 /** KeePass database signatures (0x9AA2D903, 0xB54BFB67, little endian). */
 const isKdbxBytes = (b) => b.length > 12 && b[0] === 0x03 && b[1] === 0xd9 && b[2] === 0xa2 && b[3] === 0x9a && b[4] === 0x67 && b[5] === 0xfb && b[6] === 0x4b && b[7] === 0xb5;
 
+/** A KeePass image (data URL) made small enough for an entry or folder icon; '' when it cannot be read. */
+async function smallImage(dataUrl, size, maxChars) {
+  if (isImageDataUrl(dataUrl, maxChars)) return dataUrl;
+  try {
+    // Drawn from the data URL itself (the pages allow data: images, not blob: ones), only raster images.
+    if (!/^data:image\/(png|jpeg|gif|webp|bmp|x-icon);base64,/.test(dataUrl)) return '';
+    const img = new Image();
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = dataUrl; });
+    for (let s = size; s >= 16; s = Math.round(s * 0.75)) {
+      const scale = Math.min(s / (img.naturalWidth || s), s / (img.naturalHeight || s), 1);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round((img.naturalWidth || s) * scale));
+      canvas.height = Math.max(1, Math.round((img.naturalHeight || s) * scale));
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      for (const url of [canvas.toDataURL('image/png'), canvas.toDataURL('image/webp', 0.85)]) if (isImageDataUrl(url, maxChars)) return url;
+    }
+  } catch {
+    // Unreadable image: no icon.
+  }
+  return '';
+}
+
+/** The one top folder all entries share ("PWDS"), when leaving it out keeps a deeper source within three levels. */
+export function commonTopFolder(items, folders = []) {
+  const paths = [...items.map((i) => i.folder || ''), ...folders];
+  const top = paths[0]?.split('/')[0];
+  if (!top || !paths.every((p) => p === top || p.startsWith(`${top}/`))) return '';
+  return paths.some((p) => folderDepth(p) > MAX_FOLDER_DEPTH) ? top : '';
+}
+
+const withoutTop = (path, top) => (path === top ? '' : path.startsWith(`${top}/`) ? path.slice(top.length + 1) : path);
+
 export function downloadSample(ctx) {
   ctx.download('kvpwsafe-import-sample.csv', SAMPLE_CSV);
 }
@@ -63,6 +98,15 @@ export function importDialog(ctx) {
   const preview = h('div', { class: 'import-preview' });
   const mappingBox = h('div', {});
   const kdbxBox = h('div', {});
+  // #327: KeePass databases are often one top group deep more than the app's three levels – offer to leave it out.
+  const dropTop = h('input', { type: 'checkbox', checked: true });
+  const topBox = h('div', {});
+  // #326: which file may be deleted – only an unencrypted export, never the KeePass database or its key file.
+  const hint = h('p', { class: 'muted small import-hint' });
+  const setHint = (kdbx) => { hint.textContent = kdbx
+    ? t('Keevault liest die KeePass-Datei und die Schlüsseldatei nur – beide bleiben unverändert, es wird nichts gelöscht.')
+    : t('Keevault löscht keine Dateien. Eine unverschlüsselte Exportdatei (CSV, JSON, XML) nach dem Import bitte selbst sicher löschen – KeePass-Datenbanken (.kdbx) und Schlüsseldateien nicht.'); };
+  setHint(false);
 
   const renderPreview = () => {
     items = parsed.csv ? applyCsvMapping(parsed.csv.columns, parsed.csv.rows, mapping) : parsed.items;
@@ -72,10 +116,15 @@ export function importDialog(ctx) {
       t('{count} Einträge', { count: items.length }),
       passkeys ? ` · ${t('{count} Passkeys', { count: passkeys })}` : '',
       notes ? ` · ${t('{count} Notizen', { count: notes })}` : ''));
-    setChildren(preview, items.slice(0, 8).map((i) => h('div', { class: 'row-sub' }, `${i.title}${i.username ? ` – ${i.username}` : ''}${i.folder ? ` (${i.folder})` : ''}`)),
+    const top = commonTopFolder(items, parsed.folders);
+    setChildren(topBox, top ? h('label', { class: 'inline small top-folder' }, dropTop,
+      t('Obersten Ordner „{name}“ weglassen – so bleibt die Ordnerstruktur innerhalb von {max} Ebenen erhalten.', { name: top, max: MAX_FOLDER_DEPTH })) : null);
+    const folderOf = (f) => (top && dropTop.checked ? withoutTop(f || '', top) : f);
+    setChildren(preview, items.slice(0, 8).map((i) => h('div', { class: 'row-sub' }, `${i.title}${i.username ? ` – ${i.username}` : ''}${folderOf(i.folder) ? ` (${folderOf(i.folder)})` : ''}`)),
       items.length > 8 ? h('div', { class: 'row-sub' }, t('… und {count} weitere', { count: items.length - 8 })) : null);
     importButton.disabled = !items.length;
   };
+  dropTop.addEventListener('change', () => renderPreview());
 
   const renderMapping = () => {
     if (!parsed.csv) {
@@ -97,6 +146,7 @@ export function importDialog(ctx) {
     setChildren(summary, h('div', { class: 'notice error' }, e.message));
     setChildren(preview);
     setChildren(mappingBox);
+    setChildren(topBox);
   };
 
   // KeePass database: master password and/or key file, then decrypted by the app and read like KeePass XML.
@@ -137,8 +187,10 @@ export function importDialog(ctx) {
     const file = fileInput.files?.[0];
     if (!file) return;
     setChildren(kdbxBox);
+    setChildren(topBox);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
+      setHint(isKdbxBytes(bytes));
       if (isKdbxBytes(bytes)) {
         parsed = null;
         importButton.disabled = true;
@@ -160,17 +212,36 @@ export function importDialog(ctx) {
   importButton.addEventListener('click', async () => {
     importButton.disabled = true;
     try {
-      let list = items;
+      // Leaving out the shared top folder (#327) – entries, empty folders and folder symbols alike.
+      const top = commonTopFolder(items, parsed.folders);
+      const folderOf = (f) => (top && dropTop.checked ? withoutTop(f || '', top) : f || '');
+      // KeePass images (#327): entry icons and folder symbols made small enough, standard symbols as they are.
+      const shrunk = new Map();
+      const small = (src, size, max) => {
+        const k = `${size}:${src}`;
+        if (!shrunk.has(k)) shrunk.set(k, smallImage(src, size, max));
+        return shrunk.get(k);
+      };
+      let list = await Promise.all(items.map(async ({ customIcon, ...i }) => ({
+        ...i, folder: folderOf(i.folder), icon: i.icon || (customIcon ? await small(customIcon, 64, ICON_MAX_CHARS) : ''),
+      })));
+      const folderIcons = {};
+      for (const [p, v] of Object.entries(parsed.folderIcons || {})) {
+        const path = folderOf(p);
+        const icon = normalizeFolderIcon(isFolderImage(v) ? await small(v, 32, MAX_FOLDER_IMAGE) : v);
+        if (path && icon) folderIcons[path] = icon;
+      }
+      const folders = (parsed.folders || []).map(folderOf).filter(Boolean);
       let skipped = 0;
       if (skipDuplicates.checked) {
         const existing = new Set((await ctx.existing(container.value)).map(duplicateKey));
-        list = items.filter((i) => !existing.has(duplicateKey(i)));
+        list = list.filter((i) => !existing.has(duplicateKey(i)));
         skipped = items.length - list.length;
       }
       progress.hidden = false;
       progress.max = Math.max(1, list.length);
-      // Folder symbols of the source go along (KeePass group icons); only the desktop app stores them.
-      const r = await ctx.save(container.value, list, (done) => { progress.value = done; }, { folderIcons: parsed.folderIcons || {} });
+      // Folder symbols and empty folders of the source go along (KeePass groups); only the desktop app stores them.
+      const r = await ctx.save(container.value, list, (done) => { progress.value = done; }, { folderIcons, folders });
       toast(t('{imported} von {total} Einträgen importiert', { imported: r.imported, total: items.length }) + (skipped ? ` · ${t('{count} Duplikate übersprungen', { count: skipped })}` : ''));
       close();
       if (r.errors?.length) modal(t('Nicht importiert'), h('pre', { class: 'errors' }, r.errors.join('\n')));
@@ -203,12 +274,12 @@ export function importDialog(ctx) {
     browserBox,
     h('div', { class: 'field-row' }, fileInput,
       h('button', { type: 'button', class: 'btn small', onclick: () => downloadSample(ctx) }, icon('download', 14), t('Beispieldatei (CSV)'))),
-    kdbxBox, summary, mappingBox, preview,
+    kdbxBox, summary, mappingBox, preview, topBox,
     h('div', { class: 'grid2', style: { marginTop: '12px' } },
       h('div', { class: 'field' }, h('label', {}, t('Ziel-Tresor')), container),
       h('div', { class: 'field' }, h('label', {}, ' '), h('label', { class: 'inline' }, skipDuplicates, t('Duplikate überspringen')))),
     progress,
-    h('p', { class: 'muted small' }, t('Lösche die Exportdatei nach dem Import sicher – sie enthält alle Passwörter im Klartext.')));
+    hint);
 
   const { dialog, close } = modal(t('Importieren'), body, [{ label: t('Abbrechen') }]);
   dialog.querySelector('.modal-footer').append(importButton);

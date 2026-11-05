@@ -4,6 +4,20 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.25 – 2026-11-05
+- KeePass-Import: Alle Einträge kommen an. Bei großen Datenbanken fehlte ein Teil mit „Nicht gefunden“, weil der Datei-Tresor während des Imports neu geladen wurde. Jetzt wird blockweise gespeichert, und das ist auch deutlich schneller (#326).
+- Import: Der Hinweis sagt jetzt genau, was zu löschen ist. Keevault löscht keine Dateien, die KeePass-Datei und die Schlüsseldatei bleiben unverändert (#326).
+- KeePass-Import: Auch leere Gruppen werden zu Ordnern. Eine vierte Ordnerebene kommt in den Namen der dritten, statt wegzufallen, und ein gemeinsamer oberster Ordner lässt sich weglassen. Abgelaufene Einträge behalten ihr Ablaufdatum und erscheinen durchgestrichen. Eigene Symbole von Einträgen und Gruppen kommen 1:1 mit, bisher waren sie oft beschädigt (#327).
+- Assets: „Bastion im Browser“ und die anderen Verbindungen melden bei einem Konto aus einem anderen Tresor genau, welches Konto betroffen ist und was zu tun ist. Liegt derselbe Eintrag im eigenen Tresor, repariert Keevault die Verknüpfung selbst. Beim Verschieben eines Assets in einen anderen Tresor bleiben die Konten im alten Tresor, statt die Verknüpfung zu zerbrechen, und ein Hinweis sagt, dass sie neu zu wählen sind (#328).
+- KI-Agenten: Die Rückfrage zur Anmeldung mit Passkey zeigt jetzt auch den Benutzernamen, mit dem angemeldet wird – bei mehreren Microsoft-Konten sieht man so, welches gemeint ist (#331).
+
+### English
+- KeePass import: all entries arrive. In big databases some were missing with "Not found" because the file vault was reloaded during the import. Entries are now saved in blocks, which is also much faster (#326).
+- Import: the hint now says exactly what to delete. Keevault deletes no files, and the KeePass file and key file stay unchanged (#326).
+- KeePass import: empty groups become folders too. A fourth folder level goes into the name of the third instead of being dropped, and a shared top folder can be left out. Expired entries keep their expiry date and are shown struck through. Your own entry and group icons come along 1:1; they were often broken before (#327).
+- Assets: "Bastion in the browser" and the other connections now say exactly which account belongs to another vault and what to do. If the same entry is in the asset's own vault, Keevault repairs the link itself. Moving an asset to another vault leaves its accounts behind instead of breaking the link, and a note says to choose them again (#328).
+- AI agents: the confirmation for a passkey sign-in now also shows the user name it signs in with – with several Microsoft accounts you can see which one is meant (#331).
+
 ## 0.9.24 – 2026-11-04
 - Schmale Listenspalte: Der Tresorname bleibt einzeilig und endet mit „…“ (voller Name als Tooltip), statt Buchstabe für Buchstabe umzubrechen; die Kennzeichen wandern unter den Namen, ganz schmal zeigt „Neu“ nur noch das Plus (#322).
 - Live-Demo: Im Admin-Modus fehlte das Logo (#319).

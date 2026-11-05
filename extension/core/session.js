@@ -1022,6 +1022,38 @@ export class VaultSession {
   }
 
   /**
+   * New entries in bulk (import) → [{ item } | { error }] in the order given. File vaults write them in one go (#326);
+   * Key Vault containers save each as usual. Beyond the free limit without a license the rest is refused per entry.
+   */
+  async saveItems(containerId, items) {
+    const c = await this.container(containerId);
+    const adapter = c.kind === 'keyvault' ? null : this.adapter(c);
+    if (!adapter?.saveItems) {
+      return mapLimit(items, 4, (item) => this.saveItem(containerId, { ...item, id: '' }).then((saved) => ({ item: saved }), (e) => ({ error: e.message })));
+    }
+    let room = items.length;
+    if (!c.personal && c.kind !== 'remote') {
+      const count = (await this.summaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === c.id).length;
+      const key = count + items.length > FREE_LIMIT ? await this.containerLicenseKey(c).catch(() => null) : null;
+      if (count + items.length > FREE_LIMIT && !(key && (await verifyLicense(key, c.id)).valid)) room = Math.max(0, FREE_LIMIT - count);
+    }
+    const ok = [];
+    const out = items.map((item, i) => {
+      try {
+        requireFolderDepth(item.folder);
+        if (i >= room) throw new LicenseLimitError();
+        ok.push(i);
+        return null;
+      } catch (e) {
+        return { error: e.message };
+      }
+    });
+    const saved = ok.length ? await adapter.saveItems(containerId, ok.map((i) => items[i]), { actor: await this.actor() }) : [];
+    ok.forEach((i, n) => { out[i] = saved[n]; });
+    return out;
+  }
+
+  /**
    * Entries of the same vault that use this entry as their account (devices: RDP, TeamViewer, Bastion; linked logins)
    * → their titles. Such a login must not disappear under them (#34).
    */
@@ -1073,9 +1105,24 @@ export class VaultSession {
     // Links stay within one vault: a login in use there cannot leave it (#34).
     if (fromId !== toId) await this.requireUnlinked(fromId, id);
     const item = await this.getItem(fromId, id, { fresh: true });
-    const saved = await this.saveItem(toId, { ...item, id: '', folder: folder ?? item.folder });
+    // Its own links stay behind (#328): they would point into the old vault, which an asset must not use. The moved
+    // entry loses them and the caller says which ones to choose again.
+    const dropped = [];
+    const local = (key, name) => {
+      if (!key || fromId === toId || key.startsWith(`${toId}/`)) return key;
+      dropped.push(name);
+      return '';
+    };
+    const server = item.server && {
+      ...item.server, rdpLink: local(item.server.rdpLink, 'rdp'), tvLink: local(item.server.tvLink, 'teamviewer'),
+      bastionLoginLink: local(item.server.bastionLoginLink, 'bastionLogin'), bastionVmLink: local(item.server.bastionVmLink, 'bastionVm'),
+    };
+    // A linked login has no sign-in of its own – without its link it would be empty, a copy would carry the other entry's
+    // password into the target vault.
+    if (fromId !== toId && item.loginLink) throw new Error(t('„{title}“ nutzt die Anmeldung eines anderen Eintrags und lässt sich deshalb nicht in einen anderen Tresor verschieben. Erst die Verknüpfung lösen.', { title: item.title }));
+    const saved = await this.saveItem(toId, { ...item, id: '', folder: folder ?? item.folder, ...(server ? { server } : {}) });
     await this.deleteItem(fromId, id);
-    return saved;
+    return dropped.length ? { ...saved, droppedLinks: dropped } : saved;
   }
 
   /** Copy of an entry in the same container and folder ("… (Kopie)"); passkeys are not copied (they are unique). */

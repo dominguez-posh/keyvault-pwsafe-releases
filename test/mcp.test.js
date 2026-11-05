@@ -298,6 +298,7 @@ test('mcp: passkey sign-in for an agent – off by default, own site only, every
   answer = true;
   const r = await mcp.call(client, 'sign_in_with_passkey', args);
   assert.equal(asked.length, 2, 'every use is confirmed');
+  assert.equal(asked[1].username, 'alice', 'the dialog names the account that signs in (#331)');
   assert.ok(!JSON.stringify(r).includes(passkey.privateKey), 'never the private key');
   const auth = await verifyAuthenticationResponse({ response: r.credential, expectedChallenge: challenge, expectedOrigin: origin, expectedRPID: 'github.com', credential: reg.registrationInfo.credential });
   assert.equal(auth.verified, true);

@@ -422,6 +422,37 @@ export class FileVault {
       e.name = 'ConflictError';
       throw e;
     }
+    await this.stage(id, input, actor);
+    await this.persist();
+    return this.getItem(id);
+  }
+
+  /**
+   * New entries in one read and one write (#326 – an import of hundreds of entries otherwise reads, decrypts and writes
+   * the whole file once per entry). → [{ item } | { error }] in the order given; one broken entry stops none of the others.
+   */
+  async saveItems(inputs, { actor = '' } = {}) {
+    this.requireWrite();
+    if ((await this.io.read()) != null) await this.load();
+    this.requireWrite();
+    const staged = [];
+    for (const input of inputs) {
+      try {
+        const id = newItemId();
+        await this.stage(id, { ...input, id }, actor);
+        staged.push({ id });
+      } catch (e) {
+        staged.push({ error: e.message });
+      }
+    }
+    await this.persist();
+    return staged.map((s) => (s.error ? s : { item: this.getItem(s.id) }));
+  }
+
+  /** Encrypts one entry into the document (not yet written). */
+  async stage(id, input, actor) {
+    const previous = this.doc.items[id];
+    const shown = this.items.get(id);
     const at = nowIso();
     const by = this.secure ? this.memberId : actor;
     const who = this.secure ? this.memberEmail(this.memberId) : actor;
@@ -443,8 +474,6 @@ export class FileVault {
       action: before ? 'item-update' : 'item-create', itemId: id, title: item.title, folder: item.folder,
       fields: changedFields(before, item), ...(before && before.folder !== item.folder ? { fromFolder: before.folder } : {}),
     });
-    await this.persist();
-    return this.getItem(id);
   }
 
   async deleteItem(id, actor = '') {

@@ -258,7 +258,10 @@ function serverRows(item, ctx) {
   }
   if (s.host) rows.push(textField(t('Server (IP oder Name)'), s.port && s.port !== defaultPort(os) ? `${s.host}:${s.port}` : s.host, ctx));
   const link = (label, key) => h('div', { class: 'field' }, h('label', {}, label),
-    h('div', { class: 'field-row' }, h('span', { class: 'value linked' }, icon('link', 14), ' ', ctx.linkTitle?.(key) || t('Verknüpfter Eintrag'))));
+    h('div', { class: 'field-row' }, ctx.linkTitle && !ctx.linkTitle(key)
+      // Not in a loaded vault (#328): say so instead of a neutral "Linked entry".
+      ? h('span', { class: 'value linked missing' }, icon('link', 14), ' ', t('Nicht verfügbar – Asset bearbeiten und neu auswählen'))
+      : h('span', { class: 'value linked' }, icon('link', 14), ' ', ctx.linkTitle?.(key) || t('Verknüpfter Eintrag'))));
   if (s.rdpLink) rows.push(link(os === 'linux' ? t('SSH-Konto') : t('RDP-Konto'), s.rdpLink));
   if (s.tvId) rows.push(textField(t('TeamViewer-ID'), s.tvId, ctx));
   if (s.tvLink) rows.push(link(t('TeamViewer-Passwort'), s.tvLink));
