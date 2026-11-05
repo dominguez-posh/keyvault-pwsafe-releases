@@ -33,8 +33,6 @@ window.pwsafe.onEvent((ev) => {
   } else if (ev.type === 'changed' && st && !st.opened) {
     // Unlocked elsewhere (tray, an agent's request, a test): show the vaults. Still locked: the screen stays as it is.
     call('state').then((s) => { if (s.opened) render(); }).catch(() => {});
-  } else if (ev.type === 'rdp-type-failed') {
-    toast(t('Der Windows-Anmeldedialog kam nicht nach vorne – das Passwort liegt in der Zwischenablage, dort mit Strg+V einfügen.'), 'error');
   } else if (ev.type === 'sync-stopped' && st?.opened) {
     toast(t('{provider} läuft nicht – Änderungen an Tresoren in diesem Ordner werden nicht synchronisiert. Starte {provider}.', { provider: ev.provider }), 'error');
   } else if (ev.type === 'link') {

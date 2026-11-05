@@ -176,6 +176,8 @@ export const app = {
   /** Reloads the vaults from Azure in the app (popup "Reload"). */
   refresh: async () => changedHere(await call('refresh', {}, 120_000)),
   focus: () => call('focus'),
+  /** Copies through the app: kept out of Windows' clipboard history and cloud clipboard, cleared after a while (#337). */
+  copy: (text) => call('copy', { text }),
   lock: async () => changedHere(await call('lock')),
   /** Unlocks the app with its PIN (silent sign-in in the app; a Microsoft window only if the tenant insists). */
   unlockPin: async (pin) => changedHere(await call('unlockPin', { pin }, 120_000)),

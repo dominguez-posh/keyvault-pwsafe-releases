@@ -10,9 +10,8 @@ import { resolveLogin } from '../../extension/core/model.js';
 import { smokeTest } from './boot.js';
 import { vault } from './state.js';
 import { copyToClipboard } from './clipboard.js';
-import { diag } from './diag.js';
-import { send } from './session.js';
 import { helperExe } from './typing.js';
+import { showHint } from './hint-window.js';
 
 export const splitEntryKey = (key) => {
   const i = String(key).indexOf('/');
@@ -97,26 +96,28 @@ export async function launchSsh(host, port, username, password) {
 export async function launchRdp(host, port, username, password) {
   if (smokeTest) {
     // Smoke: KVPWSAFE_TEST_CREDENTIAL_GUARD=1 takes the Credential Guard way (nothing is started).
-    if (process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD === '1' && password) return { prompt: true, autoType: true, credentialGuard: true };
+    if (process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD === '1' && password) {
+      await copyToClipboard(password);
+      showHint({ kind: 'rdp', user: username });
+      return { prompt: true, copied: true, credentialGuard: true };
+    }
     return { prompt: !password };
   }
   if (process.platform !== 'win32') throw new Error(t('Remotedesktop gibt es nur unter Windows.'));
   const target = port && port !== 3389 ? `${host}:${port}` : host;
   // Credential Guard forbids saved credentials for remote desktop ("Windows Defender Credential Guard lässt die
   // Verwendung von gespeicherten Anmeldeinformationen nicht zu", #29): mstsc with the user name filled in, the password
-  // on the clipboard (cleared as usual) for the Windows dialog.
+  // on the clipboard (cleared as usual) for the Windows dialog. That dialog drops every typed input – Unicode, real
+  // keys and UI Automation alike (tested 2026-11-05, #336) –, so typing it in (#189) never worked: Ctrl+V it is.
   if (password && (await credentialGuardRunning())) {
+    await copyToClipboard(password);
     const file = path.join(app.getPath('temp'), `keevault-rdp-${process.pid}.rdp`);
     await fs.writeFile(file, [`full address:s:${target}`, `username:s:${username}`, 'prompt for credentials:i:1', ''].join('\r\n'), 'utf8');
     spawn('mstsc.exe', [file], { detached: true, stdio: 'ignore' }).unref();
     setTimeout(() => fs.rm(file, { force: true }).catch(() => {}), 60_000).unref?.();
-    // Signed in without a click (#189): the password is typed into Windows' dialog once it is in front, Enter sends
-    // it. The dialog never came (or typing was refused): the password goes to the clipboard and the window says so.
-    typeIntoCredentialDialog(password).catch(async () => {
-      await copyToClipboard(password).catch(() => {});
-      send({ type: 'rdp-type-failed' });
-    });
-    return { prompt: true, autoType: true, credentialGuard: true };
+    // The window explains why there is no automatic sign-in and what to do (#338).
+    showHint({ kind: 'rdp', user: username });
+    return { prompt: true, copied: true, credentialGuard: true };
   }
   const exe = helperExe();
   if (!exe || !password) {
@@ -129,20 +130,6 @@ export async function launchRdp(host, port, username, password) {
   return { prompt: false };
 }
 
-/** Types text + Enter into Windows' credential dialog ("Windows-Sicherheit") once it is in front (helper, up to 30 s). */
-function typeIntoCredentialDialog(password) {
-  const exe = helperExe();
-  if (!exe) return Promise.reject(new Error('no helper'));
-  return new Promise((resolve, reject) => {
-    // By title (localised) or by the window class of Windows' credential dialog – its own title is often empty (#316).
-    const wanted = 'Windows-Sicherheit|Windows Security|Sécurité Windows|Seguridad de Windows|class:Credential Dialog Xaml Host';
-    const child = spawn(exe, ['--type', '--wait-window', wanted], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
-    child.on('exit', (code) => diag(`RDP credential dialog typing: exit ${code}`));
-    child.on('error', reject);
-    child.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
-    child.stdin.end(Buffer.from(`${password}\n`, 'utf8'));
-  });
-}
 
 /** Is Windows Defender Credential Guard running (Win32_DeviceGuard: security service 1)? Asked once per start. */
 let credentialGuard = null;

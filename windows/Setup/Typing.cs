@@ -67,6 +67,7 @@ namespace Keevault.Setup
             "RemoteDesktopManager", "vncviewer", "tvnviewer", "wfica32", "CDViewer",
         };
         private static readonly string[] RemoteClasses = { "TscShellContainerClass" };
+        internal const string SecureDialogClass = "Credential Dialog Xaml Host";
 
         /// <summary>Program and class of the window in front, and whether it is a remote desktop or VM window.</summary>
         internal static bool IsRemoteWindow(IntPtr hwnd, out string program, out string cls, out uint thread)
@@ -193,6 +194,15 @@ namespace Keevault.Setup
             }
             var remote = IsRemoteWindow(GetForegroundWindow(), out var program, out var cls, out var thread);
             var layout = GetKeyboardLayout(remote ? thread : 0);
+            // Windows' credential dialog ("Windows-Sicherheit", e.g. RDP under Credential Guard) drops every injected
+            // input – Unicode and real keys alike, and UI Automation sees no fields (tested 2026-11-05, #336). SendInput
+            // still reports success: nothing is typed, exit code 5 – the app puts the value on the clipboard instead.
+            if (string.Equals(cls, SecureDialogClass, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Out.WriteLine($"window {program}/{cls} secure");
+                Console.Out.Flush();
+                return 5;
+            }
             Console.Out.WriteLine($"window {program}/{cls} {(remote ? "remote" : "unicode")}");
             Console.Out.Flush();
             var ok = true;

@@ -40,7 +40,7 @@ export async function copyToClipboard(text) {
   // the text back itself. Electron's clipboard.readText() returns nothing on some machines (2026-11-01: every copy
   // reported "clipboard not available" although it had worked) – so it decides nothing here any more.
   // Without the helper (development without windows/out): the PowerShell helper, which App Control or endpoint
-  // protection may block (then after 1.5 s), and last the plain clipboard without markers – noted in the log.
+  // protection may block (then after 1.5 s). Never the plain clipboard on Windows: then the copy fails (#337).
   let verified = false;
   if (process.platform === 'win32') {
     const code = await runHelperExe('--clipboard', text);
@@ -49,10 +49,12 @@ export async function copyToClipboard(text) {
       diag(`COPY Keevault-Update.exe ${code === null ? 'unavailable' : `exit ${code}`} – fallback`);
       const ps = !smokeTest && !demo && !psClipboardBlocked
         && await Promise.race([copySecret(text).then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 1500))]);
+      // Neither helper could copy: an error, never a plain copy – that one would land in Windows' clipboard history
+      // and the cloud clipboard (#337).
       if (!ps) {
         psClipboardBlocked = true;
-        diag('COPY plain clipboard (without history/cloud markers)');
-        clipboard.writeText(text);
+        diag('COPY refused: no protected clipboard (helper and PowerShell failed)');
+        throw new Error(t('Kopieren nicht möglich: Die geschützte Zwischenablage ist nicht verfügbar. Bitte Keevault neu starten.'));
       }
     }
   } else {

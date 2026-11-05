@@ -15,7 +15,7 @@ export async function connectServer(containerId, id, method) {
   try {
     const r = await call('connectServer', { containerId, id, method });
     if (method === 'rdp') {
-      toast(r.credentialGuard ? t('Remotedesktop gestartet – Keevault trägt das Passwort im Windows-Dialog ein (Credential Guard erlaubt keine gespeicherten Anmeldedaten).')
+      toast(r.credentialGuard ? t('Remotedesktop gestartet – das Passwort liegt in der Zwischenablage, im Windows-Dialog mit Strg+V einfügen (Credential Guard erlaubt keine gespeicherten Anmeldedaten, und Windows lässt dort kein Eintippen zu).')
         : r.prompt ? t('Remotedesktop gestartet – bitte dort anmelden') : t('Remotedesktop gestartet'));
     }
     else if (method === 'ssh') toast(r.copied ? t('SSH gestartet – das Passwort liegt in der Zwischenablage (im Terminal mit Rechtsklick einfügen)') : t('SSH gestartet'));

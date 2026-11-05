@@ -159,6 +159,20 @@ async function offscreen(message) {
   return chrome.runtime.sendMessage({ target: 'offscreen', ...message });
 }
 
+/**
+ * Every copy of the extension (#337): through the desktop app, whose clipboard keeps the value out of Windows' clipboard
+ * history and cloud clipboard and clears it after the configured time. The browser's clipboard cannot do that – it is
+ * used only by the developer demo (no app). The app not answering is an error, never a silent unprotected copy.
+ */
+async function secureCopy(text) {
+  if (demo) {
+    await offscreen({ cmd: 'copy', text });
+    await scheduleClipboardClear(toHex(await sha256(text)));
+    return true;
+  }
+  return app.copy(text);
+}
+
 async function scheduleClipboardClear(hash) {
   const s = await getSettings();
   const seconds = Number(s.clipboardSeconds) || 0;
@@ -188,9 +202,7 @@ async function copyTotpAfterFill(item) {
   if ((item.sophos && item.totp) || !s.copyTotpOnFill || !item.totp) return false;
   try {
     const { code } = await totpCode(item.totp);
-    await offscreen({ cmd: 'copy', text: code });
-    await scheduleClipboardClear(toHex(await sha256(code)));
-    return true;
+    return await secureCopy(code);
   } catch {
     return false;
   }
@@ -865,7 +877,8 @@ const pageCommands = {
     await broadcast({ type: 'state:changed' });
     return s;
   },
-  clipboardCopied: ({ hash }) => scheduleClipboardClear(hash),
+  /** Copy from an extension page (popup): protected through the app (#337). */
+  copy: ({ text }) => secureCopy(String(text ?? '')),
   openPrompt: async ({ hash }) => openPrompt(hash, (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0] || {}),
   desktopStatus: () => appStatus(),
   desktopFocus: () => showApp(),

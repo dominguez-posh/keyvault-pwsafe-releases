@@ -709,6 +709,28 @@ export async function featureChecks(ctx) {
       await js('[...document.querySelectorAll("dialog[open] button")].find((b) => b.closest("dialog").querySelector(".question") && /Ablehnen|Deny/.test(b.textContent))?.click()');
       if ((await Promise.race([pk, sleep(3000).then(() => 'timeout')])) !== false) fail('agentfront', 'deny did not answer the passkey request');
       await sleep(200);
+      // #339: the Microsoft account choice has a search and a vault filter; the answer is the account still visible.
+      const msAccounts = [
+        { key: 'v1/a', title: 'Microsoft', username: 'admin@contoso.com', vault: 'Arbeit' },
+        { key: 'v2/b', title: 'Microsoft', username: 'adm-up@fabrikam.com', vault: 'Persönlich', otherTenant: true },
+        { key: 'v2/c', title: 'Entra Breakglass', username: 'bg@contoso.com', vault: 'Persönlich' },
+      ];
+      const ms = ctx.chooseAgentMicrosoft({ agent: 'smoke-agent', purpose: 'smoke', accounts: msAccounts });
+      await sleep(600);
+      const visibleOptions = 'JSON.stringify([...document.querySelectorAll("dialog[open] .agent-microsoft .q-option")].filter((o) => !o.hidden).map((o) => o.querySelector(".q-option-hint").textContent.split(" · ")[0]))';
+      const setFilter = (search, vault) => js(`(() => { const d = document.querySelector("dialog[open] .agent-microsoft"); const s = d.querySelector(".q-search"); const v = d.querySelector(".q-vault");
+        s.value = ${JSON.stringify(search)}; s.dispatchEvent(new Event("input")); if (v) { v.value = ${JSON.stringify(vault)}; v.dispatchEvent(new Event("change")); } return !!v; })()`);
+      if (!(await setFilter('', 'Persönlich'))) fail('agentfront', 'Microsoft choice: no vault filter with two vaults');
+      if ((await js(visibleOptions)) !== JSON.stringify(['adm-up@fabrikam.com', 'bg@contoso.com'])) fail('agentfront', `vault filter: ${await js(visibleOptions)}`);
+      await setFilter('breakglass', 'Persönlich');
+      if ((await js(visibleOptions)) !== JSON.stringify(['bg@contoso.com'])) fail('agentfront', `search: ${await js(visibleOptions)}`);
+      await setFilter('nothing-matches', '');
+      if (!(await js('document.querySelector("dialog[open] .agent-microsoft .q-actions .btn.primary").disabled'))) fail('agentfront', 'no hits: "Sign in" still enabled');
+      await setFilter('fabrikam', '');
+      await js('document.querySelector("dialog[open] .agent-microsoft .q-actions .btn.primary").click()');
+      const chosen = await Promise.race([ms, sleep(3000).then(() => 'timeout')]);
+      if (chosen !== 'v2/b') fail('agentfront', `Microsoft choice: the visible account was not taken (${chosen})`);
+      await sleep(200);
       win.hide();
       let open = false;
       const waiting = ctx.waitForUnlock({ ms: 4000, isOpen: () => open });
@@ -1090,7 +1112,17 @@ export async function featureChecks(ctx) {
       process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD = '1';
       const cg = await api.connectServer({ containerId: kvc.id, id: win1.id, method: 'rdp' }).catch((e) => ({ error: e.message }));
       delete process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD;
-      if (fw && (!cg.credentialGuard || !cg.autoType)) fail('devices', `RDP with Credential Guard does not sign in by itself: ${JSON.stringify(cg)}`);
+      // Windows' dialog takes no typed input (#336): the password is on the clipboard right away.
+      if (fw && (!cg.credentialGuard || !cg.copied)) fail('devices', `RDP with Credential Guard: password not on the clipboard: ${JSON.stringify(cg)}`);
+      if (fw && !(await clipboardHas((await vault.getItem(kvc.id, fw.id)).password))) fail('devices', 'RDP with Credential Guard: the clipboard does not hold the password');
+      // … and a window explains why there is no automatic sign-in and what to do (#338): the account, Ctrl+V.
+      const rdpHint = ctx.hintsShown.find((h) => h.kind === 'rdp');
+      if (fw && (!rdpHint || rdpHint.user !== (await vault.getItem(kvc.id, fw.id)).username || !rdpHint.content.steps.some((x) => /Strg\+V/.test(x)) || !/Credential Guard/.test(rdpHint.content.why))) fail('devices', `RDP with Credential Guard: no explanation window (${JSON.stringify(rdpHint?.content?.title)})`);
+      // Auto-type into Windows' credential dialog: the same kind of window, naming the value that was copied.
+      const secureHint = ctx.hintContent({ kind: 'secure', what: 'u' });
+      if (!/Benutzername/.test(secureHint.title) || secureHint.steps.length !== 3 || !/Windows-Sicherheit/.test(secureHint.why)) fail('devices', `auto-type hint for the credential dialog: ${JSON.stringify(secureHint)}`);
+      // The extension's copies go through the app's protected clipboard (#337).
+      if (!(await ctx.browserCopy('kv-smoke-ext-copy')) || !(await clipboardHas('kv-smoke-ext-copy'))) fail('devices', 'extension copy not on the protected clipboard');
       if (!(await methods(lnx.id)).includes('ssh') || (await methods(lnx.id)).includes('rdp')) fail('devices', 'Linux server: SSH instead of RDP expected');
       if (!(await methods(vmw.id)).includes('mgmt')) fail('devices', 'VMware VM without vSphere client');
       if ((await vault.getItem(kvc.id, lnx.id)).server.port !== 22) fail('devices', 'Linux server: default port not 22');

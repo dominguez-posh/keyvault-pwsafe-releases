@@ -13,6 +13,7 @@ import { bridge, config, opened, setBridge, vault, win } from './state.js';
 import { approveAgent, mcpHandlers, mcpScriptPath } from './agents.js';
 import { api } from './api/index.js';
 import { requireOpen } from './guards.js';
+import { copyToClipboard } from './clipboard.js';
 import { changed, lockNow } from './session.js';
 import { hostIn, setSignInJobs, signInFor, signInJobs } from './signin.js';
 import { windowsHandlers } from './windows-passkeys.js';
@@ -97,6 +98,14 @@ export const browserHandlers = {
     return true;
   },
   containers: () => browserContainers(),
+  // Copies for the extension (#337): the browser's clipboard has no way to keep a value out of Windows' clipboard
+  // history and cloud clipboard – the app's has, and clears it again after the configured time.
+  copy: async ({ text }) => {
+    requireOpen();
+    if (typeof text !== 'string' || !text || text.length > 100_000) throw new Error(t('Nichts zu kopieren'));
+    await copyToClipboard(text);
+    return true;
+  },
   summaries: async () => (opened ? vault.summaries() : []),
   refresh: async () => {
     requireOpen();

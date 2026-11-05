@@ -1,6 +1,5 @@
 // Calls from extension pages to the service worker.
 
-import { sha256, toHex } from '../core/util.js';
 import { toast } from '../core/dom.js';
 import { t } from '../core/i18n.js';
 
@@ -16,9 +15,15 @@ export async function call(cmd, args = {}) {
   return res.result;
 }
 
-/** Copies to the clipboard and lets the service worker clear it again after the configured time. */
+/**
+ * Copies through the service worker and the desktop app: kept out of Windows' clipboard history and cloud clipboard,
+ * cleared again after the configured time (#337). Never the page's own clipboard – that one has no such protection.
+ */
 export async function copy(text, label = t('Wert')) {
-  await navigator.clipboard.writeText(text);
-  call('clipboardCopied', { hash: toHex(await sha256(text)) }).catch(() => {});
-  toast(t('{label} kopiert', { label }));
+  try {
+    await call('copy', { text });
+    toast(t('{label} kopiert', { label }));
+  } catch (e) {
+    toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error');
+  }
 }

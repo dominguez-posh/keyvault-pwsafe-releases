@@ -96,7 +96,15 @@ export async function chooseAgentMicrosoft({ agent, purpose, accounts }) {
     title: t('„{agent}“ möchte sich bei Microsoft anmelden', { agent }),
     lead: purpose ? t('Zweck laut Tool: {purpose}', { purpose }) : t('Wähle das Konto, mit dem sich das Tool anmelden soll.'),
     // #333: accounts of the requested tenant come first; the others stay selectable, marked as another tenant
-    choices: accounts.slice(0, 20).map((a) => ({ value: a.key, label: a.title, hint: [a.username, a.vault, a.otherTenant ? t('anderer Tenant') : ''].filter(Boolean).join(' · ') })),
+    // #339: all accounts (no cut at 20) – the dialog has a search and a vault filter; vault and search text per choice.
+    choices: accounts.slice(0, 500).map((a) => ({
+      value: a.key,
+      label: a.title,
+      hint: [a.username, a.vault, a.otherTenant ? t('anderer Tenant') : ''].filter(Boolean).join(' · '),
+      vault: a.vault || '',
+      search: [a.title, a.username, a.vault].filter(Boolean).join(' ').toLowerCase(),
+    })),
+    filter: true,
     note: t('Das Tool bekommt Benutzername, Passwort und den aktuellen Einmalcode dieses Kontos – nur dieses eine Mal.'),
     allow: t('Mit diesem Konto anmelden'),
     cancel: 'deny',

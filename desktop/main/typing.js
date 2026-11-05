@@ -12,6 +12,9 @@ import { appRoot, smokeTest } from './boot.js';
 import { config, opened } from './state.js';
 import { deviceLinksHere, serverAccount, usableItem } from './devices.js';
 import { diag } from './diag.js';
+// Cycle with clipboard.js (it uses runHelperExe): both only call each other at run time.
+import { copyToClipboard } from './clipboard.js';
+import { showHint } from './hint-window.js';
 
 /** Keevault-Update.exe next to the app (resources) or from the Windows build (development). */
 export function helperExe() {
@@ -52,14 +55,30 @@ export function typeViaHelperExe(text) {
     child.on('exit', (code) => {
       diag(`AUTOTYPE ${window.trim().slice(0, 200) || 'window ?'} exit ${code}`);
       if (code === 0) resolve(true);
+      // Windows' credential dialog takes no typed input at all (#336): nothing was typed.
+      else if (code === 5) reject(Object.assign(new Error('secure dialog'), { code: SECURE_DIALOG }));
       else reject(new Error(code === 3 ? t('Das Zielfenster nimmt keine Eingaben an (läuft es als Administrator?)') : t('Auto-Type fehlgeschlagen')));
     });
     child.stdin.end(Buffer.from(String(text), 'utf8'));
   });
 }
 
-export async function autoTypeText(text) {
-  if (process.platform === 'win32' && await typeViaHelperExe(text)) return;
+export const SECURE_DIALOG = 'SECURE_DIALOG';
+
+/**
+ * Types text into the window in front. Windows' credential dialog ("Windows-Sicherheit", e.g. remote desktop under
+ * Credential Guard) drops every typed input (#336): the value goes to the protected clipboard instead (not in the
+ * history, cleared as usual) and a window explains why and to paste it with Ctrl+V (#338). what: 'u' | 'p' | 'o'.
+ */
+export async function autoTypeText(text, what = 'p') {
+  try {
+    if (process.platform === 'win32' && await typeViaHelperExe(text)) return;
+  } catch (e) {
+    if (e.code !== SECURE_DIALOG) throw e;
+    await copyToClipboard(text);
+    showHint({ kind: 'secure', what });
+    return;
+  }
   diag('AUTOTYPE no Keevault-Update.exe – PowerShell helper');
   await typeText(text);
 }
@@ -94,7 +113,7 @@ export async function globalAutoType(what) {
       autoTypeCalls.push(`global:${what}`);
       return;
     }
-    await autoTypeText(value);
+    await autoTypeText(value, what);
   } catch (e) {
     notify(e.message);
   }
