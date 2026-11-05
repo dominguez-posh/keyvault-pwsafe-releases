@@ -6,7 +6,8 @@
 
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
-import { hostFromUrl, itemMatchesHost, rankCandidates } from './core/match.js';
+import { hostFromUrl, itemMatchesHost, rankCandidates, bastionFrameAllowed } from './core/match.js';
+import { signInHost, signInPageHost, itemFitsPage, itemFitsUrl, matchesForPage, newestMatchForPage, savedLoginForPage } from './core/pagefit.js';
 import { itemHosts, sophosFillPassword, resolveLogin, fqdnUserName, normalizeTenant } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
@@ -218,20 +219,6 @@ const MS_LOGIN_HOSTS = /(^|\.)(login\.microsoftonline\.com|login\.microsoft\.com
 const isMicrosoftHost = (h) => /(^|\.)(microsoftonline|microsoft|office|live|azure|windows)\.(com|net)$/i.test(h);
 const msAccount = (s) => s.type === 'login' && (s.msAdmin || (s.hosts || []).some(isMicrosoftHost));
 const senderHost = (sender) => hostFromUrl(sender.origin && sender.origin !== 'null' ? sender.origin : sender.url);
-// Microsoft and Bastion sign-in data only for the real pages: https on the standard port. A page under the same name
-// over http or on another port (a redirected name, a test fake) gets nothing. The extension smoke test switches this
-// off in its own copy (scripts/extension-smoke.mjs) – its fake sign-in page runs over http on a local port.
-const SIGN_IN_HTTPS_ONLY = true;
-function signInHost(sender) {
-  const origin = sender.origin && sender.origin !== 'null' ? sender.origin : sender.url;
-  try {
-    const u = new URL(origin);
-    if (SIGN_IN_HTTPS_ONLY && (u.protocol !== 'https:' || u.port)) return '';
-  } catch {
-    return '';
-  }
-  return senderHost(sender);
-}
 
 function contentStrings() {
   return {
@@ -296,12 +283,8 @@ const usableItem = async (containerId, id) => resolveLogin(await vault.getItem(c
 
 async function fillTab({ tabId, containerId, id, force = false }) {
   const item = await usableItem(containerId, id);
-  const hosts = itemHosts(item);
   const frames = (await chrome.webNavigation.getAllFrames({ tabId })) || [];
-  let targets = frames.filter((f) => {
-    const host = hostFromUrl(f.url);
-    return host && itemMatchesHost(hosts, host);
-  });
+  let targets = frames.filter((f) => itemFitsUrl(item, f.url));
   if (!targets.length) {
     if (!force) {
       const e = new Error(t('Der Eintrag passt nicht zu dieser Website'));
@@ -330,9 +313,8 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
     else await unlock().catch(() => {});
     return;
   }
-  const host = hostFromUrl(tab.url);
-  const matches = host ? (await vault.matchesForHost(host)).sort((a, b) => b.updated - a.updated) : [];
-  if (matches.length) await fillTab({ tabId: tab.id, containerId: matches[0].containerId, id: matches[0].id }).catch(() => {});
+  const match = await newestMatchForPage(vault, tab.url);
+  if (match) await fillTab({ tabId: tab.id, containerId: match.containerId, id: match.id }).catch(() => {});
 });
 
 // ---------------------------------------------------------------- save prompt
@@ -351,9 +333,11 @@ const VM_IN_URL = /\/subscriptions\/[^/]+\/resource[gG]roups\/[^/]+\/providers\/
 
 /** The VM a Bastion sign-in belongs to: name and portal link from the tab's address (portal blade), else the page. */
 async function bastionContext(sender) {
-  const host = senderHost(sender);
+  const host = signInHost(sender);
   if (!host || !BASTION_HOSTS.test(host)) return null;
   const tab = await chrome.tabs.get(sender.tab.id).catch(() => null);
+  const topIsPortal = /(^|\.)portal\.azure\.com$/i.test(signInPageHost(String(tab?.url || '')));
+  if (!bastionFrameAllowed({ host, frameId: sender.frameId, topIsPortal })) return null;
   const url = decodeURIComponent(String(tab?.url || ''));
   const m = VM_IN_URL.exec(url);
   if (m && /(^|\.)portal\.azure\.com$/i.test(host) && !BASTION_BLADE.test(url)) return null;
@@ -408,14 +392,11 @@ async function capture({ username = '', password = '' }, sender) {
   }
   let action = 'save';
   let target = null;
-  for (const m of await vault.matchesForHost(host)) {
-    const item = await vault.getItem(m.containerId, m.id);
-    if ((item.username || '') === username) {
-      if (item.password === password) return { action: 'none' };
-      action = 'update';
-      target = { containerId: m.containerId, id: m.id, title: item.title };
-      break;
-    }
+  const saved = await savedLoginForPage(vault, sender, username);
+  if (saved) {
+    if (saved.item.password === password) return { action: 'none' };
+    action = 'update';
+    target = { containerId: saved.containerId, id: saved.id, title: saved.item.title };
   }
   if (action === 'save' && !(await writableContainers()).length) return { action: 'none' };
   const pending = { action, target, host, origin: new URL(sender.url).origin, username, password, created: Date.now() };
@@ -906,7 +887,7 @@ const contentCommands = {
       locked: false,
       lockedContainers: await lockedProtected(),
       ui,
-      items: (await vault.matchesForHost(host)).map((m) => ({
+      items: (await matchesForPage(vault, sender)).map((m) => ({
         containerId: m.containerId, id: m.id, title: m.title, username: m.username, hasTotp: !!m.hasTotp, container: names.get(m.containerId) || '',
       })),
     };
@@ -914,13 +895,15 @@ const contentCommands = {
   /** Current one-time code of an entry, only for a matching site (filled straight into the code field). */
   'cs:totp': async ({ containerId, id }, sender) => {
     const item = await usableItem(containerId, id);
-    if (!itemMatchesHost(itemHosts(item), senderHost(sender))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
+    if (!itemFitsPage(item, sender)) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     if (!item.totp) throw new Error(t('Kein Einmalcode (TOTP) hinterlegt'));
     return { code: (await totpCode(item.totp)).code };
   },
   'cs:fill': async ({ containerId, id }, sender) => {
+    // Microsoft's sign-in only takes cs:msAccount, with its own checks: no way around them by filling in.
+    if (MS_LOGIN_HOSTS.test(senderHost(sender) || '')) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const item = await usableItem(containerId, id);
-    if (!itemMatchesHost(itemHosts(item), senderHost(sender))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
+    if (!itemFitsPage(item, sender)) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const totpCopied = await copyTotpAfterFill(item);
     return { username: item.username, password: await browserPassword(item), totpCopied };
   },

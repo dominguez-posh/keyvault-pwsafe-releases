@@ -274,7 +274,9 @@ bei jedem Passwortmanager – nicht.
   nur über die Named Pipe (macOS/Linux: Unix-Socket) mit der laufenden, entsperrten App spricht – kein Netzwerk-Port, keine eigene Anmeldung.
 - **Sichtbarkeit:** nur für Agenten freigegebene Tresore/Ordner (die App setzt die Grenze durch). Jeder Agent wird
   einmal zugelassen (Lesen und Schreiben oder Nur lesen, befristbar); Passwörter nur mit Freigabe, Anlegen/Ändern
-  jedes Mal bestätigt, Löschen nicht möglich. Sperren der App beendet jede Freigabe.
+  jedes Mal bestätigt, Löschen nicht möglich. Sperren der App beendet jede Freigabe. Die Zulassung wird bei jedem
+  Aufruf geprüft: Entzug, Ablauf und das Ausschalten wirken auch auf laufende Agenten. Schreiben nur mit ausdrücklicher Regel.
+  Die Bestätigung einer Änderung nennt den bisherigen Titel und zeigt Alt und Neu für Titel, Benutzername, URL und Ordner, bei einer Adresse auch den echten Host (ungekürzt, Punycode). Adressen mit Benutzerdaten werden abgelehnt.
 - **Passkey-Anmeldung** (`sign_in_with_passkey`, ab 0.9.22): eigener Schalter, ab Werk aus. Keevault signiert eine
   einzelne WebAuthn-Anmeldung und gibt nur die Antwort zurück, nie den privaten Schlüssel. Die Herkunft muss https
   sein, ohne Port, und gleich der rpId oder eine Subdomain davon; die Challenge muss mindestens 16 Byte haben. Jede

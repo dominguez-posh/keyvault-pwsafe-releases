@@ -8,6 +8,7 @@ import { panes } from './layout.js';
 import { explicitFolders, items, st, ui } from './state.js';
 import { field, writable, writableContainers } from './helpers.js';
 import { renderDetail, splitKey } from './detail.js';
+import { renderList } from './list.js';
 import { folderList, modeItems, nsFolder } from './modes.js';
 import { reloadAll } from './shell.js';
 import { deleteNotice } from './trash.js';
@@ -65,7 +66,7 @@ export function multiActions() {
     '-',
     { action: 'multi-delete', icon: 'trash', label: t('{n} Einträge löschen', { n: list.length }), danger: true, disabled: !canWrite, onClick: () => deleteManyDialog(list) },
     '-',
-    { action: 'multi-clear', icon: 'x', label: t('Auswahl aufheben'), onClick: () => { clearSelection(); renderRows(); renderDetail(); } },
+    { action: 'multi-clear', icon: 'x', label: t('Auswahl aufheben'), onClick: () => { clearSelection(); renderList(); renderDetail(); } },
   ];
 }
 
@@ -80,7 +81,7 @@ export function renderMultiSelection() {
     h('p', { class: 'muted small' }, t('Shift+Klick wählt einen Bereich, Strg+Klick einzelne Einträge und Ordner. Ziehen verschiebt alles in einen Ordner oder Tresor.')),
     h('ul', { class: 'multi-list' }, ...lines.slice(0, 12), lines.length > 12 ? h('li', { class: 'muted' }, `… +${lines.length - 12}`) : null),
     h('div', { class: 'actions' }, ...actions.map((a) => h('button', { type: 'button', class: a.danger ? 'btn danger' : 'btn', disabled: a.disabled, onclick: a.onClick }, icon(a.icon), a.label)),
-      h('button', { type: 'button', class: 'btn', onclick: () => { clearSelection(); renderRows(); renderDetail(); } }, t('Auswahl aufheben')))));
+      h('button', { type: 'button', class: 'btn', onclick: () => { clearSelection(); renderList(); renderDetail(); } }, t('Auswahl aufheben')))));
   return undefined;
 }
 

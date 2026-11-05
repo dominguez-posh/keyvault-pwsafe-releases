@@ -9,6 +9,9 @@
 // empty input only).
 
 import { readFile } from 'node:fs/promises';
+import { multiClearCheck } from './smoke-multi.js';
+import { agentAdmissionCheck } from './smoke-agent-admission.js';
+import { deliberateAnswerCheck, microsoftChoiceCheck, writeDetailsCheck } from './smoke-agent-questions.js';
 
 export async function featureChecks(ctx) {
   const { js, sleep, errors, win, api, vault, config, changed, clipboardHas } = ctx;
@@ -709,28 +712,7 @@ export async function featureChecks(ctx) {
       await js('[...document.querySelectorAll("dialog[open] button")].find((b) => b.closest("dialog").querySelector(".question") && /Ablehnen|Deny/.test(b.textContent))?.click()');
       if ((await Promise.race([pk, sleep(3000).then(() => 'timeout')])) !== false) fail('agentfront', 'deny did not answer the passkey request');
       await sleep(200);
-      // #339: the Microsoft account choice has a search and a vault filter; the answer is the account still visible.
-      const msAccounts = [
-        { key: 'v1/a', title: 'Microsoft', username: 'admin@contoso.com', vault: 'Arbeit' },
-        { key: 'v2/b', title: 'Microsoft', username: 'adm-up@fabrikam.com', vault: 'Persönlich', otherTenant: true },
-        { key: 'v2/c', title: 'Entra Breakglass', username: 'bg@contoso.com', vault: 'Persönlich' },
-      ];
-      const ms = ctx.chooseAgentMicrosoft({ agent: 'smoke-agent', purpose: 'smoke', accounts: msAccounts });
-      await sleep(600);
-      const visibleOptions = 'JSON.stringify([...document.querySelectorAll("dialog[open] .agent-microsoft .q-option")].filter((o) => !o.hidden).map((o) => o.querySelector(".q-option-hint").textContent.split(" · ")[0]))';
-      const setFilter = (search, vault) => js(`(() => { const d = document.querySelector("dialog[open] .agent-microsoft"); const s = d.querySelector(".q-search"); const v = d.querySelector(".q-vault");
-        s.value = ${JSON.stringify(search)}; s.dispatchEvent(new Event("input")); if (v) { v.value = ${JSON.stringify(vault)}; v.dispatchEvent(new Event("change")); } return !!v; })()`);
-      if (!(await setFilter('', 'Persönlich'))) fail('agentfront', 'Microsoft choice: no vault filter with two vaults');
-      if ((await js(visibleOptions)) !== JSON.stringify(['adm-up@fabrikam.com', 'bg@contoso.com'])) fail('agentfront', `vault filter: ${await js(visibleOptions)}`);
-      await setFilter('breakglass', 'Persönlich');
-      if ((await js(visibleOptions)) !== JSON.stringify(['bg@contoso.com'])) fail('agentfront', `search: ${await js(visibleOptions)}`);
-      await setFilter('nothing-matches', '');
-      if (!(await js('document.querySelector("dialog[open] .agent-microsoft .q-actions .btn.primary").disabled'))) fail('agentfront', 'no hits: "Sign in" still enabled');
-      await setFilter('fabrikam', '');
-      await js('document.querySelector("dialog[open] .agent-microsoft .q-actions .btn.primary").click()');
-      const chosen = await Promise.race([ms, sleep(3000).then(() => 'timeout')]);
-      if (chosen !== 'v2/b') fail('agentfront', `Microsoft choice: the visible account was not taken (${chosen})`);
-      await sleep(200);
+      await microsoftChoiceCheck({ js, sleep, fail, chooseAgentMicrosoft: ctx.chooseAgentMicrosoft });
       win.hide();
       let open = false;
       const waiting = ctx.waitForUnlock({ ms: 4000, isOpen: () => open });
@@ -743,6 +725,10 @@ export async function featureChecks(ctx) {
       if ((await ctx.waitForUnlock({ ms: 300, isOpen: () => false })) !== false) fail('agentfront', 'locked: no refusal when nobody unlocks');
       if (win.isAlwaysOnTop()) fail('agentfront', 'locked: window stays on top after giving up');
     });
+
+    await step('agententer', () => deliberateAnswerCheck({ ...ctx, fail }));
+    await step('agentrevoke', () => agentAdmissionCheck({ ...ctx, fail }));
+    await step('agentwrite', () => writeDetailsCheck({ ...ctx, fail }));
 
     // ---- AI agents: "never ask again" for one entry shows "Revoke AI approval" in its context menu, which removes it
     await step('agenttrust', async () => {
@@ -847,6 +833,7 @@ export async function featureChecks(ctx) {
       if (JSON.stringify(Object.keys(want).map((k) => w[k])) !== JSON.stringify(Object.values(want))) fail('multidrag', `after the drop: ${JSON.stringify(w)}`);
     });
 
+    await step('multiclear', () => multiClearCheck({ js, sleep, fail, vaultName: kvc.name }));
     // ---- passkey: drag it from the entry onto another login in the list – it moves there (after one confirmation)
     // ---- AI agents (#308, #315): passkey sign-ins and Microsoft sign-ins for tools are two switches, off by default
     await step('mcpextra', async () => {

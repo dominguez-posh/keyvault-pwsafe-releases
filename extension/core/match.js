@@ -32,6 +32,50 @@ export function itemMatchesHost(hosts, pageHost) {
 }
 
 /**
+ * Scheme and port as well as the host, for everything that hands sign-in data to a page: an http page only for an
+ * entry with an http URL, and the port must be the entry's. On an https page an http URL of the entry also fits (same
+ * port rule), the connection is only better than the entry asks for. An entry without a scheme counts as https.
+ */
+export function urlsFitPage(urls, pageUrl) {
+  let page;
+  try {
+    page = new URL(pageUrl);
+  } catch {
+    return false;
+  }
+  if (!/^https?:$/.test(page.protocol)) return false;
+  return (urls || []).some((raw) => {
+    let u;
+    try {
+      u = new URL(normalizeUrl(raw));
+    } catch {
+      return false;
+    }
+    if (!/^https?:$/.test(u.protocol) || !hostMatches(page.hostname, u.hostname)) return false;
+    if (page.protocol === 'http:' && u.protocol !== 'http:') return false;
+    return u.port === page.port;
+  });
+}
+
+/** https on the standard port: an entry's scheme and port can only be wrong here if it names another port. */
+export function isStandardHttps(pageUrl) {
+  try {
+    const u = new URL(pageUrl);
+    return u.protocol === 'https:' && !u.port;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Bastion's form may ask for accounts as the page itself or, on portal.azure.net or in a frame, only inside the portal.
+ * The address that names the VM belongs to the top page, and any page can embed these hosts.
+ */
+export function bastionFrameAllowed({ host, frameId, topIsPortal }) {
+  return topIsPortal || (frameId === 0 && !/(^|\.)portal\.azure\.net$/i.test(String(host || '')));
+}
+
+/**
  * How well an entry's URLs fit the page – for ordering, never for filtering (host matching decides that):
  * 0 no URL for this host, 1 same site, 2 exact host, plus 1 per matching path segment ("keevault.de/admin" on
  * https://keevault.de/admin/users scores 3). Higher = shown first.

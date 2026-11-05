@@ -4,6 +4,22 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.28 – 2026-11-05
+- Mehrfachauswahl: „Auswahl aufheben“ wirkt wieder, in der Detailspalte und im Kontextmenü. Bisher blieb die Markierung stehen (#330).
+- KI-Agenten: Anfragen bestätigst du jetzt bewusst. Die Schaltfläche wird nach gut einer Sekunde aktiv, und in der Microsoft-Kontoauswahl wählst du das Konto selbst aus der Liste. Enter im Suchfeld meldet nicht mehr an (#368).
+- KI-Agenten: Eine entzogene oder abgelaufene Zulassung und das Ausschalten der Funktion gelten sofort für alle Agenten. Neue Agenten stehen in der Abfrage zuerst auf „Nur lesen“. Ein Agent ohne gespeicherte Regel darf lesen, aber nichts ändern: Lege die Regel in den Einstellungen fest, wenn er schreiben soll (#369).
+- KI-Agenten: Die Bestätigung einer Änderung nennt den bisherigen Titel des Eintrags und zeigt Alt und Neu für Titel, Benutzername, URL und Ordner, bei einer Adresse auch den Host. Adressen, deren Ziel sich nicht eindeutig prüfen lässt, lehnt Keevault ab (#370).
+- Browser-Erweiterung: Ein Eintrag gilt für das Protokoll und den Port seiner Adresse, beim Feldmenü, beim Ausfüllen, beim Tastenkürzel Strg+Umschalt+L und beim Angebot „Passwort aktualisieren?“. Auf einer http-Seite braucht er eine http-Adresse, auf einer Seite mit eigenem Port diesen Port. Die Bastion-Leiste erscheint über https auf dem Standard-Port. Fehlt dir ein Eintrag, ergänze darin die genaue Adresse, zum Beispiel `http://router.local:8080`. Einmalig geht es auch über das Popup der Erweiterung: Nach der Rückfrage „Andere Website“ füllt Keevault trotzdem aus (#367, #380).
+- Browser-Erweiterung: Das Feldmenü öffnet sich jetzt erst, wenn du ins Feld klickst, mit der Tab-Taste hineinspringst oder im Feld eine Taste drückst. Bei einem Feld, das beim Laden der Seite schon den Fokus hat, erscheint es also nicht mehr von selbst, das gilt auch für die Passkey-Vorschläge im Menü (#380).
+
+### English
+- Multi-selection: "Clear selection" works again, in the detail pane and in the context menu. Until now the marks stayed (#330).
+- AI agents: you now confirm requests deliberately. The button becomes active after a little over a second, and in the Microsoft account choice you pick the account from the list yourself. Enter in the search no longer signs in (#368).
+- AI agents: a revoked or expired approval and switching the function off apply to all agents right away. New agents start on "Read only" in the question. An agent without a saved rule can read but not change anything: set the rule in the settings if it should write (#369).
+- AI agents: the confirmation of a change names the entry's current title and shows old and new for title, user name, URL and folder, for an address also the host. Keevault refuses addresses whose target can't be checked clearly (#370).
+- Browser extension: an entry applies to the protocol and port of its address, for the field menu, filling, the Ctrl+Shift+L shortcut and the "Update password?" offer. On an http page it needs an http address, on a page with its own port that port. The Bastion bar appears over https on the standard port. If an entry is missing, add the exact address to it, for example `http://router.local:8080`. For a single use, the extension's popup still works: after the "Different website" question, Keevault fills in anyway (#367, #380).
+- Browser extension: the field menu now opens only when you click into the field, tab into it or press a key in it. A field that already has the focus when the page loads no longer shows it by itself, and this includes the passkey suggestions in the menu (#380).
+
 ## 0.9.27 – 2026-11-05
 - Update: Das Update-Fenster bleibt vorne, bis die neue Version startet. Bisher konnte es hinter anderen Fenstern verschwinden. Es nimmt dabei niemandem die Eingabe weg, der gerade in einem anderen Programm tippt (#335).
 - Abtippen in den Windows-Sicherheitsdialog (z. B. die Kennwortabfrage vor einer Remotedesktop-Verbindung): Windows lässt dort bewusst kein Programm tippen, das Passwort kam deshalb nie an. Keevault legt den Wert jetzt in die geschützte Zwischenablage und sagt „mit Strg+V einfügen“. Beim Remotedesktop-Start unter Credential Guard liegt das Passwort gleich in der Zwischenablage (#336).

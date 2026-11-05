@@ -10,6 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyRegistrationResponse, verifyAuthenticationResponse } from '@simplewebauthn/server';
+import { extensionIdFromKey, foreignKeevault, hostResolverRules } from './smoke-browser-guard.mjs';
+import { checkSignInPages } from './extension-smoke-signin.mjs';
 
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const browser = arg('browser') || [
@@ -22,30 +24,22 @@ const browser = arg('browser') || [
 if (!browser) throw new Error('Kein Edge/Chrome gefunden (--browser=<pfad>)');
 const out = arg('out');
 const profile = mkdtempSync(join(tmpdir(), 'kvpwsafe-smoke-'));
-// A copy without the fixed key: its own extension ID, so a Keevault installed by policy on this machine neither
-// blocks the test nor gets involved (the app's native host only accepts the real ID).
+// A copy without the fixed key: its own extension ID, and the app's native host only accepts the real ID. A Keevault
+// installed by policy must stay out of this browser (#346): no network for its download, and assertNoForeignKeevault.
 const extensionPath = join(profile, 'extension');
 cpSync(arg('extension') || fileURLToPath(new URL('../extension', import.meta.url)), extensionPath, { recursive: true });
 const manifest = JSON.parse(readFileSync(join(extensionPath, 'manifest.json'), 'utf8'));
+const realExtensionId = extensionIdFromKey(manifest.key);
 delete manifest.key;
 delete manifest.update_url;
 // The imitated Microsoft sign-in runs over http (as a secure origin, see the browser flags): the copy's passkey shim
 // also loads there.
 manifest.content_scripts.find((c) => c.world === 'MAIN').matches.push('http://login.microsoftonline.com/*', 'http://login.microsoft.com/*');
 writeFileSync(join(extensionPath, 'manifest.json'), JSON.stringify(manifest, null, 2));
-// A Keevault installed by policy (ExtensionInstallForcelist applies to every profile, the test one included) would
-// answer the page's WebAuthn relay as well and race the copy – the copy speaks on its own channel.
+// The copy speaks on its own channel, so its WebAuthn relay cannot mix with another Keevault's.
 for (const f of ['content/webauthn-main.js', 'content/content.js']) {
   const p = join(extensionPath, f);
   writeFileSync(p, readFileSync(p, 'utf8').replace("'kvpwsafe-webauthn-v1'", "'kvpwsafe-webauthn-smoke'"));
-}
-// The fake Microsoft sign-in page runs over http on a local port: only the copy accepts it. The policy-installed
-// Keevault ignores it (https on the standard port only) – it would otherwise offer the real vault's accounts there.
-{
-  const p = join(extensionPath, 'background.js');
-  const src = readFileSync(p, 'utf8');
-  if (!src.includes('const SIGN_IN_HTTPS_ONLY = true;')) throw new Error('background.js: SIGN_IN_HTTPS_ONLY nicht gefunden');
-  writeFileSync(p, src.replace('const SIGN_IN_HTTPS_ONLY = true;', 'const SIGN_IN_HTTPS_ONLY = false;'));
 }
 // Passkeys need https – in the copy the imitated Microsoft sign-in (http, local port) counts like localhost.
 {
@@ -144,9 +138,24 @@ const sophosPage = `<!doctype html><meta charset="utf-8"><title>VPN Portal</titl
 const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
+// A second port with the same pages: not a test origin below, so the copy treats it with the real checks (#367).
+const otherPortServer = createServer((req, res) => server.emit('request', req, res));
+await new Promise((r) => otherPortServer.listen(0, '::', r));
+const otherPort = otherPortServer.address().port;
+// The fake sign-in pages run over http on a local port: the copy accepts exactly these origins, nothing else.
+{
+  const p = join(extensionPath, 'core/pagefit.js');
+  const src = readFileSync(p, 'utf8');
+  const marker = 'const SIGN_IN_TEST_ORIGINS = [];';
+  if (!src.includes(marker)) throw new Error('core/pagefit.js: SIGN_IN_TEST_ORIGINS nicht gefunden');
+  const origins = ['login.microsoftonline.com', 'login.microsoft.com', 'bst-smoke.bastion.azure.com', 'portal.azure.com'].map((h) => `http://${h}:${server.address().port}`);
+  writeFileSync(p, src.replace(marker, `const SIGN_IN_TEST_ORIGINS = ${JSON.stringify(origins)};`));
+}
 
 const proc = spawn(browser, [
-  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging', '--host-resolver-rules=MAP login.microsoftonline.com 127.0.0.1,MAP login.microsoft.com 127.0.0.1,MAP bst-smoke.bastion.azure.com 127.0.0.1,MAP portal.azure.com 127.0.0.1',
+  '--headless=new', '--remote-debugging-pipe', '--enable-unsafe-extension-debugging',
+  // No network apart from the local test server: a proxy would resolve names itself, so it is switched off as well.
+  `--host-resolver-rules=${hostResolverRules(['login.microsoftonline.com', 'login.microsoft.com', 'bst-smoke.bastion.azure.com', 'portal.azure.com', 'shop-smoke.example', 'router-smoke.example'])}`, '--no-proxy-server',
   // WebAuthn needs a secure context: the imitated Microsoft sign-in runs over http on a local port.
   `--unsafely-treat-insecure-origin-as-secure=http://login.microsoftonline.com:${server.address().port},http://login.microsoft.com:${server.address().port}`,
   `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', 'about:blank',
@@ -181,7 +190,14 @@ async function attach(targetId) {
   await send('Runtime.enable', {}, sessionId);
   return sessionId;
 }
+/** Stops the run (#346): the real extension could offer the real vault on the imitated pages. */
+async function assertNoForeignKeevault() {
+  const { targetInfos } = await send('Target.getTargets');
+  const found = foreignKeevault({ profile, targets: targetInfos, realId: realExtensionId });
+  if (found) throw new Error(`Abbruch: fremde Keevault-Erweiterung im Test-Browser: ${found}`);
+}
 async function open(url) {
+  await assertNoForeignKeevault();
   const { targetId } = await send('Target.createTarget', { url });
   const sessionId = await attach(targetId);
   for (let i = 0; i < 40; i++) {
@@ -273,6 +289,7 @@ const findTarget = async (prefix) => (await send('Target.getTargets')).targetInf
 const sw = (sessionId, cmd, args = {}) => evaluate(sessionId, `chrome.runtime.sendMessage(${JSON.stringify({ cmd, ...args })}).then((r) => { if (!r.ok) throw new Error(r.error.message); return r.result; })`);
 
 try {
+  await assertNoForeignKeevault();
   const { id } = await send('Extensions.loadUnpacked', { path: extensionPath });
   console.log(`Erweiterung geladen: ${id}`);
   const ext = `chrome-extension://${id}`;
@@ -500,15 +517,12 @@ try {
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: field.x, y: field.y, button: 'left', clickCount: 1 }, msMenu.sessionId);
     await sleep(1200);
     const menuTree = await send('DOM.getDocument', { depth: -1, pierce: true }, msMenu.sessionId);
-    // A Keevault installed by policy also runs in this browser and shows its own menu (with the real vault, if the app
-    // is unlocked): only the menu with the demo accounts (contoso) belongs to the copy under test.
+    // Only the copy under test may show a menu here: its demo accounts are from contoso.
     const demoText = (n) => n.nodeType === 3 && /contoso/i.test(n.nodeValue || '');
-    const menuNode = findAll(menuTree.root, (n) => n.nodeName === 'DIV' && attrsOf(n).class === 'menu').find((m) => findNode(m, demoText));
+    const menus = findAll(menuTree.root, (n) => n.nodeName === 'DIV' && attrsOf(n).class === 'menu');
+    if (menus.some((m) => !findNode(m, demoText))) throw new Error('Abbruch: fremdes Menü auf der Testseite (#346)');
+    const menuNode = menus[0];
     const entry = menuNode && findNode(menuNode, firstAccount);
-    // The other Keevault's menu lies on top at the same place: its host element is hidden, so the click reaches ours.
-    for (const h of findAll(menuTree.root, (n) => n.nodeName === 'KVPWSAFE-UI')) {
-      if (menuNode && !findNode(h, (n) => n === menuNode)) await send('DOM.setAttributeValue', { nodeId: h.nodeId, name: 'style', value: 'display:none' }, msMenu.sessionId);
-    }
     menuState ={ menu: !!menuNode, entry: !!entry, field, focused: await evaluate(msMenu.sessionId, 'document.activeElement?.name || document.activeElement?.tagName') };
     if (!entry) continue;
     const { model } = await send('DOM.getBoxModel', { nodeId: entry.nodeId }, msMenu.sessionId);
@@ -517,6 +531,8 @@ try {
     menuResult = await waitFor(async () => { const r = await evaluate(msMenu.sessionId, 'signedIn'); return r.password && r; }, 6000);  }
   check(!!menuResult?.user && !!menuResult?.password, `Feldmenü auf der Microsoft-Seite: Anmeldung bleibt stehen (${JSON.stringify(menuResult && { user: menuResult.user, password: !!menuResult.password })} ${JSON.stringify(menuState)})`);
   pageErrors(msMenu.sessionId, 'ms-menu');
+
+  await checkSignInPages({ send, events, open, sw, waitFor, check, ext, options, personal, port: server.address().port, otherPort, shadowNode });
 
   // Bastion: signing in to a VM is offered as an asset (Azure VM) with the VM name and the Bastion link from the address.
   const vmPath = '/subscriptions/s-smoke/resourceGroups/rg-smoke/providers/Microsoft.Compute/virtualMachines/vm-smoke-01/bastionHost';
@@ -733,11 +749,13 @@ try {
   await shot(options.sessionId, 'ext-options-en');
   pageErrors(options.sessionId, 'options');
   pageErrors(popupEn.sessionId, 'popup-en');
+  await assertNoForeignKeevault();
 } catch (e) {
   failures.push(e.message);
 } finally {
   proc.kill();
   server.close();
+  otherPortServer.close();
   await sleep(500);
   try {
     rmSync(profile, { recursive: true, force: true });

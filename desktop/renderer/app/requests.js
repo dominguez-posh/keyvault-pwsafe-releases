@@ -39,6 +39,11 @@ export async function checkWindowsRequests() {
 export const openQuestions = new Map(); // id → close without answer
 // MCP argument names that differ from the item fields (FIELD_LABELS below).
 const AGENT_FIELD_ALIAS = { url: 'urls', generatePassword: 'password' };
+// #368: "Allow" only works this long after the question appeared and after the last key press, so that someone who was
+// typing for another program and keeps typing cannot answer it, not even with Tab and Enter.
+const CONFIRM_DELAY_MS = 1200;
+// Questions still open: closing one starts the delay of those below it again, they come up under the mouse pointer.
+const waitingQuestions = new Set();
 export function questionDialog(q) {
   let answered = false;
   const answer = (value) => {
@@ -48,16 +53,42 @@ export function questionDialog(q) {
     call('answerQuestion', q.id, value).catch(() => {});
   };
   const icons = { 'agent-connect': 'link', 'agent-read': 'key', 'agent-write': 'edit' };
-  let choice = q.choices?.[0]?.value || 'allow';
+  // #368: the account choice starts without a selection, the user picks the account that is handed to the tool.
+  let choice = q.filter ? null : q.choices?.[0]?.value || 'allow';
+  let delayPassed = false;
+  let delayTimer = null;
+  // During the delay the button only looks disabled: a really disabled button would lose the keyboard focus and get no
+  // more key presses. Disabled for real only without a choice, where it can't have the focus.
+  const updateAllow = () => {
+    allow.disabled = choice === null;
+    allow.setAttribute('aria-disabled', String(!delayPassed));
+  };
+  const startDelay = () => {
+    clearTimeout(delayTimer);
+    delayPassed = false;
+    updateAllow();
+    delayTimer = setTimeout(() => { delayPassed = true; updateAllow(); }, CONFIRM_DELAY_MS);
+  };
+  // Every key starts the delay again, except a confirming key after the pause (space acts on key up, so it must not
+  // start the delay on key down either).
+  const onKey = (e) => {
+    const confirming = (e.target === allow && (e.key === 'Enter' || e.key === ' '))
+      || (q.filter && e.key === 'Enter' && e.target.matches?.('.q-option input:checked'));
+    if (!delayPassed || !confirming) startDelay();
+  };
   const options = (q.choices || []).map((c, i) => {
-    const input = h('input', { type: 'radio', name: `q${q.id}`, value: c.value, checked: i === 0, onchange: () => { choice = c.value; } });
+    const input = h('input', { type: 'radio', name: `q${q.id}`, value: c.value, checked: !q.filter && i === 0,
+      onchange: () => { choice = c.value; updateAllow(); },
+      // Keyboard way through the account choice: Tab to the list, pick with arrows or space, then Enter.
+      onkeydown: (e) => { if (q.filter && e.key === 'Enter' && input.checked) allow.click(); } });
     const label = h('label', { class: 'q-option' }, input,
       h('span', { class: 'q-option-text' }, h('span', { class: 'q-option-label' }, c.label), c.hint ? h('span', { class: 'q-option-hint' }, c.hint) : null));
     label.kvChoice = { ...c, input };
     return label;
   });
   // #339: search (title, user name, vault) and vault filter for the account choice – only with more than one account.
-  // A hidden choice is never sent: the first visible one is selected, none visible disables "Allow".
+  // A hidden choice is never sent: filtering it away clears the selection (#368: no other account takes its place).
+  // Enter in the search does nothing, otherwise text typed for another program could pick and hand over an account.
   let filterBar = null;
   let noHits = null;
   let applyFilter = () => {};
@@ -71,34 +102,44 @@ export function questionDialog(q) {
     applyFilter = () => {
       const words = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
       const vault = vaultSelect?.value || '';
-      let firstVisible = null;
       for (const o of options) {
         const c = o.kvChoice;
         o.hidden = !(words.every((w) => c.search.includes(w)) && (!vault || c.vault === vault));
-        if (!o.hidden && !firstVisible) firstVisible = o;
       }
       const current = options.find((o) => o.kvChoice.value === choice);
-      if ((!current || current.hidden) && firstVisible) {
-        firstVisible.kvChoice.input.checked = true;
-        choice = firstVisible.kvChoice.value;
+      if (current?.hidden) {
+        current.kvChoice.input.checked = false;
+        choice = null;
+        updateAllow();
       }
-      noHits.hidden = !!firstVisible;
-      allow.disabled = !firstVisible;
+      noHits.hidden = options.some((o) => !o.hidden);
     };
     search.addEventListener('input', applyFilter);
     vaultSelect?.addEventListener('change', applyFilter);
-    // Enter in the search takes the selected (first visible) account.
-    search.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !allow.disabled) { e.preventDefault(); allow.click(); } });
     filterBar = h('div', { class: 'q-filter' }, h('span', { class: 'q-search-wrap' }, icon('search', 14), search), vaultSelect);
   }
+  // #370: old and new value of what the agent wants to change (a new entry: only the new one).
+  const changes = q.changes?.length ? h('div', { class: 'q-changes' }, ...q.changes.map((c) => h('div', { class: 'q-change', 'data-field': c.field },
+    h('span', { class: 'q-change-field' }, t(FIELD_LABELS[AGENT_FIELD_ALIAS[c.field] || c.field] || c.field)),
+    h('span', { class: 'q-change-values' },
+      c.from === undefined ? null : h('span', { class: 'q-change-old' }, c.from || t('(leer)')),
+      c.from === undefined ? null : ' → ',
+      h('span', { class: 'q-change-new' }, c.to || t('(leer)')),
+      // The host an address really leads to, never cut.
+      c.host ? h('span', { class: 'q-change-host' }, t('Ziel: {host}', { host: c.host })) : null)))) : null;
   const target = q.entry ? h('div', { class: 'q-target' },
     h('span', { class: 'q-target-icon' }, icon(q.kind === 'agent-read' || q.kind === 'agent-passkey' ? 'key' : 'edit', 16)),
     h('div', { class: 'q-target-text' }, h('div', { class: 'q-target-entry' }, q.entry),
       // #331: the account that signs in.
       q.username ? h('div', { class: 'q-target-user' }, icon('user', 12), q.username) : null,
       h('div', { class: 'q-target-vault' }, icon('vault', 12), q.vault || '')),
-    q.fields?.length ? h('div', { class: 'q-fields' }, ...[...new Set(q.fields.map((f) => AGENT_FIELD_ALIAS[f] || f))].map((f) => h('span', { class: 'q-chip' }, FIELD_LABELS[f] ? t(FIELD_LABELS[f]) : f))) : null) : null;
-  const allow = h('button', { type: 'button', class: 'btn primary', onclick: () => { answer(choice); close(); } }, q.allow || t('Erlauben'));
+    q.fields?.length ? h('div', { class: 'q-fields' }, ...[...new Set(q.fields.map((f) => AGENT_FIELD_ALIAS[f] || f))].map((f) => h('span', { class: 'q-chip' }, FIELD_LABELS[f] ? t(FIELD_LABELS[f]) : f))) : null,
+    changes) : null;
+  const allow = h('button', { type: 'button', class: 'btn primary', onclick: () => {
+    if (!delayPassed || choice === null) return;
+    answer(choice);
+    close();
+  } }, q.allow || t('Erlauben'));
   const body = h('div', { class: `question ${q.kind}` },
     h('div', { class: 'q-hero' },
       h('span', { class: 'q-badge' }, icon(icons[q.kind] || 'shield', 26)),
@@ -115,10 +156,20 @@ export function questionDialog(q) {
       allow));
   const { dialog, close } = modal('', body, []);
   dialog.classList.add('question-modal');
-  dialog.addEventListener('close', () => answer(q.cancel));
+  dialog.addEventListener('close', () => {
+    answer(q.cancel);
+    clearTimeout(delayTimer);
+    document.removeEventListener('keydown', onKey, true);
+    waitingQuestions.delete(startDelay);
+    for (const restart of waitingQuestions) restart();
+  });
   openQuestions.set(q.id, () => { answered = true; close(); });
-  // With a search the cursor starts there (type, Enter); otherwise on the main button.
-  (filterBar?.querySelector('.q-search') || allow).focus();
+  waitingQuestions.add(startDelay);
+  startDelay();
+  document.addEventListener('keydown', onKey, true);
+  // #368: the focus is on no button, so Enter and space do nothing. With a search the cursor starts there.
+  body.tabIndex = -1;
+  (filterBar?.querySelector('.q-search') || body).focus();
 }
 
 /** Success moment after a passkey request from Windows: centred badge animation, gone after about a second. */

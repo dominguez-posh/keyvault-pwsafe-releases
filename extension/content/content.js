@@ -53,7 +53,7 @@
         } else if (res.conditional) {
           conditional = { pageId: d.id, ...res.conditional };
           if (res.conditional.ui) texts = res.conditional.ui;
-          if (document.activeElement instanceof HTMLInputElement) onFocus({ target: document.activeElement });
+          if (document.activeElement instanceof HTMLInputElement && document.activeElement === engaged) onFocus({ target: document.activeElement });
         } else if (res.inline) {
           showPasskeyPill(d.id, res.inline);
         } else toPage({ id: d.id, fallback: true });
@@ -603,6 +603,9 @@
   let menu = null;
   let anchor = null;
   let lastFocused = null;
+  let engaged = null; // the field the user reached or operated by real input
+  let reachedBy = null; // what the last real input may have moved the focus to: the pressed element or 'Tab'
+  let reachedAt = 0;
   let matches = null;
   let matchesAt = 0;
 
@@ -692,11 +695,12 @@
     const target = anchor;
     hideMenu();
     // Microsoft's sign-in page (#334): a Microsoft account from the field menu signs in step by step like the bar –
-    // name, passkey (if the account has one) or password, one-time code. Other entries are only filled in.
+    // name, passkey (if the account has one) or password, one-time code. A refusal ends here: nothing is filled in.
     if (isTop && MS_LOGIN_HOSTS.test(location.hostname)) {
       const ids = { containerId: entry.containerId, id: entry.id };
       const job = await call('cs:msAccount', ids).catch(() => null);
-      if (job) return runSignIn(job, () => call('cs:msAccount', ids).catch(() => null));
+      if (job) runSignIn(job, () => call('cs:msAccount', ids).catch(() => null));
+      return;
     }
     try {
       const creds = await call('cs:fill', { containerId: entry.containerId, id: entry.id });
@@ -736,7 +740,6 @@
   async function onFocus(ev) {
     const input = ev.target;
     if (!(input instanceof HTMLInputElement) || !alive) return;
-    lastFocused = input;
     const webauthnField = /webauthn/i.test(input.autocomplete || '');
     const otp = isOtpField(input);
     const pw = !otp && isPassword(input);
@@ -758,15 +761,29 @@
     if (entries.length) showMenu(input, entries);
   }
 
-  document.addEventListener('focusin', (e) => onFocus(e), true);
-  document.addEventListener('click', (e) => {
-    if (e.isTrusted && e.target instanceof HTMLInputElement && e.target === document.activeElement && !menu) onFocus(e);
+  // The menu names entries, so only the user's own input at the field opens it. A script's focus() also gives a trusted
+  // focusin, and navigator.userActivation would count a click anywhere on the page.
+  const engage = (e) => { engaged = e.target; onFocus(e); };
+  document.addEventListener('pointerdown', (e) => { if (e.isTrusted) { reachedBy = e.target; reachedAt = Date.now(); } }, true);
+  document.addEventListener('focusin', (e) => {
+    if (e.target instanceof HTMLInputElement) lastFocused = e.target;
+    const reached = e.isTrusted && Date.now() - reachedAt < 500 && (reachedBy === e.target || reachedBy === 'Tab');
+    reachedBy = null; // one input opens once
+    if (reached) engage(e);
   }, true);
-  document.addEventListener('focusout', () => setTimeout(() => {
-    if (menu && document.activeElement !== anchor) hideMenu();
-  }, 150), true);
+  document.addEventListener('click', (e) => {
+    if (e.isTrusted && e.target instanceof HTMLInputElement && e.target === document.activeElement && !menu) engage(e);
+  }, true);
+  document.addEventListener('focusout', () => {
+    engaged = null;
+    setTimeout(() => { if (menu && document.activeElement !== anchor) hideMenu(); }, 150);
+  }, true);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && menu) hideMenu();
+    if (!e.isTrusted) return;
+    if (e.key === 'Tab') { reachedBy = 'Tab'; reachedAt = Date.now(); }
+    // Autofocused field: the first typed key or arrow down. After Escape further typing stays quiet.
+    else if ((e.key.length === 1 || e.key === 'ArrowDown') && e.target === document.activeElement && e.target !== engaged && !menu) engage(e);
   }, true);
   window.addEventListener('scroll', position, { passive: true, capture: true });
   window.addEventListener('resize', position, { passive: true });
