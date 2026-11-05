@@ -458,6 +458,7 @@ try {
   // More than one account: the bar has a search field (#10). The bar is a closed shadow root – CDP pierces it.
   const msTree = await send('DOM.getDocument', { depth: -1, pierce: true }, ms.sessionId);
   const findNode = (n, ok) => (ok(n) ? n : (n.children || []).concat(n.shadowRoots || []).reduce((hit, c) => hit || findNode(c, ok), null));
+  const findAll = (n, ok, acc = []) => { if (ok(n)) acc.push(n); for (const c of (n.children || []).concat(n.shadowRoots || [])) findAll(c, ok, acc); return acc; };
   const attrsOf = (n) => Object.fromEntries((n.attributes || []).reduce((acc, v, i, a) => (i % 2 ? acc : [...acc, [v, a[i + 1]]]), []));
   const msSearch = findNode(msTree.root, (n) => n.nodeName === 'INPUT' && attrsOf(n).type === 'search');
   check(!!msSearch, 'Microsoft-Leiste: keine Suche bei mehreren Konten');
@@ -487,6 +488,35 @@ try {
   const kmsi = await waitFor(async () => (await evaluate(ms.sessionId, 'signedIn')).staySignedIn, 6000);
   check(kmsi === 'no', '„Angemeldet bleiben?“ nach der Keevault-Anmeldung nicht mit „Nein“ beantwortet');
   pageErrors(ms.sessionId, 'ms-signin');
+
+  // The field menu on Microsoft's page (#334): an account chosen there signs in step by step like the bar – name,
+  // then the password on the next page –, not only the name.
+  const msMenu = await open(`http://login.microsoftonline.com:${server.address().port}/ms?menu`);
+  await sleep(2000);
+  let menuResult = null;
+  let menuState = null;
+  for (let attempt = 0; attempt < 3 && !menuResult; attempt++) {
+    const field = await evaluate(msMenu.sessionId, '(() => { const r = document.querySelector("[name=loginfmt]").getBoundingClientRect(); return { x: r.left + 20, y: r.top + r.height / 2 }; })()');
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: field.x, y: field.y, button: 'left', clickCount: 1 }, msMenu.sessionId);
+    await sleep(1200);
+    const menuTree = await send('DOM.getDocument', { depth: -1, pierce: true }, msMenu.sessionId);
+    // A Keevault installed by policy also runs in this browser and shows its own menu (with the real vault, if the app
+    // is unlocked): only the menu with the demo accounts (contoso) belongs to the copy under test.
+    const demoText = (n) => n.nodeType === 3 && /contoso/i.test(n.nodeValue || '');
+    const menuNode = findAll(menuTree.root, (n) => n.nodeName === 'DIV' && attrsOf(n).class === 'menu').find((m) => findNode(m, demoText));
+    const entry = menuNode && findNode(menuNode, firstAccount);
+    // The other Keevault's menu lies on top at the same place: its host element is hidden, so the click reaches ours.
+    for (const h of findAll(menuTree.root, (n) => n.nodeName === 'KVPWSAFE-UI')) {
+      if (menuNode && !findNode(h, (n) => n === menuNode)) await send('DOM.setAttributeValue', { nodeId: h.nodeId, name: 'style', value: 'display:none' }, msMenu.sessionId);
+    }
+    menuState ={ menu: !!menuNode, entry: !!entry, field, focused: await evaluate(msMenu.sessionId, 'document.activeElement?.name || document.activeElement?.tagName') };
+    if (!entry) continue;
+    const { model } = await send('DOM.getBoxModel', { nodeId: entry.nodeId }, msMenu.sessionId);
+    const q = model.border;
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: (q[0] + q[4]) / 2, y: (q[1] + q[5]) / 2, button: 'left', clickCount: 1 }, msMenu.sessionId);
+    menuResult = await waitFor(async () => { const r = await evaluate(msMenu.sessionId, 'signedIn'); return r.password && r; }, 6000);  }
+  check(!!menuResult?.user && !!menuResult?.password, `Feldmenü auf der Microsoft-Seite: Anmeldung bleibt stehen (${JSON.stringify(menuResult && { user: menuResult.user, password: !!menuResult.password })} ${JSON.stringify(menuState)})`);
+  pageErrors(msMenu.sessionId, 'ms-menu');
 
   // Bastion: signing in to a VM is offered as an asset (Azure VM) with the VM name and the Bastion link from the address.
   const vmPath = '/subscriptions/s-smoke/resourceGroups/rg-smoke/providers/Microsoft.Compute/virtualMachines/vm-smoke-01/bastionHost';

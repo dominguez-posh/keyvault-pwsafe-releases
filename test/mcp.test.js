@@ -339,7 +339,11 @@ test('mcp: Microsoft sign-in for a tool – off by default, the user picks the a
   assert.equal(r.username, 'it@fabrikam.com');
   assert.equal(r.password, 'Ms-2');
   await mcp.call(client, 'request_microsoft_login', { tenant: 'contoso.com' }).catch(() => {});
-  assert.deepEqual(offered.accounts.map((a) => a.title), ['M365 Admin'], 'tenant narrows the choice');
+  // #333: the tenant sorts, it does not hide – the user may pick an account of another tenant
+  assert.deepEqual(offered.accounts.map((a) => a.title), ['M365 Admin', 'Fabrikam'], 'tenant accounts first, others still offered');
+  assert.deepEqual(offered.accounts.map((a) => !!a.otherTenant), [false, true], 'other tenants are marked');
+  await mcp.call(client, 'request_microsoft_login', { tenant: 'fabrikam.com' }).catch(() => {});
+  assert.deepEqual(offered.accounts.map((a) => a.title), ['Fabrikam', 'M365 Admin'], 'the requested tenant comes first even before admins');
   pick = null;
   await assert.rejects(mcp.call(client, 'request_microsoft_login', {}), /abgelehnt/, 'no choice, nothing returned');
   pick = 'kv/gh';

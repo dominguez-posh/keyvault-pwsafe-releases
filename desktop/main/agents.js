@@ -95,7 +95,8 @@ export async function chooseAgentMicrosoft({ agent, purpose, accounts }) {
     agent,
     title: t('„{agent}“ möchte sich bei Microsoft anmelden', { agent }),
     lead: purpose ? t('Zweck laut Tool: {purpose}', { purpose }) : t('Wähle das Konto, mit dem sich das Tool anmelden soll.'),
-    choices: accounts.slice(0, 20).map((a) => ({ value: a.key, label: a.title, hint: [a.username, a.vault].filter(Boolean).join(' · ') })),
+    // #333: accounts of the requested tenant come first; the others stay selectable, marked as another tenant
+    choices: accounts.slice(0, 20).map((a) => ({ value: a.key, label: a.title, hint: [a.username, a.vault, a.otherTenant ? t('anderer Tenant') : ''].filter(Boolean).join(' · ') })),
     note: t('Das Tool bekommt Benutzername, Passwort und den aktuellen Einmalcode dieses Kontos – nur dieses eine Mal.'),
     allow: t('Mit diesem Konto anmelden'),
     cancel: 'deny',

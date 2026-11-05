@@ -4,6 +4,16 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## 0.9.26 – 2026-11-05
+- Abtippen (Strg+Umschalt+U/P/O) funktioniert jetzt auch in Remotedesktop-Fenstern und VM-Konsolen, auch im Anmeldebildschirm des anderen Computers. Dort drückt Keevault jede Taste einzeln wie eine echte Tastatur, statt Unicode-Zeichen zu schicken, die diese Fenster nicht weitergeben (#332).
+- Microsoft-Anmeldung: Ein Konto aus dem Keevault-Menü am Namensfeld meldet jetzt vollständig an, wie die Leiste oben rechts. Hat der Eintrag einen Passkey, meldet Keevault damit an, sonst mit Passwort und Einmalcode. Bisher wurde nur der Name eingetragen (#334).
+- KI-Agenten: Fragt ein Tool eine Microsoft-Anmeldung für einen bestimmten Tenant an, stehen dessen Konten oben in der Auswahl. Alle anderen Microsoft-Konten bleiben wählbar und sind als „anderer Tenant“ markiert, bisher wurden sie ausgeblendet (#333).
+
+### English
+- Auto-type (Ctrl+Shift+U/P/O) now also works in remote desktop windows and VM consoles, including the other computer's sign-in screen. There Keevault presses each key one by one like a real keyboard, instead of sending Unicode characters that these windows don't pass on (#332).
+- Microsoft sign-in: an account picked from the Keevault menu at the name field now signs in completely, like the bar at the top right. With a passkey in the entry Keevault signs in with it, otherwise with password and one-time code. Until now only the name was entered (#334).
+- AI agents: when a tool asks for a Microsoft sign-in for a specific tenant, its accounts are listed first. All other Microsoft accounts stay selectable and are marked "other tenant"; before they were hidden (#333).
+
 ## 0.9.25 – 2026-11-05
 - KeePass-Import: Alle Einträge kommen an. Bei großen Datenbanken fehlte ein Teil mit „Nicht gefunden“, weil der Datei-Tresor während des Imports neu geladen wurde. Jetzt wird blockweise gespeichert, und das ist auch deutlich schneller (#326).
 - Import: Der Hinweis sagt jetzt genau, was zu löschen ist. Keevault löscht keine Dateien, die KeePass-Datei und die Schlüsseldatei bleiben unverändert (#326).

@@ -118,7 +118,7 @@ export const MCP_TOOLS = [
       type: 'object',
       properties: {
         purpose: { type: 'string', description: 'What the sign-in is for – shown to the user (e.g. "Graph report for contoso.com").' },
-        tenant: { type: 'string', description: 'Only accounts of this domain, e.g. contoso.com (optional).' },
+        tenant: { type: 'string', description: 'Accounts of this domain are offered first, e.g. contoso.com (optional). The user may still pick an account of another domain – check the returned user name.' },
       },
     },
     annotations: { readOnlyHint: true },
@@ -367,9 +367,10 @@ export class McpService {
         const accounts = (await v.summaries())
           .filter((s) => s.type === 'login' && (s.msAdmin || (s.hosts || []).some((h) => /(^|\.)(microsoftonline|microsoft|office|live|azure)\.(com|net)$/i.test(h))))
           .filter((s) => scopeAllows(scope, s.containerId, s.folder))
-          .filter((s) => !tenant || String(s.username || '').toLowerCase().endsWith(`@${tenant}`))
-          .sort((x, y) => Number(!!y.msAdmin) - Number(!!x.msAdmin) || x.title.localeCompare(y.title))
-          .map((s) => ({ key: `${s.containerId}/${s.id}`, title: s.title, username: s.username, vault: names.get(s.containerId) || '' }));
+          // #333: the tenant only sorts – the user decides which account signs in, also one of another tenant
+          .map((s) => ({ s, match: !tenant || String(s.username || '').toLowerCase().endsWith(`@${tenant}`) }))
+          .sort((x, y) => Number(y.match) - Number(x.match) || Number(!!y.s.msAdmin) - Number(!!x.s.msAdmin) || x.s.title.localeCompare(y.s.title))
+          .map(({ s, match }) => ({ key: `${s.containerId}/${s.id}`, title: s.title, username: s.username, vault: names.get(s.containerId) || '', ...(match ? {} : { otherTenant: true }) }));
         if (!accounts.length) throw fail(t('Kein Microsoft-Login in den für Agenten freigegebenen Tresoren'));
         const key = await this.chooseMicrosoft({ agent: client.agent, purpose: String(a.purpose || '').slice(0, 200), accounts });
         const chosen = accounts.find((x) => x.key === key);
