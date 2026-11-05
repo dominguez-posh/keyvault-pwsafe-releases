@@ -217,6 +217,38 @@ test('move between containers into another folder (moving a whole folder)', asyn
   assert.equal((await session.getItem('kv-b.vault.azure.net', moved.id)).folder, 'Contoso/Web');
 });
 
+test('an asset moved to another vault leaves its links behind, a linked login does not move (#328)', async () => {
+  const kvA = fakeKeyVault('kv-a.vault.azure.net');
+  const kvB = fakeKeyVault('kv-b.vault.azure.net');
+  const session = new VaultSession({
+    getToken: async (scope) => `token-${scope}`,
+    store: new MemoryStore(),
+    fetch: (input, init) => (new URL(input).hostname.startsWith('kv-a') ? kvA : kvB).fetch(input, init),
+    actor: () => 'bob@contoso.com',
+  });
+  await session.refreshContainers({ configured: [{ name: 'A', vaultUrl: 'kv-a' }, { name: 'B', vaultUrl: 'kv-b' }], discover: false });
+  const a = 'kv-a.vault.azure.net';
+  const login = await session.saveItem(a, { type: 'login', title: 'Admin', username: 'a', password: 'x' });
+  const vm = await session.saveItem(a, { type: 'server', title: 'VM01', server: { kind: 'azurevm', bastionUrl: 'https://portal.azure.com/', rdpLink: `${a}/${login.id}`, bastionVmLink: `${a}/${login.id}` } });
+  const moved = await session.moveItem(a, 'kv-b.vault.azure.net', vm.id);
+  assert.deepEqual(moved.droppedLinks, ['rdp', 'bastionVm']);
+  const there = await session.getItem('kv-b.vault.azure.net', moved.id);
+  assert.equal(there.server.rdpLink, '');
+  assert.equal(there.server.bastionVmLink, '');
+  assert.equal(there.server.bastionUrl, 'https://portal.azure.com/');
+  const portal = await session.saveItem(a, { type: 'login', title: 'Portal', loginLink: `${a}/${login.id}` });
+  await assert.rejects(session.moveItem(a, 'kv-b.vault.azure.net', portal.id), /Anmeldung eines anderen Eintrags/);
+  assert.equal((await session.getItem(a, portal.id)).loginLink, `${a}/${login.id}`, 'nothing changed');
+});
+
+test('bulk save: every entry gets a result, a too deep folder fails alone (#326)', async () => {
+  const { session } = await setup();
+  const cid = 'kv-team.vault.azure.net';
+  const r = await session.saveItems(cid, [{ title: 'Eins' }, { title: 'Tief', folder: 'A/B/C/D' }, { title: 'Drei', folder: 'A/B/C' }]);
+  assert.deepEqual(r.map((x) => (x.item ? x.item.title : 'error')), ['Eins', 'error', 'Drei']);
+  assert.match(r[1].error, /Höchstens 3 Ordnerebenen/);
+});
+
 test('folders of a Key Vault container: plain, then encrypted once protected; not listed as entries', async () => {
   const { kv, session } = await setup();
   const cid = 'kv-team.vault.azure.net';
@@ -367,7 +399,8 @@ test('folders: at most three levels', async () => {
   await assert.rejects(session.addFolder(cid, 'Kunden/Contoso/VPN/Alt'), /Höchstens 3 Ordnerebenen/);
   await session.saveItem(cid, { title: 'ok', folder: 'A/B/C' });
   await assert.rejects(session.saveItem(cid, { title: 'zu tief', folder: 'A/B/C/D' }), /Höchstens 3 Ordnerebenen/);
-  assert.equal(limitFolderDepth(' A / B /C/D/E'), 'A/B/C');
+  assert.equal(limitFolderDepth(' A / B /C/D/E'), 'A/B/C – D – E');
+  assert.equal(limitFolderDepth('A/B'), 'A/B');
   assert.equal(folderDepth(''), 0);
 });
 

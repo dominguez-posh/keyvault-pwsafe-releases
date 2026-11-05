@@ -244,6 +244,23 @@ function keepassTotp(strings) {
   return `otpauth://totp/${encodeURIComponent(strings.Title || 'KeePass')}?${p}`;
 }
 
+/**
+ * Expiry of a KeePass entry ("Expires" ticked – KeePass shows it struck through once the date is past, #327) as
+ * YYYY-MM-DD, else ''. KDBX 3 writes the time as text, KDBX 4 as base64 seconds since 0001-01-01 (little endian).
+ */
+function keepassExpiry(entry) {
+  const times = child(entry, 'Times');
+  if (textOf(times, 'Expires') !== 'True') return '';
+  const raw = textOf(times, 'ExpiryTime').trim();
+  let ms = /^\d{4}-\d{2}-\d{2}/.test(raw) ? Date.parse(raw) : NaN;
+  if (Number.isNaN(ms) && /^[A-Za-z0-9+/]{11}=$/.test(raw)) {
+    const b = b64uDecode(raw.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
+    const seconds = Number(new DataView(b.buffer, b.byteOffset, 8).getBigInt64(0, true));
+    ms = (seconds - 62135596800) * 1000;
+  }
+  return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : '';
+}
+
 const KEEPASS_STANDARD = new Set(['Title', 'UserName', 'Password', 'URL', 'Notes', 'otp', 'TimeOtp-Secret-Base32', 'TimeOtp-Length',
   'TimeOtp-Period', 'TimeOtp-Algorithm', 'KPEX_PASSKEY_CREDENTIAL_ID', 'KPEX_PASSKEY_PRIVATE_KEY_PEM', 'KPEX_PASSKEY_RELYING_PARTY',
   'KPEX_PASSKEY_USERNAME', 'KPEX_PASSKEY_USER_HANDLE', 'KPEX_PASSKEY_FLAG_BE', 'KPEX_PASSKEY_FLAG_BS']);
@@ -255,13 +272,17 @@ function fromKeepassXml(text) {
   const recycleBin = textOf(child(file, 'Meta'), 'RecycleBinUUID');
   // Group symbols: an own image (Meta/CustomIcons, PNG) or one of KeePass' standard icons, by folder path.
   const customIcons = new Map(children(child(child(file, 'Meta'), 'CustomIcons'), 'Icon')
-    .map((i) => [textOf(i, 'UUID'), `data:image/png;base64,${textOf(i, 'Data').replace(/s+/g, '')}`]));
+    .map((i) => [textOf(i, 'UUID'), `data:image/png;base64,${textOf(i, 'Data').replace(/\s+/g, '')}`]));
   const folderIcons = {};
+  // Every group, also empty ones (#327) – the app creates those as folders.
+  const folders = [];
   const items = [];
   const walk = (group, path) => {
     if (recycleBin && textOf(group, 'UUID') === recycleBin) return;
     if (path.length) {
-      const icon = normalizeFolderIcon(customIcons.get(textOf(group, 'CustomIconUUID'))) || keepassIcon(textOf(group, 'IconID'));
+      folders.push(normalizeFolder(path.join('/')));
+      // Own images as they are (too big ones are made smaller before saving), standard icons as the nearest symbol.
+      const icon = customIcons.get(textOf(group, 'CustomIconUUID')) || keepassIcon(textOf(group, 'IconID'));
       if (icon) folderIcons[normalizeFolder(path.join('/'))] = icon;
     }
     for (const entry of children(group, 'Entry')) {
@@ -286,7 +307,7 @@ function fromKeepassXml(text) {
         .filter(([k, v]) => !KEEPASS_STANDARD.has(k) && !/^(KP2A_URL|URL_)/.test(k) && v)
         .map(([k, v]) => ({ name: k, value: v, hidden: protectedKeys.has(k) }));
       const hasLogin = strings.UserName || strings.Password || urls.length || passkeys.length;
-      items.push(normalizeItem({
+      items.push({ ...normalizeItem({
         type: hasLogin ? 'login' : 'note',
         title: strings.Title,
         username: strings.UserName || '',
@@ -297,13 +318,15 @@ function fromKeepassXml(text) {
         fields,
         passkeys,
         folder: path.join('/'),
-      }));
+        expires: keepassExpiry(entry),
+      }), customIcon: customIcons.get(textOf(entry, 'CustomIconUUID')) || '' });
     }
     for (const sub of children(group, 'Group')) walk(sub, [...path, textOf(sub, 'Name')]);
   };
   const rootGroup = child(child(file, 'Root'), 'Group');
   if (rootGroup) walk(rootGroup, []);
-  return { format: 'keepass-xml', label: 'KeePass (XML)', items, folderIcons };
+  // customIcon: the entry's own KeePass image (#327), raw – the import dialog makes it small enough for an entry icon.
+  return { format: 'keepass-xml', label: 'KeePass (XML)', items, folderIcons, folders };
 }
 
 // ---------------------------------------------------------------- 1Password 1PUX

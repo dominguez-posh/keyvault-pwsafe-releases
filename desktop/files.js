@@ -97,7 +97,8 @@ export class FileContainers {
     this.entries.set(id, entry);
     if (!error) {
       watchFile(filePath, { interval: 3000 }, (cur, prev) => {
-        if (cur.mtimeMs !== prev.mtimeMs) entry.vault.load().then(() => this.onChange(), () => {});
+        // In the queue (#326): a reload in the middle of a save replaced the document and lost the entry being saved.
+        if (cur.mtimeMs !== prev.mtimeMs) this.serial(entry.id, () => entry.vault.load()).then(() => this.onChange(), () => {});
       });
     }
     return entry;
@@ -152,6 +153,13 @@ export class FileContainers {
     const saved = await this.serial(id, () => this.get(id).saveItem(item, opts));
     this.onChange();
     return saved;
+  }
+
+  /** Many new entries in one write (import): → [{ item } | { error }] in the order given. */
+  async saveItems(id, items, opts) {
+    const results = await this.serial(id, () => this.get(id).saveItems(items, opts));
+    this.onChange();
+    return results;
   }
 
   async deleteItem(id, itemId, actor) {

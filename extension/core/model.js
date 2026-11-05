@@ -166,8 +166,11 @@ export function normalizeFolder(path) {
 // At most three folder levels ("Kunden/Contoso/VPN") – deeper structures get confusing.
 export const MAX_FOLDER_DEPTH = 3;
 export const folderDepth = (path) => (normalizeFolder(path) ? normalizeFolder(path).split('/').length : 0);
-/** Imports: deeper paths are cut to the allowed depth ("A/B/C/D" → "A/B/C"). */
-export const limitFolderDepth = (path) => normalizeFolder(path).split('/').filter(Boolean).slice(0, MAX_FOLDER_DEPTH).join('/');
+/** Imports: deeper levels go into the name of the last allowed one ("A/B/C/D" → "A/B/C – D", #327) – nothing merges. */
+export const limitFolderDepth = (path) => {
+  const parts = normalizeFolder(path).split('/').filter(Boolean);
+  return parts.length <= MAX_FOLDER_DEPTH ? parts.join('/') : [...parts.slice(0, MAX_FOLDER_DEPTH - 1), parts.slice(MAX_FOLDER_DEPTH - 1).join(' – ')].join('/');
+};
 
 export class FolderTooDeepError extends Error {
   constructor(path) {

@@ -158,7 +158,7 @@ export class McpService {
   constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }), trusted = () => false, trust = () => {}, waitUnlock = async () => false,
     features = () => ({}), confirmPasskey = async () => false, chooseMicrosoft = async () => null }) {
     // features(): { passkeys, microsoft } – both off unless turned on in the settings (#308, #315).
-    // confirmPasskey({ agent, title, vault, rpId, origin }) → boolean, asked for every single use.
+    // confirmPasskey({ agent, title, username, vault, rpId, origin }) → boolean, asked for every single use.
     // chooseMicrosoft({ agent, purpose, accounts: [{ key, title, username, vault }] }) → key of the chosen account or null.
     Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy, trusted, trust, waitUnlock, features, confirmPasskey, chooseMicrosoft });
     this.clients = new Set();
@@ -346,7 +346,8 @@ export class McpService {
         const challenge = String(a.challenge || '');
         // Microsoft sends a signed token as challenge (about 1,300 characters, #321) – 4096 leaves room, still bounded.
         if (!/^[A-Za-z0-9_-]{22,4096}={0,2}$/.test(challenge)) throw fail(t('Ungültige Challenge (base64url, mindestens 16 Byte)'));
-        const ok = await this.confirmPasskey({ agent: client.agent, title: item.title, vault: c.name, rpId: passkey.rpId, origin: origin.origin });
+        // The account the sign-in is for (#331): the passkey's own user name, else the entry's.
+        const ok = await this.confirmPasskey({ agent: client.agent, title: item.title, username: passkey.userName || item.username || '', vault: c.name, rpId: passkey.rpId, origin: origin.origin });
         if (!ok) throw fail(t('Vom Benutzer abgelehnt'));
         const { response, signCount } = await getAssertion({ origin: origin.origin, rpId: passkey.rpId, challenge, passkey });
         // A counting passkey keeps counting (synced ones stay at 0).

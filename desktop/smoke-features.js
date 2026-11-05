@@ -701,6 +701,14 @@ export async function featureChecks(ctx) {
       if ((await Promise.race([asked, sleep(3000).then(() => 'timeout')])) !== 'deny') fail('agentfront', 'deny did not answer the request');
       await sleep(200);
       if (win.isAlwaysOnTop()) fail('agentfront', 'window stays on top after the answer');
+      // #331: a passkey sign-in names the account it signs in with.
+      const pk = ctx.confirmAgentPasskey({ agent: 'smoke-agent', title: 'Microsoft', username: 'smoke.user@contoso.com', vault: 'Smoke', rpId: 'login.microsoft.com', origin: 'https://login.microsoft.com' });
+      await sleep(600);
+      const user = await js('document.querySelector("dialog[open] .question.agent-passkey .q-target-user")?.textContent || ""');
+      if (user !== 'smoke.user@contoso.com') fail('agentfront', `passkey request without the user name: "${user}"`);
+      await js('[...document.querySelectorAll("dialog[open] button")].find((b) => b.closest("dialog").querySelector(".question") && /Ablehnen|Deny/.test(b.textContent))?.click()');
+      if ((await Promise.race([pk, sleep(3000).then(() => 'timeout')])) !== false) fail('agentfront', 'deny did not answer the passkey request');
+      await sleep(200);
       win.hide();
       let open = false;
       const waiting = ctx.waitForUnlock({ ms: 4000, isOpen: () => open });
@@ -1162,6 +1170,18 @@ export async function featureChecks(ctx) {
       if (job?.username !== 'admin@contoso.local') fail('bastionfqdn', `Bastion gets "${job?.username}" instead of admin@contoso.local`);
       // The extension fills the form and presses "Connect" for this job (#31).
       if (job?.mode !== 'bastion') fail('bastionfqdn', `Bastion job without connecting (mode ${job?.mode})`);
+      ctx.clearSignIns();
+      // #328: a link into another vault whose entry is here as well (restored, copied) is repaired on connecting; one
+      // that is not here names the field and how to fix it. Saved past the app's check on purpose (old data).
+      const foreign = await vault.saveItem(kvc.id, { type: 'server', title: 'Smoke BASTION fremd', server: { kind: 'azurevm', bastionUrl: 'https://portal.azure.com/#@contoso.com/x', bastionVmLink: `kv-other.vault.azure.net/${adLogin.id}` } });
+      created.push(foreign.id);
+      const ok = await api.connectServer({ containerId: kvc.id, id: foreign.id, method: 'bastion' }).catch((e) => ({ error: e.message }));
+      if (ok.error) fail('bastionlinks', `link to the same entry elsewhere not repaired: ${ok.error}`);
+      if ((await vault.getItem(kvc.id, foreign.id, { fresh: true })).server.bastionVmLink !== `${kvc.id}/${adLogin.id}`) fail('bastionlinks', 'repaired link not saved');
+      const lost = await vault.saveItem(kvc.id, { type: 'server', title: 'Smoke BASTION weg', server: { kind: 'azurevm', bastionUrl: 'https://portal.azure.com/#@contoso.com/x', bastionVmLink: 'kv-other.vault.azure.net/pws-nichtda' } });
+      created.push(lost.id);
+      const err = await api.connectServer({ containerId: kvc.id, id: lost.id, method: 'bastion' }).then(() => '', (e) => e.message);
+      if (!/Konto auf dem Server \(Bastion\)|Account on the server \(Bastion\)/.test(err) || !/neu auswählen|choose .* again/.test(err)) fail('bastionlinks', `unclear error: ${err}`);
       ctx.clearSignIns();
     });
 
