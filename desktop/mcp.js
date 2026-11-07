@@ -14,6 +14,7 @@ import { generatePassword } from '../extension/core/generator.js';
 import { getAssertion } from '../extension/core/webauthn.js';
 import { totpCode } from '../extension/core/totp.js';
 import { normalizeItem, normalizeFolder } from '../extension/core/model.js';
+import { normalizeUrl } from '../extension/core/match.js';
 import { t } from '../extension/core/i18n.js';
 
 export const SESSION_MS = 8 * 60 * 60_000;
@@ -134,6 +135,51 @@ export const MCP_TOOLS = [
 
 const fail = (message) => Object.assign(new Error(message), { name: 'McpError' });
 
+// #370: what an agent sends is shown in the confirmation. Invisible and direction characters could make a value look
+// like another one, and very long values could push the buttons away.
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+const SHOWN_LENGTH = 200;
+const shown = (value) => {
+  const text = String(value ?? '').replace(INVISIBLE, '�');
+  return text.length > SHOWN_LENGTH ? `${text.slice(0, SHOWN_LENGTH)}…` : text;
+};
+const fieldValue = (item, field) => (field === 'url' ? (item?.urls || []).join(', ') : item?.[field] ?? '');
+
+const MAX_HOST_LENGTH = 253; // longest name DNS allows
+
+/**
+ * #370: the host an address really leads to, as the browser parses it: never cut, non-ASCII names as punycode (xn--…).
+ * Refused: user data (https://name@other-host/ reads like "name", a long one pushes the host out of the display), and
+ * anything without a host the user could check.
+ */
+function urlTarget(value) {
+  let url;
+  try {
+    url = new URL(normalizeUrl(value));
+  } catch {
+    throw fail(t('Diese Adresse ist ungültig.'));
+  }
+  if (url.username || url.password) throw fail(t('Adressen mit Benutzerdaten (name@…) sind nicht erlaubt.'));
+  if (!url.hostname || url.hostname.length > MAX_HOST_LENGTH) throw fail(t('Diese Adresse ist ungültig.'));
+  return url.hostname;
+}
+
+/** The values the user decides on: old and new for a change, the new ones for a new entry (its title is the headline). */
+function visibleChanges(before, patch) {
+  const changes = [];
+  for (const field of ['title', 'username', 'url', 'folder']) {
+    if (!((field === 'url' ? 'urls' : field) in patch)) continue;
+    const to = fieldValue(patch, field);
+    const host = field === 'url' && to ? { host: urlTarget(to) } : {};
+    if (!before) {
+      if (field !== 'title' && to) changes.push({ field, to: shown(to), ...host });
+    } else if (fieldValue(before, field) !== to) {
+      changes.push({ field, from: shown(fieldValue(before, field)), to: shown(to), ...host });
+    }
+  }
+  return changes;
+}
+
 /**
  * scope: { all: true } or { all: false, scopes: [{ vaultId, folder }] } – folder '' = whole vault, otherwise the
  * folder with its subfolders.
@@ -154,13 +200,15 @@ export class McpService {
    * trusted(agent, vaultId, entryId) → boolean, trust({ agent, vaultId, entryId, title }): entries the user released
    * for an agent with "never ask again" (stored by the app, revoked from the entry's context menu).
    * waitUnlock() → boolean: the app is locked – it comes to the front with its unlock screen; true once unlocked.
+   * admitted(agent) → boolean: checked on every call (#369), so revoking reaches agents that are already connected.
+   * policy(agent) → { write }: an agent writes only with write === true.
    */
-  constructor({ vault, confirmRead, confirmWrite, audit, scope = () => ({ all: true }), policy = () => ({ write: true }), trusted = () => false, trust = () => {}, waitUnlock = async () => false,
+  constructor({ vault, confirmRead, confirmWrite, audit, admitted = () => false, scope = () => ({ all: true }), policy = () => ({ write: false }), trusted = () => false, trust = () => {}, waitUnlock = async () => false,
     features = () => ({}), confirmPasskey = async () => false, chooseMicrosoft = async () => null }) {
     // features(): { passkeys, microsoft } – both off unless turned on in the settings (#308, #315).
     // confirmPasskey({ agent, title, username, vault, rpId, origin }) → boolean, asked for every single use.
     // chooseMicrosoft({ agent, purpose, accounts: [{ key, title, username, vault }] }) → key of the chosen account or null.
-    Object.assign(this, { vault, confirmRead, confirmWrite, audit, scope, policy, trusted, trust, waitUnlock, features, confirmPasskey, chooseMicrosoft });
+    Object.assign(this, { vault, confirmRead, confirmWrite, audit, admitted, scope, policy, trusted, trust, waitUnlock, features, confirmPasskey, chooseMicrosoft });
     this.clients = new Set();
     this.grants = new WeakMap();
     // Timed grants by agent name ("for 1 hour"): survive a restart of the agent process, end when the app locks.
@@ -228,6 +276,7 @@ export class McpService {
   async call(client, tool, args = {}) {
     const entry = { agent: client.agent, tool, vault: args.vaultId || '', entry: args.entryId || args.title || '' };
     try {
+      if (!this.admitted(client.agent)) throw fail(t('Dieser Agent ist nicht mehr zugelassen. Starte ihn neu und erlaube ihn in Keevault.'));
       const result = await this.run(client, tool, args || {});
       this.audit?.({ ...entry, result: 'ok' });
       return result;
@@ -297,7 +346,8 @@ export class McpService {
 
       case 'create_entry':
       case 'update_entry': {
-        if (this.policy(client.agent)?.write === false) throw fail(t('Dieser Agent darf nur lesen (Einstellungen → KI-Agenten).'));
+        if (this.policy(client.agent)?.write !== true) throw fail(t('Dieser Agent darf nur lesen (Einstellungen → KI-Agenten).'));
+        if (typeof a.url === 'string' && a.url.trim()) urlTarget(a.url);
         const c = await this.container(a.vaultId);
         if (c.access?.write === false) throw fail(t('Kein Schreibrecht in diesem Tresor'));
         const v = await this.session();
@@ -317,8 +367,10 @@ export class McpService {
         const changed = Object.keys(patch).map((k) => (k === 'urls' ? 'url' : k));
         if (before && !changed.length) throw fail(t('Keine Änderung angegeben'));
         const ok = await this.confirmWrite({
-          agent: client.agent, action: before ? 'update' : 'create', title: patch.title || before?.title || '', vault: c.name,
+          // #370: a change names the entry as it is now, the new title is one of the changes.
+          agent: client.agent, action: before ? 'update' : 'create', title: shown(before?.title || patch.title || ''), vault: c.name,
           fields: changed.map((k) => (k === 'password' && a.generatePassword ? 'password (neu erzeugt)' : k)),
+          changes: visibleChanges(before, patch),
         });
         if (!ok) throw fail(t('Vom Benutzer abgelehnt'));
         const item = normalizeItem({ ...(before || { type: 'login' }), ...patch });

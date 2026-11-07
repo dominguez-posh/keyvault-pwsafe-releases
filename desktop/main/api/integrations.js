@@ -54,7 +54,7 @@ export const integrationsApi = {
     return true;
   },
   mcpAgentRule: (agent, { write, days }) => {
-    const current = config.get().agentRules?.[agent] || { write: true, until: null };
+    const current = config.get().agentRules?.[agent] || { write: false, until: null };
     const rule = {
       write: typeof write === 'boolean' ? write : current.write,
       until: days === undefined ? current.until : (Number(days) > 0 ? new Date(Date.now() + Number(days) * 86_400_000).toISOString() : null),

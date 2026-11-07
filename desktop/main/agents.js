@@ -20,24 +20,30 @@ export function trustAgentEntry({ agent, vaultId, entryId, title }) {
   send({ type: 'mcpTrusted' });
 }
 
+/** #369: is this agent allowed right now? Asked on every call, a running agent loses access with its approval. */
+export function agentAdmitted(agent) {
+  const s = config.get();
+  if (!s.mcpEnabled || !s.approvedAgents.includes(agent)) return false;
+  const until = s.agentRules?.[agent]?.until;
+  return !until || Date.parse(until) > Date.now();
+}
+
 /** Each agent (MCP client name) is allowed once; off unless switched on (or forbidden by policy). */
 export async function approveAgent(agent) {
   const s = config.get();
   if (!s.mcpEnabled || demo) return false;
-  if (s.approvedAgents.includes(agent)) {
-    const until = s.agentRules?.[agent]?.until;
-    if (!until || Date.parse(until) > Date.now()) return true;
-    // The approval ran out: ask again.
-    config.update({ approvedAgents: s.approvedAgents.filter((x) => x !== agent) });
-  }
+  if (agentAdmitted(agent)) return true;
+  // The approval ran out: ask again.
+  if (s.approvedAgents.includes(agent)) config.update({ approvedAgents: s.approvedAgents.filter((x) => x !== agent) });
   const answer = await askInApp({
     kind: 'agent-connect',
     agent,
     title: t('„{agent}“ möchte sich verbinden', { agent }),
     lead: t('Ein KI-Agent möchte Keevault nutzen. Erlaube das nur für Agenten, die du selbst eingerichtet hast.'),
     choices: [
-      { value: 'write', label: t('Lesen und Schreiben'), hint: t('Suchen, Passwörter mit deiner Freigabe lesen, Einträge mit Bestätigung anlegen und ändern.') },
+      // #369: the first choice is preselected, so read-only comes first.
       { value: 'read', label: t('Nur lesen'), hint: t('Suchen und Passwörter mit deiner Freigabe lesen – keine Änderungen.') },
+      { value: 'write', label: t('Lesen und Schreiben'), hint: t('Suchen, Passwörter mit deiner Freigabe lesen, Einträge mit Bestätigung anlegen und ändern.') },
     ],
     note: t('Löschen ist nie möglich. Rechte und Gültigkeit änderst du jederzeit in den Einstellungen.'),
     allow: t('Verbinden'),
@@ -112,7 +118,7 @@ export async function chooseAgentMicrosoft({ agent, purpose, accounts }) {
   return accounts.some((a) => a.key === answer) ? answer : null;
 }
 
-export async function confirmAgentWrite({ agent, action, title, vault: vaultName, fields }) {
+export async function confirmAgentWrite({ agent, action, title, vault: vaultName, fields, changes }) {
   return (await askInApp({
     kind: 'agent-write',
     agent,
@@ -120,6 +126,7 @@ export async function confirmAgentWrite({ agent, action, title, vault: vaultName
     entry: title,
     vault: vaultName,
     fields,
+    changes,
     allow: action === 'create' ? t('Anlegen') : t('Ändern'),
     cancel: 'deny',
   })) === 'allow';
@@ -129,6 +136,19 @@ export async function confirmAgentWrite({ agent, action, title, vault: vaultName
 export const questions = new Map(); // id → resolve
 let questionSeq = 0;
 
+/** The native dialog can't delay its buttons (#368): "Deny" is its default, so Enter right after it opens refuses. */
+export function nativeQuestion(spec) {
+  const options = spec.choices ? spec.choices.map((c) => ({ value: c.value, label: c.label })) : [{ value: 'allow', label: spec.allow }];
+  return {
+    options,
+    box: {
+      type: 'question', buttons: [...options.map((o) => o.label), t('Ablehnen')], defaultId: options.length, cancelId: options.length, noLink: true,
+      message: spec.title, detail: [spec.lead, spec.entry && [spec.entry, spec.username, spec.vault].filter(Boolean).join(' · '), spec.fields?.join(', '),
+        spec.changes?.map((c) => `${c.field}: ${c.from === undefined ? '' : `${c.from || t('(leer)')} → `}${c.to || t('(leer)')}${c.host ? `\n${t('Ziel: {host}', { host: c.host })}` : ''}`).join('\n'), spec.note].filter(Boolean).join('\n\n'),
+    },
+  };
+}
+
 /**
  * spec: { kind, agent, title, lead?, entry?, vault?, fields?, choices?: [{ value, label, hint }], note?, allow, cancel }
  * → the chosen choice (or 'allow' without choices), or `cancel`. The window comes to the front and stays on top
@@ -137,11 +157,8 @@ let questionSeq = 0;
 export async function askInApp(spec) {
   showWindow();
   if (!win || win.webContents.isLoading()) {
-    const options = spec.choices ? spec.choices.map((c) => ({ value: c.value, label: c.label })) : [{ value: 'allow', label: spec.allow }];
-    const r = await dialog.showMessageBox(win || null, {
-      type: 'question', buttons: [...options.map((o) => o.label), t('Ablehnen')], cancelId: options.length, noLink: true,
-      message: spec.title, detail: [spec.lead, spec.entry && [spec.entry, spec.username, spec.vault].filter(Boolean).join(' · '), spec.fields?.join(', '), spec.note].filter(Boolean).join('\n\n'),
-    });
+    const { options, box } = nativeQuestion(spec);
+    const r = await dialog.showMessageBox(win || null, box);
     return options[r.response]?.value ?? spec.cancel;
   }
   const id = ++questionSeq;

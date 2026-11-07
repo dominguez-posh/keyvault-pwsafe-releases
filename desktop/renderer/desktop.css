@@ -142,6 +142,9 @@ body { overflow: hidden; }
 .question-modal .modal-body { padding: 0; max-height: none; }
 .question-modal .modal-footer:empty { display: none; }
 .question { --q: var(--accent); }
+.question:focus { outline: none; }
+.question .btn.primary[aria-disabled="true"] { opacity: .55; cursor: default; }
+.question .btn.primary[aria-disabled="true"]:hover { background: var(--accent); }
 .question.agent-read { --q: var(--passkey); }
 .question.agent-write { --q: #c27c0e; }
 .q-hero { display: flex; gap: 14px; align-items: center; padding: 22px 22px 16px;
@@ -160,6 +163,13 @@ body { overflow: hidden; }
 .q-target-user { display: flex; align-items: center; gap: 5px; font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
 .q-fields { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; }
 .q-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); }
+.q-changes { flex-basis: 100%; min-width: 0; display: grid; gap: 6px; font-size: 13px; }
+.q-change { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; }
+.q-change-field { color: var(--muted); }
+.q-change-values { overflow-wrap: anywhere; }
+.q-change-old { text-decoration: line-through; color: var(--muted); }
+.q-change-new { font-weight: 600; }
+.q-change-host { display: block; margin-top: 2px; font-weight: 600; color: var(--q); }
 .q-options { display: grid; gap: 8px; margin-top: 16px; }
 /* #339: search and vault filter above the account choice; the list scrolls instead of growing the dialog. */
 .q-filter { display: flex; gap: 8px; margin-top: 16px; }

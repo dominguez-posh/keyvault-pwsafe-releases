@@ -21,7 +21,7 @@ import {
   windows,
 } from './main/state.js';
 import {
-  auditAgent, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, mcpTrusted, trustAgentEntry, waitForUnlock,
+  agentAdmitted, auditAgent, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, mcpTrusted, trustAgentEntry, waitForUnlock,
 } from './main/agents.js';
 import { applyBrowserIntegration } from './main/browser.js';
 import { excludeFromErrorReporting } from './main/clipboard.js';
@@ -151,7 +151,8 @@ app.whenReady().then(async () => {
     vault: () => (opened ? vault : null),
     confirmRead: confirmAgentRead,
     confirmWrite: confirmAgentWrite,
-    policy: (agent) => config.get().agentRules?.[agent] || { write: true },
+    admitted: agentAdmitted,
+    policy: (agent) => config.get().agentRules?.[agent] || { write: false },
     trusted: (agent, vaultId, entryId) => mcpTrusted().some((x) => x.agent === agent && x.vaultId === vaultId && x.entryId === entryId),
     trust: trustAgentEntry,
     waitUnlock: () => waitForUnlock(),

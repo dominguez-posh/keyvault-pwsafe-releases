@@ -107,9 +107,9 @@ export function settingsDialog() {
         h('div', { class: 'field' }, h('label', {}, t('Erlaubte Agenten')),
           info.agents.length ? h('div', {}, ...info.agents.map((a) => {
             const session = info.sessions.find((x) => x.agent === a);
-            const rule = info.rules?.[a] || { write: true, until: null };
+            const rule = info.rules?.[a] || { write: false, until: null };
             const writeSel = h('select', { onchange: async () => { await call('mcpAgentRule', a, { write: writeSel.value === 'rw' }); toast(t('Gespeichert')); } },
-              h('option', { value: 'rw', selected: rule.write !== false }, t('Lesen und Schreiben')), h('option', { value: 'ro', selected: rule.write === false }, t('Nur lesen')));
+              h('option', { value: 'rw', selected: rule.write === true }, t('Lesen und Schreiben')), h('option', { value: 'ro', selected: rule.write !== true }, t('Nur lesen')));
             const untilSel = h('select', { onchange: async () => { await call('mcpAgentRule', a, { days: Number(untilSel.value) }); toast(t('Gespeichert')); } },
               h('option', { value: '0', selected: !rule.until }, t('unbegrenzt')), ...[1, 7, 30, 90].map((d) => h('option', { value: String(d) }, t('{n} Tage', { n: d }))));
             return h('div', { class: 'inline' }, h('span', {}, a), writeSel, untilSel,

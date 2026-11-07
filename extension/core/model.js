@@ -313,9 +313,10 @@ export const cardLast4 = (number) => {
   return digits.length >= 4 ? `•••• ${digits.slice(-4)}` : '';
 };
 
+export const itemUrls = (item) => [...(item.urls || []), ...((item.portals || []).map((p) => p.url))];
+
 export function itemHosts(item) {
-  const urls = [...(item.urls || []), ...((item.portals || []).map((p) => p.url))];
-  return [...new Set(urls.map(hostFromUrl).filter(Boolean))];
+  return [...new Set(itemUrls(item).map(hostFromUrl).filter(Boolean))];
 }
 
 export function itemRpIds(item) {

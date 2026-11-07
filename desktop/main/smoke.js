@@ -7,9 +7,9 @@ import { hashPin } from '../pin.js';
 import { featureChecks } from '../smoke-features.js';
 import { t } from '../../extension/core/i18n.js';
 import { appRoot, demo, missingFiles, screenshot } from './boot.js';
-import { config, files, opened, updater, vault, win, windows } from './state.js';
+import { config, files, mcp, opened, updater, vault, win, windows } from './state.js';
 import { hintContent, hintsShown } from './hint-window.js';
-import { askInApp, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, trustAgentEntry, waitForUnlock } from './agents.js';
+import { askInApp, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, nativeQuestion, trustAgentEntry, waitForUnlock } from './agents.js';
 import { api } from './api/index.js';
 import { browserHandlers } from './browser.js';
 import { copyViaHelperExe } from './clipboard.js';
@@ -823,6 +823,9 @@ export function runSmokeTest() {
           lastAdminUrl: () => lastAdminUrl,
           confirmAgentRead,
           confirmAgentPasskey,
+          confirmAgentWrite,
+          nativeQuestion,
+          mcpService: mcp,
           chooseAgentMicrosoft,
           hintsShown,
           hintContent,

@@ -31,7 +31,7 @@ function service({ read = 'session', write = true, locked = false } = {}) {
   const v = fakeVault();
   const asked = { read: 0, write: [] };
   const audit = [];
-  const mcp = new McpService({
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }),
     vault: () => (locked ? null : v),
     confirmRead: async () => { asked.read++; return read; },
     confirmWrite: async (x) => { asked.write.push(x); return write; },
@@ -88,7 +88,7 @@ test('mcp: "never ask again" holds for this agent and this entry only, survives 
   let answer = 'always';
   let asked = 0;
   let store = [];
-  const mcp = new McpService({
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }),
     vault: () => v,
     confirmRead: async () => { asked++; return answer; },
     confirmWrite: async () => true,
@@ -137,6 +137,91 @@ test('mcp: create/update with confirmation; generated password is stored, not re
   assert.equal(denied.v.saved.length, 0);
 });
 
+test('mcp: #370 the write confirmation names the current entry and shows old and new values', async () => {
+  const { mcp, client, asked } = service();
+  await mcp.call(client, 'update_entry', { vaultId: 'kv-team', entryId: 'pws-1', title: 'Harmlos', url: 'https://evil.example/', username: 'admin@contoso.com', folder: 'Neu', password: 'geheim-neu' });
+  const ask = asked.write[0];
+  assert.equal(ask.title, 'Azure Admin');
+  assert.deepEqual(ask.changes, [
+    { field: 'title', from: 'Azure Admin', to: 'Harmlos' },
+    { field: 'url', from: 'https://portal.azure.com/', to: 'https://evil.example/', host: 'evil.example' },
+    { field: 'folder', from: 'Cloud', to: 'Neu' },
+  ]);
+  assert.ok(!JSON.stringify(ask).includes('geheim-neu'), 'no password value in the question');
+  assert.ok(!JSON.stringify(ask).includes('S3cret!'), 'no old password in the question');
+
+  // New entry: the new values only. Invisible characters are replaced, long values cut.
+  const { mcp: m2, client: c2, asked: a2 } = service();
+  await m2.call(c2, 'create_entry', { vaultId: 'kv-team', title: 'Neu', username: `a${String.fromCodePoint(0x202e)}b`, url: `https://x.example/${'y'.repeat(300)}` });
+  assert.equal(a2.write[0].title, 'Neu');
+  assert.deepEqual(a2.write[0].changes.map((c) => c.field), ['username', 'url']);
+  assert.equal(a2.write[0].changes[0].to, 'a�b');
+  assert.ok(!('from' in a2.write[0].changes[0]));
+  assert.ok(a2.write[0].changes[1].to.length <= 201);
+  assert.equal(a2.write[0].changes[1].host, 'x.example');
+});
+
+test('mcp: #370 addresses with user data are refused, the real host is shown uncut and as punycode', async () => {
+  const refused = [
+    'https://portal.azure.com@evil.example/',
+    'https://user:pw@evil.example/',
+    'portal.azure.com@evil.example',
+    `https://${'portal.azure.com.'.repeat(30)}@evil.example/`,
+  ];
+  for (const url of refused) {
+    for (const [tool, args] of [['create_entry', { title: 'x' }], ['update_entry', { entryId: 'pws-1' }]]) {
+      const { mcp, client, v, asked } = service();
+      await assert.rejects(mcp.call(client, tool, { vaultId: 'kv-team', ...args, url }), /Benutzerdaten/, `${tool} ${url}`);
+      assert.equal(asked.write.length, 0, 'nothing is asked');
+      assert.equal(v.saved.length, 0, 'nothing is stored');
+    }
+  }
+  for (const url of ['https://', 'https://exa mple.com/', 'file:///c:/x', `https://${'a.'.repeat(130)}example/`]) {
+    const { mcp, client, asked } = service();
+    await assert.rejects(mcp.call(client, 'create_entry', { vaultId: 'kv-team', title: 'x', url }), /ungültig/, url);
+    assert.equal(asked.write.length, 0);
+  }
+
+  const { mcp, client, asked } = service();
+  const longPath = `https://bänk.example/${'p'.repeat(300)}`;
+  await mcp.call(client, 'create_entry', { vaultId: 'kv-team', title: 'x', url: longPath });
+  const row = asked.write[0].changes.find((c) => c.field === 'url');
+  assert.match(row.host, /^xn--.+\.example$/);
+  assert.ok(row.to.endsWith('…'), 'the address itself is cut, the host is not');
+
+  // Removing the address stays possible and has no host.
+  const cleared = service();
+  await cleared.mcp.call(cleared.client, 'update_entry', { vaultId: 'kv-team', entryId: 'pws-1', url: '' });
+  assert.deepEqual(cleared.asked.write[0].changes, [{ field: 'url', from: 'https://portal.azure.com/', to: '' }]);
+});
+
+test('mcp: #369 admission is checked on every call, a running agent is refused once revoked', async () => {
+  const v = fakeVault();
+  let admitted = true;
+  const audit = [];
+  const options = { vault: () => v, confirmRead: async () => 'once', confirmWrite: async () => true, audit: (e) => audit.push(e), admitted: (agent) => admitted && agent === 'claude-ai' };
+  const mcp = new McpService(options);
+  const client = { agent: 'claude-ai' };
+  mcp.connect(client);
+  assert.equal((await mcp.call(client, 'search_entries', { query: 'azure' })).total, 1);
+  admitted = false;
+  await assert.rejects(mcp.call(client, 'search_entries', { query: 'azure' }), /nicht mehr zugelassen/);
+  await assert.rejects(mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' }), /nicht mehr zugelassen/);
+  assert.match(audit.at(-1).result, /nicht mehr zugelassen/);
+});
+
+test('mcp: #369 safe defaults: without admission no call, without a rule no writing', async () => {
+  const v = fakeVault();
+  const options = { vault: () => v, confirmRead: async () => 'once', confirmWrite: async () => true };
+  const closed = new McpService(options);
+  await assert.rejects(closed.call({ agent: 'x' }, 'list_vaults'), /nicht mehr zugelassen/);
+  const noRule = new McpService({ ...options, admitted: () => true });
+  await assert.rejects(noRule.call({ agent: 'x' }, 'create_entry', { vaultId: 'kv-team', title: 'y' }), /nur lesen/);
+  const emptyRule = new McpService({ ...options, admitted: () => true, policy: () => ({}) });
+  await assert.rejects(emptyRule.call({ agent: 'x' }, 'create_entry', { vaultId: 'kv-team', title: 'y' }), /nur lesen/);
+  assert.equal(v.saved.length, 0);
+});
+
 test('mcp: scope – only released vaults and folders (with subfolders)', async () => {
   const v = fakeVault();
   // Second vault and a nested folder.
@@ -144,7 +229,7 @@ test('mcp: scope – only released vaults and folders (with subfolders)', async 
   v.containers = async () => [...(await containers()), { id: 'kv-private', name: 'Privat', kind: 'keyvault', access: { write: true } }];
   let scope = { all: false, scopes: [] };
   const asked = [];
-  const mcp = new McpService({ vault: () => v, confirmRead: async () => 'once', confirmWrite: async (x) => { asked.push(x); return true; }, scope: () => scope });
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }), vault: () => v, confirmRead: async () => 'once', confirmWrite: async (x) => { asked.push(x); return true; }, scope: () => scope });
   const client = { agent: 'claude-ai' };
   mcp.connect(client);
 
@@ -184,7 +269,7 @@ test('mcp: locked app – the request waits for the unlock (app comes to the fro
   const v = fakeVault();
   let locked = true;
   let waited = 0;
-  const mcp = new McpService({
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }),
     vault: () => (locked ? null : v),
     confirmRead: async () => 'once',
     confirmWrite: async () => true,
@@ -282,7 +367,7 @@ test('mcp: passkey sign-in for an agent – off by default, own site only, every
   const features = { passkeys: false };
   const asked = [];
   let answer = true;
-  const mcp = new McpService({ vault: () => v, confirmRead: async () => 'deny', confirmWrite: async () => false, audit: () => {}, features: () => features,
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }), vault: () => v, confirmRead: async () => 'deny', confirmWrite: async () => false, audit: () => {}, features: () => features,
     confirmPasskey: async (x) => { asked.push(x); return answer; } });
   const client = { agent: 'claude-code' };
   mcp.connect(client);
@@ -327,7 +412,7 @@ test('mcp: Microsoft sign-in for a tool – off by default, the user picks the a
   const features = { microsoft: false };
   let offered = null;
   let pick = 'kv/ms-2';
-  const mcp = new McpService({ vault: () => v, confirmRead: async () => 'deny', confirmWrite: async () => false, audit: () => {}, features: () => features,
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }), vault: () => v, confirmRead: async () => 'deny', confirmWrite: async () => false, audit: () => {}, features: () => features,
     chooseMicrosoft: async (x) => { offered = x; return pick; } });
   const client = { agent: 'report-tool' };
   mcp.connect(client);
