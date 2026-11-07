@@ -131,6 +131,37 @@ function parseCode(code) {
 
 // ---------------------------------------------------------------- keyring
 
+/**
+ * The real key change (#402) is built and tested, but switched off in this version (Lucas, 2026-11-07): a new master
+ * password or recovery key only wraps the same key again, as before. THE ONE PLACE to switch it on is `enabled` here.
+ * Everything that only RECOGNISES a changed state (key generation, check, merge, locking of stale keys) is always on, so
+ * that devices on this version are ready when it is switched on later.
+ */
+export const KEY_CHANGE = { enabled: false };
+
+/**
+ * Key generation of a keyring: starts at 1, every real key change raises it. The highest generation of the entries
+ * counts as well: an app from before the key change resets the keyring's own number when it merges, the entries stay.
+ */
+export const keyVersionOf = (keyring) => Math.max(keyring?.keyVersion || 1, ...(keyring?.entries || []).map((e) => e.kv || 1));
+const checkAad = (scope, version) => `kvpwsafe/keyring-check/${scope}/${version}`;
+const checkFor = async (scope, version, ck) => seal(ck.raw, utf8('ok'), checkAad(scope, version));
+
+/** Does this key belong to the current generation of the keyring? (keyrings from before the check always pass) */
+export async function keyMatches(keyring, ck) {
+  const version = keyVersionOf(keyring);
+  if (ck.kv != null && ck.kv !== version) return false;
+  // The keyring's own check belongs to its own number; after a reset by an old app the entries of the generation carry it.
+  const check = (keyring.keyVersion || 1) === version ? keyring.check : keyring.entries.find((e) => (e.kv || 1) === version && e.check)?.check;
+  if (!check) return true;
+  try {
+    await unseal(ck.raw, check, checkAad(keyring.scope, version));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const entryAad = (keyring, entry) => `kvpwsafe/keyring/${keyring.scope}/${entry.id}/${entry.type}`;
 const now = () => new Date().toISOString();
 const newId = () => b64uEncode(randomBytes(9));
@@ -138,22 +169,29 @@ const newId = () => b64uEncode(randomBytes(9));
 /** New keyring for a container (scope = container ID) plus its fresh container key. */
 export async function createKeyring(scope, actor = '') {
   const ck = await ContainerKey.generate();
-  return { keyring: { v: 1, id: crypto.randomUUID(), scope, created: now(), createdBy: actor, entries: [], removed: [] }, ck };
+  const keyring = { v: 1, id: crypto.randomUUID(), scope, created: now(), createdBy: actor, keyVersion: 1, entries: [], removed: [] };
+  keyring.check = await checkFor(scope, 1, ck);
+  return { keyring, ck };
 }
 
 async function addEntry(keyring, ck, entry, kek, replaceType) {
-  const e = { id: newId(), created: now(), ...entry };
+  const e = { id: newId(), created: now(), kv: keyVersionOf(keyring), ...entry };
   e.wrapped = await seal(kek, ck.raw, entryAad(keyring, e));
   const kept = keyring.entries.filter((x) => !(replaceType && x.type === replaceType));
   const removed = keyring.entries.filter((x) => !kept.includes(x)).map((x) => x.id);
   return { ...keyring, entries: [...kept, e], removed: [...new Set([...(keyring.removed || []), ...removed])], updated: now() };
 }
 
-export async function setPassword(keyring, ck, password, actor = '') {
+/**
+ * New master password: replaces every password entry, so that an old (maybe leaked) one stops working whoever set it.
+ * add: only when an invited person sets their own (#441) – the passwords of the others stay.
+ */
+export async function setPassword(keyring, ck, password, actor = '', { add = false } = {}) {
+  if (KEY_CHANGE.enabled && keyring.pwRetired) throw new Error(t('Nach dem Entfernen des Masterpassworts gibt es ein neues nur mit dem Schlüsselwechsel'));
   if (String(password).length < 8) throw new Error(t('Das Masterpasswort muss mindestens 8 Zeichen lang sein'));
   const salt = randomBytes(16);
   const kek = await passwordKey(password, salt);
-  return addEntry(keyring, ck, { type: 'password', salt: b64uEncode(salt), iterations: PBKDF2_ITERATIONS, createdBy: actor }, kek, 'password');
+  return addEntry(keyring, ck, { type: 'password', salt: b64uEncode(salt), iterations: PBKDF2_ITERATIONS, createdBy: actor }, kek, add ? null : 'password');
 }
 
 /** passkey: { credentialId, rpId, prfSalt, prfOutput, label } */
@@ -177,19 +215,80 @@ export async function createInvite(keyring, ck, { label = '', days = 7 } = {}, a
   return { keyring: next, inviteCode: formatCode('IN', secret), expires };
 }
 
+const prevAad = (scope, version) => `kvpwsafe/keyring-prev/${scope}/${version}`;
+
+/**
+ * Real key change (#402): a new container key and a new keyring generation with only the new master password and a
+ * new recovery key. Passkeys, invitations and every older wrapper end here – they cannot be wrapped for the new key
+ * without their secret, and the old recovery key or password must not lead to the current data.
+ * keepPrev: the old key, sealed under the new one, stays in the keyring until the data is re-encrypted (Key Vault: the
+ * change takes many writes and may be resumed). Returns { keyring, ck, recoveryKey, dropped }.
+ */
+export async function rekeyKeyring(keyring, oldCk, { password, keepPrev = false }, actor = '') {
+  if (!KEY_CHANGE.enabled) throw new Error(t('Der Schlüsselwechsel ist in dieser Version noch nicht eingeschaltet'));
+  if (String(password || '').length < 8) throw new Error(t('Das Masterpasswort muss mindestens 8 Zeichen lang sein'));
+  const ck = await ContainerKey.generate();
+  const version = keyVersionOf(keyring) + 1;
+  const dropped = {
+    passkeys: keyring.entries.filter((e) => e.type === 'passkey').length,
+    invites: keyring.entries.filter((e) => e.type === 'invite').length,
+  };
+  const { prev: _prev, pwRetired: _retired, ...rest } = keyring;
+  let next = {
+    ...rest, keyVersion: version, entries: [], updated: now(),
+    removed: [...new Set([...(keyring.removed || []), ...keyring.entries.map((e) => e.id)])],
+    check: await checkFor(keyring.scope, version, ck),
+  };
+  ck.kv = version;
+  if (keepPrev) next.prev = await seal(ck.raw, oldCk.raw, prevAad(keyring.scope, version));
+  next = await setPassword(next, ck, password, actor);
+  const r = await newRecoveryKey(next, ck, actor);
+  // Each entry carries the check of its generation too, so that it survives a reset of the keyring's own fields by an old app.
+  r.keyring.entries = r.keyring.entries.map((e) => ({ ...e, check: next.check }));
+  return { keyring: r.keyring, ck, recoveryKey: r.recoveryKey, dropped };
+}
+
+/** The key of the generation before, from a keyring in the middle of a change (see rekeyKeyring keepPrev), or null. */
+export async function previousKey(keyring, ck) {
+  if (!keyring.prev) return null;
+  try {
+    return await ContainerKey.fromRaw(await unseal(ck.raw, keyring.prev, prevAad(keyring.scope, keyVersionOf(keyring))));
+  } catch {
+    return null;
+  }
+}
+
+/** The same keyring without the old key: the change is finished. */
+export function finishRekey(keyring) {
+  const { prev: _prev, ...rest } = keyring;
+  return { ...rest, updated: now() };
+}
+
+/** What a key change takes away, for the dialog before it: { passkeys: [labels], invites: [labels] }. */
+export function rekeyLoss(keyring) {
+  const labels = (type) => (keyring?.entries || []).filter((e) => e.type === type).map((e) => e.label || e.credentialId || e.id);
+  return { passkeys: labels('passkey'), invites: labels('invite') };
+}
+
 export function removeEntry(keyring, entryId) {
   const entries = keyring.entries.filter((e) => e.id !== entryId);
   if (!entries.some((e) => e.type === 'password' || e.type === 'passkey' || e.type === 'recovery')) {
     throw new Error(t('Mindestens ein Masterpasswort, ein Passkey oder ein Wiederherstellungsschlüssel muss bleiben'));
   }
-  return { ...keyring, entries, removed: [...new Set([...(keyring.removed || []), entryId])], updated: now() };
+  // A retired master password is replaced only by a key change (#402): else the old one stays valid for old file versions.
+  const retired = keyring.entries.find((e) => e.id === entryId)?.type === 'password' || keyring.pwRetired;
+  return { ...keyring, entries, ...(retired ? { pwRetired: true } : {}), removed: [...new Set([...(keyring.removed || []), entryId])], updated: now() };
 }
 
 async function tryEntries(keyring, entries, kekFor) {
-  for (const e of entries) {
+  // Wrappers of an earlier key generation (merged in from an old file version) never open the current one (#402).
+  for (const e of entries.filter((x) => (x.kv || 1) === keyVersionOf(keyring))) {
     try {
       const raw = await unseal(await kekFor(e), e.wrapped, entryAad(keyring, e));
-      return { ck: await ContainerKey.fromRaw(raw), entry: e };
+      const ck = await ContainerKey.fromRaw(raw);
+      if (!(await keyMatches(keyring, ck))) continue;
+      ck.kv = keyVersionOf(keyring);
+      return { ck, entry: e };
     } catch {
       // Wrong secret for this entry.
     }
@@ -233,7 +332,11 @@ export function describeKeyring(keyring, rpId) {
   const entries = keyring?.entries || [];
   return {
     password: entries.some((e) => e.type === 'password'),
+    passwordRetired: !!keyring?.pwRetired,
+    keyChange: KEY_CHANGE.enabled,
     passwordId: entries.find((e) => e.type === 'password')?.id || null,
+    // Every password entry (e.g. one per invited person, #441), so that each one can be removed on its own.
+    passwords: entries.filter((e) => e.type === 'password').map((e) => ({ id: e.id, created: e.created, createdBy: e.createdBy })),
     recovery: entries.some((e) => e.type === 'recovery'),
     passkeys: entries.filter((e) => e.type === 'passkey').map((e) => ({
       id: e.id, label: e.label, rpId: e.rpId, usable: e.rpId === rpId, created: e.created, createdBy: e.createdBy,
@@ -246,19 +349,20 @@ export function describeKeyring(keyring, rpId) {
 
 /**
  * Applies a management operation to a keyring (needs the unlocked container key).
- * op: { type: 'setPassword', password } | { type: 'addPasskey', passkey } | { type: 'removeEntry', entryId }
+ * op: { type: 'setPassword', password, add? } |{ type: 'addPasskey', passkey } | { type: 'removeEntry', entryId }
  *   | { type: 'newRecovery' } | { type: 'createInvite', label, days }
  * Returns { keyring, recoveryKey?, inviteCode?, expires? }.
  */
 export async function applyKeyringOp(keyring, ck, op, actor = '') {
   switch (op.type) {
     case 'setPassword':
-      return { keyring: await setPassword(keyring, ck, op.password, actor) };
+      return { keyring: await setPassword(keyring, ck, op.password, actor, { add: op.add === true }) };
     case 'addPasskey':
       return { keyring: await addPasskey(keyring, ck, op.passkey, actor) };
     case 'removeEntry':
       return { keyring: removeEntry(keyring, op.entryId) };
     case 'newRecovery':
+      if (KEY_CHANGE.enabled) throw new Error(t('Ein neuer Wiederherstellungsschlüssel braucht den Schlüsselwechsel'));
       return newRecoveryKey(keyring, ck, actor);
     case 'createInvite':
       return createInvite(keyring, ck, { label: op.label, days: op.days }, actor);
@@ -289,8 +393,11 @@ export function unlockKeyring(keyring, params) {
 export function mergeKeyrings(a, b) {
   if (!a) return b;
   if (!b) return a;
+  // A newer key generation replaces the older one as a whole: its wrappers never mix with those of the old key (#402).
+  if (keyVersionOf(a) !== keyVersionOf(b)) return keyVersionOf(a) > keyVersionOf(b) ? a : b;
+  const carrier = (a.keyVersion || 1) >= (b.keyVersion || 1) ? a : b; // the one that still has the number and check of the generation
   const removed = new Set([...(a.removed || []), ...(b.removed || [])]);
   const byId = new Map();
   for (const e of [...b.entries, ...a.entries]) if (!removed.has(e.id)) byId.set(e.id, e);
-  return { ...a, entries: [...byId.values()], removed: [...removed] };
+  return { ...a, keyVersion: carrier.keyVersion, check: carrier.check, ...(a.pwRetired || b.pwRetired ? { pwRetired: true } : {}), entries: [...byId.values()], removed: [...removed] };
 }

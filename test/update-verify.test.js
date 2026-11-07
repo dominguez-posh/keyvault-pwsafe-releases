@@ -61,3 +61,72 @@ test('release notes: every version newer than the installed one, per language, a
   assert.deepEqual(releaseNotesSince(notes, '1.2.10', 'en')[0].items, ['New: C']);
   assert.deepEqual(releaseNotesSince('- old style', '1.0.0', 'de'), [{ version: '', date: '', items: ['old style'] }]);
 });
+
+// ---- key list, second signature and hardware key (#378)
+import { readFileSync } from 'node:fs';
+import { UPDATE_KEYS, releaseChallenge, encodeAssertion } from '../desktop/update-verify.js';
+
+const ed = () => {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519');
+  return { privateKey, key: { id: 't', alg: 'ed25519', publicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64') } };
+};
+
+test('key list: any listed key verifies, unknown algorithm and empty entries never do', () => {
+  const a = ed();
+  const b = ed();
+  assert.equal(verifyManifest(YML, signManifest(YML, b.privateKey), [a.key, b.key]), true, 'second key in the list');
+  assert.equal(verifyManifest(YML, signManifest(YML, b.privateKey), [a.key]), false, 'key not in the list');
+  assert.equal(verifyManifest(YML, signManifest(YML, a.privateKey), [{ ...a.key, alg: 'rsa' }]), false, 'unknown algorithm');
+  assert.equal(verifyManifest(YML, signManifest(YML, a.privateKey), [{ alg: 'ed25519' }, null]), false);
+  assert.equal(verifyManifest(YML, signManifest(YML, a.privateKey), []), false);
+  assert.equal(UPDATE_KEYS.every((k) => k.id && k.alg && k.publicKey), true);
+});
+
+// A real WebAuthn assertion from a virtual FIDO2 authenticator (Electron, cross-platform, no PRF, challenge = 32 x 0x07).
+const fx = JSON.parse(readFileSync(new URL('./fixtures/webauthn-es256.json', import.meta.url), 'utf8'));
+const hw = { id: 'hw', alg: 'es256', publicKey: fx.spki };
+
+/** The fixture's challenge is fixed, so the tests rebuild an assertion for their own manifest with a software ES256 key. */
+function assertionFor(manifest, { privateKey }, over = {}) {
+  const origin = over.origin ?? 'http://localhost';
+  const clientDataJSON = Buffer.from(JSON.stringify({ type: over.type ?? 'webauthn.get', challenge: over.challenge ?? releaseChallenge(manifest), origin, crossOrigin: false }));
+  const rpId = over.rpId ?? 'localhost';
+  const authData = Buffer.concat([crypto.createHash('sha256').update(rpId).digest(), Buffer.from([over.flags ?? 0x05]), Buffer.alloc(4)]);
+  const signature = crypto.sign('sha256', Buffer.concat([authData, crypto.createHash('sha256').update(clientDataJSON).digest()]), privateKey);
+  return encodeAssertion({ authData, clientDataJSON, signature });
+}
+const ec = () => {
+  const pair = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  return { privateKey: pair.privateKey, key: { id: 'ec', alg: 'es256', publicKey: pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') } };
+};
+
+test('hardware key: the fixture from a virtual FIDO2 key verifies its own challenge and nothing else', () => {
+  const clientData = Buffer.from(fx.clientDataJSON, 'base64').toString();
+  assert.match(clientData, /"type":"webauthn.get"/);
+  const own = encodeAssertion({ authData: Buffer.from(fx.authData, 'base64'), clientDataJSON: Buffer.from(fx.clientDataJSON, 'base64'), signature: Buffer.from(fx.signature, 'base64') });
+  // The fixture's challenge is not a release challenge, so it must be refused for any manifest ...
+  assert.equal(verifyManifest(YML, own, [hw], 'http://localhost:57374'), false);
+  // ... but the signature itself is valid for authData || SHA-256(clientDataJSON): prove it with the same primitive.
+  const signed = Buffer.concat([Buffer.from(fx.authData, 'base64'), crypto.createHash('sha256').update(Buffer.from(fx.clientDataJSON, 'base64')).digest()]);
+  assert.equal(crypto.verify('sha256', signed, crypto.createPublicKey({ key: Buffer.from(fx.spki, 'base64'), format: 'der', type: 'spki' }), Buffer.from(fx.signature, 'base64')), true);
+  assert.equal(Buffer.from(fx.authData, 'base64')[32] & 0x01, 1, 'user presence flag set');
+});
+
+test('hardware key: right challenge, RP ID, origin and touch pass; every deviation fails', () => {
+  const k = ec();
+  const list = [k.key];
+  assert.equal(verifyManifest(YML, assertionFor(YML, k), list), true);
+  assert.equal(verifyManifest(YML.replace('1.2.3', '1.2.4'), assertionFor(YML, k), list), false, 'changed manifest bytes');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { challenge: releaseChallenge('anderes') }), list), false, 'wrong challenge');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { flags: 0 }), list), false, 'no user presence (not touched)');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { flags: 0x0d }), list), false, 'B6: backup eligible = synced passkey');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { flags: 0x01 }), list), false, 'C2: touched but no PIN (user verification missing)');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { flags: 0x1d }), list), false, 'B6: backed up');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { rpId: 'example.com' }), list), false, 'other RP ID');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { origin: 'https://evil.example' }), list), false, 'other origin');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k, { type: 'webauthn.create' }), list), false, 'wrong ceremony type');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k), [ec().key]), false, 'foreign key');
+  assert.equal(verifyManifest(YML, assertionFor(YML, k), [{ ...k.key, alg: 'ed25519' }]), false, 'assertion is not an Ed25519 signature');
+  assert.equal(verifyManifest(YML, '{"alg":"es256"}', list), false, 'incomplete assertion');
+  assert.equal(verifyManifest(YML, signManifest(YML, ed().privateKey), list), false, 'plain signature on an es256 key');
+});

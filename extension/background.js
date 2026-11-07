@@ -6,7 +6,10 @@
 
 import { VaultSession } from './core/session.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
-import { hostFromUrl, itemMatchesHost, rankCandidates, bastionFrameAllowed } from './core/match.js';
+import { hostFromUrl, itemMatchesHost, rankCandidates, bastionFrameAllowed, confirmedOriginFits } from './core/match.js';
+import { watchTabs, mayStartSignIn, tabKey } from './lib/tabs.js';
+import { MS_JOB_MS, signInUser as signInUserFor } from './lib/signin-user.js';
+import { mainPageFits } from './core/tabtrust.js';
 import { signInHost, signInPageHost, itemFitsPage, itemFitsUrl, matchesForPage, newestMatchForPage, savedLoginForPage } from './core/pagefit.js';
 import { itemHosts, sophosFillPassword, resolveLogin, fqdnUserName, normalizeTenant } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
@@ -45,6 +48,7 @@ const sessionStore = {
 
 onAppEvent(() => broadcast({ type: 'state:changed' }));
 
+watchTabs();
 const ready = (async () => {
   const s = await getSettings();
   setLanguage(s.language);
@@ -69,6 +73,12 @@ async function isOpen() {
   } catch {
     return false;
   }
+}
+
+/** #439: { required, pinSet } – whether the app asks for its PIN before every passkey use (the demo has no app and no PIN). */
+async function passkeyPinState() {
+  if (demo) return { required: false, pinSet: true };
+  return (await appStatus().catch(() => null))?.passkeyPin || { required: true, pinSet: true }; // unknown (old app): ask
 }
 
 async function requireOpen() {
@@ -226,6 +236,7 @@ function contentStrings() {
     unlockSub: t('Mit Microsoft Entra ID anmelden'),
     lockedContainers: t('Geschützte Tresore entsperren'),
     lockedSub: t('Masterpasswort oder Passkey'),
+    menuRefused: t('Nichts eingefügt: Das Menü war verdeckt, verschoben oder gerade erst erschienen. Bitte erneut klicken. Klappt das auf dieser Seite nie, füllt Strg+Umschalt+L die Anmeldung ein.'),
     passkey: t('Passkey'),
     passkeyWait: t('Keevault bestätigt den Passkey …'),
     passkeyOk: t('Mit Passkey angemeldet'),
@@ -236,10 +247,6 @@ function contentStrings() {
     savePasskey: t('In Keevault speichern'),
     otherDevice: t('Anderes Gerät'),
     cancel: t('Abbrechen'),
-    lockedTitle: t('Keevault ist gesperrt'),
-    pinPrompt: t('PIN eingeben, um fortzufahren'),
-    unlockButton: t('Entsperren'),
-    pin: t('PIN'),
     saveQuestion: t('Passkey in Keevault speichern?'),
     saveIn: t('Speichern in „{vault}“'),
     alreadySaved: t('Für dieses Konto ist bereits ein Passkey im Tresor gespeichert.'),
@@ -281,7 +288,7 @@ async function lockedProtected() {
 /** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
 const usableItem = async (containerId, id) => resolveLogin(await vault.getItem(containerId, id), (c, i) => vault.getItem(c, i));
 
-async function fillTab({ tabId, containerId, id, force = false }) {
+async function fillTab({ tabId, containerId, id, force = false, origin = '' }) {
   const item = await usableItem(containerId, id);
   const frames = (await chrome.webNavigation.getAllFrames({ tabId })) || [];
   let targets = frames.filter((f) => itemFitsUrl(item, f.url));
@@ -292,11 +299,12 @@ async function fillTab({ tabId, containerId, id, force = false }) {
       throw e;
     }
     targets = frames.filter((f) => f.frameId === 0);
+    if (!targets.length || !confirmedOriginFits(targets[0].url, origin)) throw new Error(t('Die Seite hat sich geändert. Bitte öffne das Fenster neu und versuche es noch einmal.'));
   }
   let filled = 0;
   for (const f of targets) {
     try {
-      const r = await chrome.tabs.sendMessage(tabId, { type: 'fill', username: item.username, password: await browserPassword(item) }, { frameId: f.frameId });
+      const r = await chrome.tabs.sendMessage(tabId, { type: 'fill', username: item.username, password: await browserPassword(item) }, { frameId: f.frameId, documentId: f.documentId });
       if (r?.filled) filled++;
     } catch {
       // Frame without content script (e.g. about:blank).
@@ -469,18 +477,7 @@ async function containerNames() {
 }
 
 /** Passkeys whose entry URL fits the page best come first (keevault.de/admin before keevault.de) – none is dropped. */
-// A sign-in started by the user (app tile or Microsoft bar) counts for two minutes, like the app's own jobs.
-const MS_JOB_MS = 120_000;
-
-/** Account of the sign-in running on this sign-in host: the app's one-click job, else the account chosen in the bar. */
-async function signInUser(host) {
-  if (!host || !SIGN_IN_HOSTS.test(host)) return '';
-  const job = demo ? null : await app.signIn(host).catch(() => null);
-  if (job?.username) return job.username;
-  if (!MS_LOGIN_HOSTS.test(host)) return '';
-  const { msJob } = await chrome.storage.session.get('msJob');
-  return msJob && msJob.until > Date.now() ? msJob.username || '' : '';
-}
+const signInUser = (sender) => signInUserFor(signInHost(sender), sender, { demo, app, signInHosts: SIGN_IN_HOSTS, msLoginHosts: MS_LOGIN_HOSTS, mayStartSignIn, tabKey });
 
 async function publicCandidates(list, pageUrl = '', preferUser = '') {
   const names = await containerNames();
@@ -559,7 +556,16 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
   const open = await isOpen();
   // A one-click sign-in (admin tile, Bastion, account chosen in the Microsoft bar) is running on this sign-in page:
   // its account's passkey comes first – and is used without a further click (the user started this sign-in).
-  if (kind === 'get' && open) request.preferUser = await signInUser(signInHost(sender));
+  if (kind === 'get' && open) request.preferUser = await signInUser(sender);
+  // #439: with the PIN before every passkey use, the PIN is typed in this extension's own window: never the bar or the
+  // field menu in the page (a page can read keystrokes) – so the window opens for every sign-in.
+  if (kind === 'get' && open && (await passkeyPinState()).required) {
+    const found = await vault.passkeyCandidates(rpId, options.allowCredentials);
+    if ((!found.length && !(await lockedProtected())) || request.conditional) return { fallback: true };
+    await saveRequest(request);
+    await openPrompt(`${kind}:${request.id}`, sender.tab, request);
+    return { pending: request.id };
+  }
   if (kind === 'get') {
     const locked = open ? await lockedProtected() : 0;
     if (open) {
@@ -588,11 +594,7 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
       return { inline };
     }
   }
-  if (!open && !request.conditional && !demo && (await snapshot().catch(() => null))?.pinSet) {
-    // App locked, PIN set: the bar asks for the PIN right in the page and then continues there.
-    await saveRequest(request);
-    return { inline: { kind: 'unlock', requestId: request.id, site: rpId, ui: contentStrings() } };
-  }
+  // App locked: the window asks for the PIN (never a field in the page: the page reads keystrokes and can lock the app out).
   await saveRequest(request);
   await openPrompt(`${kind}:${request.id}`, sender.tab, request);
   return { pending: request.id };
@@ -617,17 +619,6 @@ async function inlineFor(req) {
     defaultContainer: containers.some((c) => c.id === s.defaultContainer) ? s.defaultContainer : containers[0].id,
     alreadyRegistered: existing.length > 0, ui: contentStrings(),
   };
-}
-
-/** PIN entered in the bar: unlock the app, then continue in the bar ({ inline }) or hand over ({ fallback }). */
-async function inlineUnlock({ requestId, pin }, sender) {
-  const req = await loadRequest(requestId);
-  if (!req || req.tabId !== sender.tab?.id || req.frameId !== sender.frameId) throw new Error(t('Die Anfrage ist abgelaufen'));
-  await unlockPin(pin); // wrong PIN: throws with the app's message (attempts are counted there)
-  const inline = await inlineFor(req);
-  if (inline) return { inline };
-  await deleteRequest(requestId);
-  return { fallback: true };
 }
 
 async function finishRequest(requestId, payload, { closeWindow = true } = {}) {
@@ -660,6 +651,7 @@ async function webauthnDetails({ requestId }) {
     unlocked: await isOpen(),
   };
   if (!out.unlocked) return out;
+  out.pin = await passkeyPinState();
   out.lockedContainers = (await vault.containers()).filter((c) => c.protected && c.locked).map((c) => ({ id: c.id, name: c.name, kind: c.kind }));
   if (req.kind === 'get') {
     out.candidates = await publicCandidates(await vault.passkeyCandidates(req.rpId, req.options.allowCredentials), req.pageUrl, req.preferUser);
@@ -679,7 +671,15 @@ async function webauthnDetails({ requestId }) {
   return out;
 }
 
-async function sign(req, candidate) {
+async function sign(req, candidate, pin = '') {
+  // The app signs (and checks the PIN for this one use); only the demo, which has no app, signs here.
+  if (!demo) {
+    const { response } = await app.passkeySign({
+      containerId: candidate.containerId, itemId: candidate.itemId, credentialId: candidate.passkey.credentialId,
+      origin: req.origin, rpId: req.rpId, challenge: req.options.challenge, pin,
+    });
+    return response;
+  }
   const { response, signCount } = await getAssertion({
     origin: req.origin, rpId: req.rpId, challenge: req.options.challenge, passkey: candidate.passkey,
   });
@@ -700,12 +700,12 @@ async function findCandidate(req, { containerId, itemId, credentialId }) {
   return c;
 }
 
-async function webauthnApprove({ requestId, containerId, itemId, credentialId, title }) {
+async function webauthnApprove({ requestId, containerId, itemId, credentialId, title, pin }) {
   await requireOpen();
   const req = await loadRequest(requestId);
   if (!req) throw new Error(t('Die Anfrage ist abgelaufen'));
   if (req.kind === 'get') {
-    const response = await sign(req, await findCandidate(req, { containerId, itemId, credentialId }));
+    const response = await sign(req, await findCandidate(req, { containerId, itemId, credentialId }), typeof pin === 'string' ? pin : '');
     await finishRequest(requestId, { result: response });
     return { done: true };
   }
@@ -765,6 +765,8 @@ async function editInPopup(containerId, id, tabId) {
 async function conditionalSelect(msg, sender) {
   const req = await loadRequest(msg.requestId);
   if (!req || req.kind !== 'get' || req.tabId !== sender.tab?.id || req.frameId !== sender.frameId) throw new Error(t('Ungültige Anfrage'));
+  // #439: from the page's own surfaces (bar, field menu) there is no PIN – with the PIN on, only the window signs.
+  if ((await passkeyPinState()).required) throw new Error(t('Bitte den Passkey im Keevault-Fenster mit der PIN bestätigen'));
   const response = await sign(req, await findCandidate(req, msg));
   await deleteRequest(msg.requestId);
   return { result: response };
@@ -909,14 +911,18 @@ const contentCommands = {
   },
   // Admin tools: one-click sign-in started in the app (admin center, Bastion). Only sign-in hosts ask, and the app
   // answers only within two minutes of the click and only for the host it was started for.
+  // The job belongs to the first tab that asks for it (the one the app's click opened) – a second tab, and any tab
+  // that another page opened, gets nothing (#372).
   'cs:signIn': async (_msg, sender) => {
     const host = signInHost(sender);
     if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
-    return app.signIn(host);
+    if (!(await mayStartSignIn(sender))) return null;
+    return app.signIn(host, await tabKey(sender));
   },
   /** One-time sign-in: the page filled its last step (password, or one-time code if the entry has one). */
   'cs:signInDone': async (_msg, sender) => {
     const host = signInHost(sender);
+    if (!mainPageFits(sender)) return null; // an iframe of a foreign page (#381)
     // Bastion's form filled by Keevault (started in the app): no "save this sign-in?" afterwards (#33).
     if (host && BASTION_HOSTS.test(host) && sender.tab?.id != null) await chrome.storage.session.set({ [`bastionPicked:${sender.tab.id}`]: Date.now() });
     if (demo || !host || !SIGN_IN_HOSTS.test(host)) return null;
@@ -1004,7 +1010,10 @@ const contentCommands = {
     if (!accounts.length) return null;
     const { msDefault } = await chrome.storage.local.get('msDefault');
     const { msSignedOut } = await chrome.storage.session.get('msSignedOut');
-    return { accounts, defaultKey: accounts.some((a) => a.key === msDefault) ? msDefault : null, paused: !!msSignedOut, ui: contentStrings() };
+    // A page opened by another page, or a new tab without history (a link from a mail or chat), never signs in by itself
+    // (#372): the list is offered, the user chooses. Only a typed address or a trusted Microsoft page before it starts it.
+    const foreign = !(await mayStartSignIn(sender, { auto: true }));
+    return { accounts, defaultKey: accounts.some((a) => a.key === msDefault) ? msDefault : null, paused: !!msSignedOut || foreign, ui: contentStrings() };
   },
   /** Account for the Microsoft sign-in (the one-time code fresh on every call); only Microsoft logins, only there. */
   'cs:msAccount': async ({ containerId, id }, sender) => {
@@ -1014,7 +1023,8 @@ const contentCommands = {
     if (item.type !== 'login' || !(item.msAdmin || itemHosts(item).some(isMicrosoftHost))) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     // Chosen (or started as the remembered one): the passkey prompt that may follow takes this account's passkey;
     // a sign-out pause ends here.
-    await chrome.storage.session.set({ msJob: { username: item.username || '', until: Date.now() + MS_JOB_MS }, msSignedOut: false });
+    // Bound to this tab (#424): another tab opened meanwhile does not get this account's passkey without a click.
+    await chrome.storage.session.set({ msJob: { username: item.username || '', until: Date.now() + MS_JOB_MS, tab: await tabKey(sender) }, msSignedOut: false });
     // The Microsoft account last used: a Bastion VM saved from the browser gets it as its Microsoft sign-in (#306).
     await chrome.storage.local.set({ msLast: `${containerId}/${id}` });
     return { mode: 'microsoft', username: item.username, password: item.password, totp: item.totp ? (await totpCode(item.totp)).code : '', passkey: !!item.passkeys?.length };
@@ -1043,7 +1053,12 @@ const contentCommands = {
     return Date.now() - Number(msSignedInAt || 0) < MS_JOB_MS;
   },
   /** Remember (or forget, key null) the account that signs in automatically on the Microsoft sign-in page. */
-  'cs:msRemember': async ({ key }) => chrome.storage.local.set({ msDefault: key || null }),
+  'cs:msRemember': async ({ key }, sender) => {
+    const host = signInHost(sender);
+    if (!host || !MS_LOGIN_HOSTS.test(host)) return null;
+    await chrome.storage.local.set({ msDefault: key || null });
+    return true;
+  },
   'cs:capture': (msg, sender) => capture(msg, sender),
   'cs:pending': async (_msg, sender) => {
     const p = await pendingCapture(sender);
@@ -1059,7 +1074,6 @@ const contentCommands = {
   'cs:webauthnAbort': (msg, sender) => abortRequest(msg, sender),
   'cs:webauthnWindow': (msg, sender) => inlineWindow(msg, sender),
   'cs:webauthnCreate': (msg, sender) => inlineCreate(msg, sender),
-  'cs:webauthnUnlock': (msg, sender) => inlineUnlock(msg, sender),
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

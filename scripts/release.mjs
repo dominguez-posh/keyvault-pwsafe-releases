@@ -3,27 +3,45 @@
 // (CryptoGuard reported the build scripts as ransomware), node is not affected.
 //   node scripts/release.mjs                 build everything locally (release/Keevault-Setup-<version>.exe, MSI, MSIX)
 //   node scripts/release.mjs --publish       plus: source to the public repo, GitHub release v<version>
+//                                            (only while the app does not sign yet, see below)
+//   node scripts/release.mjs [--early-access|--release]   build only (plain run = Developer build, #445); writes release/build-info.json (commit, channel)
+//   … then in Keevault: menu "Release signieren" (dialog, hardware key) writes release/latest.yml.sig2
+//   node scripts/release.mjs --publish-only [--early-access]   checks the signatures against the keys embedded in
+//                                            desktop/update-verify.js and publishes what was built and signed; builds
+//                                            and signs nothing (docs/RELEASE.md, #378)
 //   … --publish --hotfix                    straight to Prod ("Latest") – emergencies only
 //   … --publish --early-access              as a pre-release (Early Access channel); source on the public repo's
 //                                            "early-access" branch, "Latest" and main untouched. Normally run by
 //                                            .github/workflows/early-access.yml; Prod: promote-production.yml.
 //   node scripts/release.mjs --previews      also attach macOS/Linux (release/ci) and the Android APK (off since
 //                                            2026-10-31: the website offers Windows only)
-// Local on purpose: extension-key.pem and update-key.pem never leave this machine.
+// Local on purpose: extension-key.pem and update-key.pem never leave this machine. Once a second update key is embedded
+// (UPDATE_KEYS has an es256 entry) the signature comes from the app, not from this script.
 
 import { execFileSync, execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, copyFileSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { UPDATE_KEYS } from '../desktop/update-verify.js';
+import { appSignsWith, signsOldWith, checkSignedRelease, distFiles, releaseAssets } from './release-check.mjs';
+import { isReleaseRun } from './release-kind.mjs';
+import { verifyPackage as verifyAsar } from './verify-package.mjs';
+import { stampCommit } from '../desktop/build-kind.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const publish = process.argv.includes('--publish');
+const publishOnly = process.argv.includes('--publish-only');
+const publish = process.argv.includes('--publish') || publishOnly;
+// The app signs (docs/RELEASE.md) as soon as a security key (es256) stands in UPDATE_KEYS: then building and publishing are two runs.
+const appSigns = appSignsWith(UPDATE_KEYS);
+if (publish && !publishOnly && appSigns) throw new Error('Die App signiert (UPDATE_KEYS enthält einen Sicherheitsschlüssel): erst bauen, in Keevault „Release signieren“, dann --publish-only.');
 const earlyAccess = process.argv.includes('--early-access');
 // Prod comes from Early Access (promote-production.yml, same files). Straight to Prod only as a deliberate hotfix.
 if (publish && !earlyAccess && !process.argv.includes('--hotfix')) {
   throw new Error('Direkt nach Prod nur mit --hotfix. Normal: Early Access (GitHub Actions „Early Access veröffentlichen“), danach „Prod freigeben“.');
 }
+// #445: "release" only with an explicit release option; a Developer build is never published (--publish-only checks build-info.json).
+const buildKind = isReleaseRun(process.argv) ? 'release' : 'developer';
 const previews = process.argv.includes('--previews');
 // VS Code's terminal sets this; child processes (npx, electron-builder) must not inherit it.
 delete process.env.ELECTRON_RUN_AS_NODE;
@@ -47,6 +65,11 @@ function step(name, fn) {
     throw new Error(`${name} fehlgeschlagen: ${e.message}`);
   }
 }
+/** A build step: skipped when only the signed result is published (--publish-only). */
+function buildStep(name, fn) {
+  if (publishOnly) return undefined;
+  return step(name, fn);
+}
 // A release is built from committed files only: 0.9.6 packed a file that was being saved at that moment (cut off in
 // the middle – the app did not start). Uncommitted changes stop the release before anything is built.
 {
@@ -54,34 +77,6 @@ function step(name, fn) {
   if (dirty) throw new Error(`Nicht committete Änderungen – erst committen, dann veröffentlichen:\n${dirty}`);
 }
 
-/**
- * The packed app must be exactly the committed code: every file in app.asar that git knows is compared byte for byte
- * with HEAD, and every .js file must parse. Runs right after electron-builder, before anything is signed or published.
- */
-async function verifyPackage(asarPath) {
-  const { extractAll } = await import('@electron/asar');
-  const dir = join(root, 'release', 'asar-check');
-  rmSync(dir, { recursive: true, force: true });
-  try { extractAll(asarPath, dir); } catch { /* native modules may stay unpacked – the JavaScript is extracted */ }
-  const tracked = new Set(execSync('git ls-files', { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean));
-  const walk = (d) => readdirSync(d).flatMap((n) => { const p = join(d, n); return statSync(p).isDirectory() ? walk(p) : [p]; });
-  const problems = [];
-  let checked = 0;
-  for (const file of walk(dir)) {
-    const rel = file.slice(dir.length + 1).split('\\').join('/');
-    if (!tracked.has(rel) || rel === 'package.json') continue;
-    checked++;
-    const head = execFileSync('git', ['show', `HEAD:${rel}`], { cwd: root, maxBuffer: 64 * 1024 * 1024 });
-    if (!head.equals(readFileSync(file))) problems.push(`${rel}: weicht vom Commit ab`);
-    else if (/\.(m?js|cjs)$/.test(rel)) {
-      try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); } catch (e) { problems.push(`${rel}: Syntaxfehler ${String(e.stderr || '').split('\n').find((l) => /Error/.test(l)) || ''}`); }
-    }
-  }
-  rmSync(dir, { recursive: true, force: true });
-  if (!checked) throw new Error('app.asar enthält keine bekannten Dateien');
-  if (problems.length) throw new Error(`Paket fehlerhaft:\n${problems.join('\n')}`);
-  console.log(`app.asar geprüft: ${checked} Dateien wie im Commit`);
-}
 
 /** Replace instead of overwrite: deleting and creating looks less like encryption to CryptoGuard than rewriting in place. */
 function copyFresh(from, to) {
@@ -144,7 +139,7 @@ function buildSetupWindow(outDir, payload) {
 }
 
 // --- 1. Passkey provider (MSIX) --------------------------------------------------------------------------------------
-step('Passkey-Anbieter (MSIX)', () => {
+buildStep('Passkey-Anbieter (MSIX)', () => {
   const project = R('windows/PasskeyProvider');
   const outDir = R('windows/out');
   const stage = join(outDir, 'stage');
@@ -180,17 +175,17 @@ step('Passkey-Anbieter (MSIX)', () => {
 });
 
 // The app ships the update window without payload: it hands updates over to it (desktop/updater.js).
-step('Update-Fenster (Keevault-Update.exe)', () => {
+buildStep('Update-Fenster (Keevault-Update.exe)', () => {
   copyFresh(buildSetupWindow(R('windows/out/setup-update'), null), R('windows/out/Keevault-Update.exe'));
 });
 
 // --- 2. Browser extension ---------------------------------------------------------------------------------------------
-step('Erweiterung (ZIP)', () => run(process.execPath, [R('scripts/pack-extension.mjs')]));
-step('Erweiterung (CRX + update.xml)', () => run(process.execPath, [R('scripts/pack-crx.mjs')]));
+buildStep('Erweiterung (ZIP)', () => run(process.execPath, [R('scripts/pack-extension.mjs')]));
+buildStep('Erweiterung (CRX + update.xml)', () => run(process.execPath, [R('scripts/pack-crx.mjs')]));
 
 // --- 3. Installers (EXE + MSIX) ---------------------------------------------------------------------------------------
 let unpacked = R('release/win-unpacked');
-step('Installer (EXE + MSIX)', () => {
+buildStep('Installer (EXE + MSIX)', () => {
   // electron-builder empties release/win-unpacked first. A test build still running from there locks the folder
   // (EBUSY); then build next to it in release/build and copy the installers over.
   let output = 'release';
@@ -203,7 +198,10 @@ step('Installer (EXE + MSIX)', () => {
       output = 'release/build';
     }
   }
-  shell(`npx electron-builder --win nsis appx --publish never -c.directories.output=${output}`);
+  // #445: only an explicit release option makes a release build; a plain run is a local Developer installer.
+  // The kind goes into the packed package.json (not compared by verifyPackage, no extra file in app.asar).
+  const kvBuild = `-c.extraMetadata.kvBuild.kind=${buildKind} -c.extraMetadata.kvBuild.commit=${stampCommit(out('git', ['rev-parse', '--short', 'HEAD']).trim())}`;
+  shell(`npx electron-builder --win nsis appx --publish never -c.directories.output=${output} ${kvBuild}`);
   if (output !== 'release') {
     unpacked = R(output, 'win-unpacked');
     for (const n of readdirSync(R(output))) {
@@ -211,21 +209,19 @@ step('Installer (EXE + MSIX)', () => {
     }
   }
 });
-await verifyPackage(join(unpacked, 'resources', 'app.asar'));
+if (!publishOnly) await verifyAsar(join(unpacked, 'resources', 'app.asar'), root);
 // Release notes (CHANGELOG.md) go into the manifest before it is signed: the app shows them in its update dialog.
-step('Release-Notes aus CHANGELOG.md', () => run(process.execPath, [R('scripts/release-notes.mjs')]));
-// The app only accepts update manifests signed with update-key.pem (desktop/update-verify.js).
-step('Update-Manifest signieren (Ed25519)', () => run(process.execPath, [R('scripts/update-key.mjs'), 'sign', 'release/latest.yml']));
-step('Installer für Administratoren (MSI)', () => run(process.execPath, [R('scripts/build-msi.mjs')], { env: { ...process.env, KV_UNPACKED_DIR: unpacked } }));
-step('MSIX signieren', () => sign(R(`release/Keevault-${version}.msix`)));
+buildStep('Release-Notes aus CHANGELOG.md', () => run(process.execPath, [R('scripts/release-notes.mjs')]));
+buildStep('Installer für Administratoren (MSI)', () => run(process.execPath, [R('scripts/build-msi.mjs')], { env: { ...process.env, KV_UNPACKED_DIR: unpacked } }));
+buildStep('MSIX signieren', () => sign(R(`release/Keevault-${version}.msix`)));
 
 // --- 4. IT material ---------------------------------------------------------------------------------------------------
-step('Geräte-Skript für IT/Intune (Zertifikat eingebettet)', () => {
+buildStep('Geräte-Skript für IT/Intune (Zertifikat eingebettet)', () => {
   const cer = readFileSync(R('windows/out/KvPwSafe-Test.cer')).toString('base64');
   // BOM: Windows PowerShell 5.1 (Intune) reads the umlauts correctly only with it.
   writeFileSync(R('release/Keevault-Geraet-Einrichten.ps1'), BOM + readFileSync(R('installer/setup.ps1'), 'utf8').replace(/^\uFEFF/, '').replace('__CERTIFICATE_BASE64__', cer));
 });
-step('Richtlinien-Vorlagen (ADMX für GPO/Intune + Intune-Skript)', () => {
+buildStep('Richtlinien-Vorlagen (ADMX für GPO/Intune + Intune-Skript)', () => {
   const stage = R('release/policy');
   rmSync(stage, { recursive: true, force: true });
   cpSync(R('installer/policy'), stage, { recursive: true });
@@ -242,15 +238,16 @@ const setup = R(`release/Keevault-Setup-${version}.exe`);
 // The website links to releases/latest/download/Keevault-Setup.exe: the setup window in Keevault's design with the
 // NSIS setup embedded (windows/Setup). The versioned NSIS setup stays the update package: latest.yml (+ blockmap) is
 // what the app's update check reads via https://keevault.de/update/ (website/php/api/dl.php).
-step('Setup im Keevault-Design (Keevault-Setup.exe)', () => copyFresh(buildSetupWindow(R('windows/out/setup-full'), setup), R('release/Keevault-Setup.exe')));
+buildStep('Setup im Keevault-Design (Keevault-Setup.exe)', () => copyFresh(buildSetupWindow(R('windows/out/setup-full'), setup), R('release/Keevault-Setup.exe')));
 const msi = R(`release/Keevault-${version}.msi`);
 const msix = R(`release/Keevault-${version}.msix`);
 copyFresh(msi, R('release/Keevault.msi'));
 copyFresh(msix, R('release/Keevault.msix'));
 copyFresh(R('windows/out/KvPwSafe-Test.cer'), R('release/Keevault-Zertifikat.cer'));
-const assets = [setup, R('release/Keevault-Setup.exe'), msi, R('release/Keevault.msi'), msix, R('release/Keevault.msix'), R('release/Keevault-Zertifikat.cer'),
-  R('release/latest.yml'), R('release/latest.yml.sig'), `${setup}.blockmap`, R('release/Keevault-Geraet-Einrichten.ps1'), R('release/Keevault-Richtlinien.zip'),
-  R('dist/kvpwsafe-extension.crx'), R('dist/update.xml'), R(`dist/kvpwsafe-extension-${version}-firefox.zip`)];
+// CRX, update.xml and the Firefox ZIP are written to dist/ by the pack scripts: they are copied to release/ before the
+// checksums, and everything is uploaded from there (C1) – the list of checksums and the upload read the same folder.
+if (!publishOnly) for (const n of distFiles(version)) copyFresh(R('dist', n), R('release', n));
+const assets = releaseAssets(version).filter((a) => !a.endsWith('-sbom.cdx.json')).map((a) => R(a));
 if (previews) {
   // Mobile app (preview): the Android debug APK goes along when it was built (mobile/README.md).
   const apk = R('mobile/android/app/build/outputs/apk/debug/app-debug.apk');
@@ -283,16 +280,39 @@ for (const a of assets) if (!existsSync(a)) throw new Error(`${a} fehlt`);
 
 // Software bill of materials (CycloneDX, production dependencies) and SHA-256 checksums of every asset: published
 // with the release and on the download page, so a download can be checked against what was built here.
-step('SBOM (CycloneDX)', () => {
+// Everything the manifest does not name itself is covered through SHA256SUMS.txt: its hash is a line of latest.yml
+// (kvSha256Sums), so the signature of the manifest covers every file of the release (#378 B5). latest.yml and the
+// signatures are not in the list (they are what is signed); build-info.json is not uploaded.
+const sbomFile = R(`release/Keevault-${version}-sbom.cdx.json`);
+buildStep('SBOM (CycloneDX)', () => {
   const sbom = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['sbom', '--sbom-format', 'cyclonedx', '--omit', 'dev'], { cwd: root, encoding: 'utf8', shell: process.platform === 'win32', maxBuffer: 64 * 1024 * 1024 });
-  writeFileSync(R(`release/Keevault-${version}-sbom.cdx.json`), sbom);
-  assets.push(R(`release/Keevault-${version}-sbom.cdx.json`));
+  writeFileSync(sbomFile, sbom);
 });
-step('Prüfsummen (SHA256SUMS.txt)', () => {
+assets.push(sbomFile);
+buildStep('Prüfsummen (SHA256SUMS.txt)', () => {
   const lines = assets.map((a) => `${createHash('sha256').update(readFileSync(a)).digest('hex')}  ${basename(a)}`);
   writeFileSync(R('release/SHA256SUMS.txt'), `${lines.join('\n')}\n`);
-  assets.push(R('release/SHA256SUMS.txt'));
 });
+assets.push(R('release/SHA256SUMS.txt'));
+buildStep('Prüfsumme ins Manifest (kvSha256Sums)', () => {
+  // A signature of the app belongs to the manifest it was made for (#428): this build makes a new one, the old one goes.
+  rmSync(R('release/latest.yml.sig2'), { force: true });
+  const yml = readFileSync(R('release/latest.yml'), 'utf8').replace(/^kvSha256Sums:.*\r?\n?/m, '');
+  const sums = createHash('sha256').update(readFileSync(R('release/SHA256SUMS.txt'))).digest('hex');
+  writeFileSync(R('release/latest.yml'), `${yml.replace(/\s*$/, '')}\nkvSha256Sums: ${sums}\n`);
+});
+// What the build contains and which channel it is for: the approval dialog in the app shows it, publishing compares it.
+buildStep('Build-Angaben (build-info.json)', () => {
+  const commit = out('git', ['rev-parse', 'HEAD']).trim();
+  writeFileSync(R('release/build-info.json'), `${JSON.stringify({ version, commit, kind: buildKind, clean: true, channel: earlyAccess ? 'beta' : 'stable' }, null, 2)}\n`);
+});
+// Fallback while update-key.pem exists: the old key signs latest.yml.sig (apps before the key rotation read only that).
+// Without the file the app's signature (latest.yml.sig2) has to be enough, which the publish step checks.
+// With a list without `update-1` (stage 3 of docs/RELEASE.md) no old signature is written, also if a PEM still lies there.
+if (signsOldWith(UPDATE_KEYS) && (existsSync(R('update-key.pem')) || !appSigns)) {
+  buildStep('Update-Manifest signieren (Ed25519, alter Schlüssel)', () => run(process.execPath, [R('scripts/update-key.mjs'), 'sign', 'release/latest.yml']));
+}
+assets.push(R('release/latest.yml'), ...['latest.yml.sig', 'latest.yml.sig2'].map((n) => R('release', n)).filter((f) => existsSync(f)));
 console.log(`\x1b[32mFertig: ${setup}\x1b[0m`);
 
 // --- 6. Publish -----------------------------------------------------------------------------------------------------
@@ -300,6 +320,9 @@ if (publish) {
   // Public repository = source-available code + releases (browsers fetch update.xml/CRX from it without signing in).
   // The private repository keeps website, license tool and notes; scripts/export-public.mjs leaves them out.
   const publicRepo = 'dominguez-posh/keyvault-pwsafe-releases';
+  step('Signaturen und Build-Angaben prüfen', () => checkSignedRelease({
+    dir: R('release'), version, assets, publishOnly, earlyAccess, head: out('git', ['rev-parse', 'HEAD']).trim(),
+  }));
   const pub = join(dirname(root.replace(/[\\/]$/, '')), 'keevault-public');
   // Early Access: the source goes to the branch "early-access" (main follows only when the release is promoted).
   const branch = earlyAccess ? 'early-access' : 'main';

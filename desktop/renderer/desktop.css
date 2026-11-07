@@ -52,7 +52,8 @@ body { overflow: hidden; }
 
 .search-results { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; max-height: 180px; overflow-y: auto; }
 .choice { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
-.choice:hover { border-color: var(--accent); background: var(--accent-soft); }
+.choice:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.choice:disabled { opacity: .55; cursor: default; }
 .chosen { flex: 1; min-width: 0; }
 .modal-body h3 { margin: 12px 0 8px; }
 /* Tabbed dialogs (settings): the bar stays visible while a panel scrolls. */
@@ -133,6 +134,9 @@ body { overflow: hidden; }
 /* Installed version, bottom right */
 #app-version { position: fixed; right: 22px; bottom: 6px; font-size: 11px; color: var(--muted); user-select: none; z-index: 1; background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit; }
 #app-version:hover { color: var(--text); text-decoration: underline; }
+#app-version { white-space: nowrap; }
+#app-version.early-access .ver-channel { color: var(--accent); font-weight: 600; }
+#app-version.developer .ver-channel { color: var(--warn); font-weight: 600; }
 .update-progress { width: 100%; margin-top: 8px; }
 /* Questions from AI agents (app.js questionDialog) */
 /* Questions from AI agents (app.js questionDialog): hero with badge, target card, choice cards, two actions. */
@@ -188,6 +192,8 @@ body { overflow: hidden; }
 .q-option-text { display: grid; gap: 2px; }
 .q-option-label { font-weight: 600; }
 .q-option-hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.q-pin { margin: 14px 0 0; }
+.q-pin-error { margin-top: 6px; }
 .q-note { display: flex; gap: 6px; align-items: center; margin-top: 14px; margin-bottom: 0; color: var(--muted); font-size: 12px; }
 .q-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; margin-bottom: 20px; }
 .q-actions .btn { min-width: 110px; justify-content: center; }
@@ -603,6 +609,7 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .summary-row { display: grid; grid-template-columns: minmax(120px, 30%) 1fr; gap: 10px; overflow-wrap: anywhere; }
 /* The personal vault: its own place right below the views, a hairline above it. */
 .personal-slot { margin-top: 6px; padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent); }
+.recovery-due { display: flex; align-items: center; gap: 6px; width: calc(100% - 16px); margin: 6px 8px 2px; text-align: left; font-size: 12px; cursor: pointer; }
 /* Organisation of the signed-in account next to "Help". */
 .sidebar-foot { align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Admin mode: "Passwords | Devices" across the sidebar bottom, the same segment style as the menu's view switches. */
@@ -755,3 +762,42 @@ html.admin-theme { --accent: #ac5500; --accent-hover: #8b4500; --accent-soft: #f
 
 /* Mixed selection: folders in the list of the detail pane. */
 .multi-list .multi-folder { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+
+/* File vault comparison (#404): before and now side by side, colours only from tokens, light and dark alike */
+.file-swap .swap-table { width: 100%; border-collapse: collapse; table-layout: fixed; margin: 4px 0 12px; font-size: 13px; }
+.file-swap .swap-table :is(th, td) { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: start; vertical-align: top; overflow-wrap: anywhere; }
+.file-swap .swap-table thead th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.file-swap .swap-table tbody th { width: 28%; font-weight: 500; color: var(--muted); }
+.file-swap .swap-table td:nth-child(3) { background: var(--surface-2); }
+.file-swap .swap-table td.changed { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+.file-swap .swap-table tr:last-child :is(th, td) { font-family: Cascadia Mono, Consolas, monospace; }
+.file-swap .swap-table tr:last-child th { font-family: inherit; }
+.file-swap label.check { display: flex; align-items: flex-start; gap: 8px; line-height: 1.4; cursor: pointer; }
+.file-swap label.check input { margin: 2px 0 0; flex: none; accent-color: var(--accent); }
+.file-swap label.check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* #449: field rows in the detail view – shaded on hover, the action as text on the right, an arrow button with a menu. */
+.act-row { cursor: pointer; padding: 4px 4px 4px 8px; margin: -4px -8px; border-radius: 10px; transition: background .12s; }
+.act-row:hover, .act-row:focus-within { background: var(--surface-2); }
+.act-row .act-label, .act-row .act-more { opacity: 0; transition: opacity .12s; }
+.act-row:hover .act-label, .act-row:hover .act-more, .act-row:focus-within .act-label, .act-row:focus-within .act-more { opacity: 1; }
+.act-label { flex: none; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--accent); padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+.act-label:hover { color: var(--accent-hover); }
+.act-label:focus-visible, .act-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.act-row .act-more { flex: none; width: 28px; height: 28px; border-radius: 8px; }
+.act-row .act-more:hover { background: var(--accent-soft); color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .act-row, .act-row .act-label, .act-row .act-more { transition: none; } }
+/* Large display of a value: monospace, digits and symbols in their own tones (also readable without colour: size, spacing). */
+.big-text { display: flex; flex-wrap: wrap; gap: 2px 3px; font: 600 34px/1.3 Cascadia Mono, Consolas, monospace; word-break: break-all; user-select: text; }
+.big-ch { min-width: .62em; text-align: center; }
+.big-ch.d { color: var(--accent); }
+.big-ch.s { color: var(--warn); }
+
+
+#ext-hint { position: fixed; z-index: 1; display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--surface) 85%, transparent); border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+#ext-hint:hover, #ext-hint[aria-expanded=true] { color: var(--text); }
+#ext-hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#ext-pop { position: fixed; z-index: 20; width: min(340px, calc(100vw - 16px)); box-sizing: border-box; padding: 12px 14px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, .18); font-size: 13px; }
+#ext-pop p { margin: 6px 0; }
+#ext-pop ol { margin: 6px 0 10px; padding-left: 18px; }
+#ext-pop .actions { display: flex; flex-wrap: wrap; gap: 6px; }

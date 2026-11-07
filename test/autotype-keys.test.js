@@ -34,5 +34,5 @@ test("Windows' credential dialog: nothing typed, the value goes to the protected
   // RDP under Credential Guard: no typing attempt any more, the password is on the clipboard before mstsc starts.
   const dev = readFileSync(fileURLToPath(new URL('../desktop/main/devices.js', import.meta.url)), 'utf8');
   assert.doesNotMatch(dev, /typeIntoCredentialDialog/);
-  assert.match(dev, /credentialGuardRunning\(\)\)\) \{\s*await copyToClipboard\(password\);/);
+  assert.match(dev, /credentialGuardRunning\(\)\)\) \{\s*(\/\/[^\n]*\s*)*await copyToClipboard\(password, \{ atLeastSeconds: RDP_CLIPBOARD_SECONDS \}\);/);
 });

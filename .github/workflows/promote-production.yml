@@ -34,6 +34,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: v${{ inputs.version }}
+      VERSION: ${{ inputs.version }}
+      MIN_HOURS: ${{ inputs.min_hours }}
     steps:
       - name: Vorabversion prüfen
         run: |
@@ -45,8 +47,8 @@ jobs:
           published=$(date -d "$(echo "$info" | jq -r .publishedAt)" +%s)
           hours=$(( ( $(date +%s) - published ) / 3600 ))
           echo "Seit $hours Stunden im Praxistest"
-          [ "$hours" -ge "${{ inputs.min_hours }}" ] || { echo "Erst $hours von ${{ inputs.min_hours }} Stunden im Praxistest"; exit 1; }
-      - uses: actions/checkout@v7
+          [ "$hours" -ge "$MIN_HOURS" ] || { echo "Erst $hours von $MIN_HOURS Stunden im Praxistest"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -66,14 +68,8 @@ jobs:
           fi
           git push --quiet origin main
       - name: Als „Latest" freigeben
-        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest --title "Keevault ${{ inputs.version }}"
-      - name: Website anstoßen
-        # The website (and its live demo) is built in the private Dev repo: "Website veröffentlichen" there. Needs the
-        # environment secret WEBSITE_DISPATCH_TOKEN (Actions: write on the Dev repo); without it this step only reports.
-        env:
-          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
-          DEV_REPO: ${{ vars.DEV_REPO || 'dominguez-posh/keyvault-pwsafe' }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then echo "::warning::WEBSITE_DISPATCH_TOKEN fehlt – Website von Hand hochladen"; exit 0; fi
-          gh workflow run website.yml --repo "$DEV_REPO" -f version="${{ inputs.version }}"
-          echo "Website-Upload für ${{ inputs.version }} gestartet ($DEV_REPO)"
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest --title "Keevault $VERSION"
+      - name: Website-Hinweis
+        # The website is uploaded locally (upload service, tag website-freigabe); no secret and no dispatch from here.
+        # The daily check "Website-Wächter" in the private repo reports when the live demo is behind this version.
+        run: echo "::notice::Website lokal hochladen (Leitstelle-Button, Tag website-freigabe). Der tägliche Wächter meldet, wenn die Live-Demo hinter dieser Version zurückliegt."

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { getLanguage, t } from '../../extension/core/i18n.js';
 import { here, smokeTest } from './boot.js';
 import { config } from './state.js';
+import { clearAfterSeconds } from '../copy-in-time.js';
 
 const WIDTH = 440;
 const HEIGHT = 470;
@@ -24,8 +25,9 @@ const LABELS = { u: 'Benutzername', p: 'Passwort', o: 'Einmalcode' };
  * Texts of the window. kind 'rdp': remote desktop started under Credential Guard (password copied, user name in the
  * dialog); kind 'secure': auto-type (Ctrl+Shift+U/P/O) into Windows' credential dialog, the value copied.
  */
-export function hintContent({ kind, what = 'p', user = '' }) {
-  const seconds = Number(config.get().clipboardSeconds) || 0;
+export function hintContent({ kind, what = 'p', user = '', atLeastSeconds = 0 }) {
+  // The time the value really stays (#349: remote desktop keeps it longer than a short setting).
+  const seconds = clearAfterSeconds(config.get().clipboardSeconds, atLeastSeconds);
   const label = t(LABELS[what] || LABELS.p);
   const note = seconds > 0
     ? t('Der Wert erscheint nicht im Zwischenablage-Verlauf und nicht in der Cloud-Zwischenablage. Nach {seconds} Sekunden löscht Keevault ihn wieder – danach einfach noch einmal anfordern.', { seconds })

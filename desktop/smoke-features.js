@@ -3,15 +3,27 @@
 // every new or changed function gets a check here (or in scripts/extension-smoke.mjs) in the same commit.
 //
 // ctx: { js, sleep, errors, win, api, vault, config, changed, clipboardHas, signInFor, clearSignIns, copyViaHelperExe,
-//        typeViaHelperExe }
+//        typeViaHelperExe, areas }. A new step goes into desktop/smoke-areas.js too (--only, #397).
 // The clipboard is checked through Keevault-Update.exe (clipboardHas clears it when the text matches) – never read
 // with Electron, never restored: after the run it is empty. Nothing is typed (auto-type: the helper's mode with
 // empty input only).
 
 import { readFile } from 'node:fs/promises';
+import { autotypeFallbackCheck } from './smoke-autotype-fallback.js';
 import { multiClearCheck } from './smoke-multi.js';
+import { passkeyPinAgentCheck, passkeyPinBrowserCheck, passkeyPinSettingCheck, passkeyPinWindowsCheck } from './smoke-passkey-pin.js';
+import { deleteRefusedCheck } from './smoke-delete-refused.js';
+import { deleteRaceCheck } from './smoke-delete-race.js';
 import { agentAdmissionCheck } from './smoke-agent-admission.js';
-import { deliberateAnswerCheck, microsoftChoiceCheck, writeDetailsCheck } from './smoke-agent-questions.js';
+import { versionChannelCheck, versionMixCheck } from './smoke-version.js';
+import { offlineDeleteCheck } from './smoke-offline.js';
+import { firstStartCheck } from './smoke-first-start.js';
+import { recoveryKeyCheck } from './smoke-recovery-key.js';
+import { shareHintCheck } from './smoke-share-hint.js';
+import { extensionHintCheck } from './smoke-ext-hint.js';
+import { deliberateAnswerCheck, lockRefusesCheck, microsoftChoiceCheck, writeDetailsCheck } from './smoke-agent-questions.js';
+import { releaseSignCheck } from './smoke-release.js';
+import { questionsGone, until } from './smoke-wait.js';
 
 export async function featureChecks(ctx) {
   const { js, sleep, errors, win, api, vault, config, changed, clipboardHas } = ctx;
@@ -24,12 +36,11 @@ export async function featureChecks(ctx) {
       await closeDialogs();
       for (let i = 0; i < 10 && !(await js('!!document.querySelector(".menu-btn")')); i++) await sleep(300);
       await js('document.querySelector(".menu-btn")?.click()');
-      await sleep(300);
+      await until(() => js('!!document.querySelector(".main-menu [data-action=settings]")'), 1000);
       await js('document.querySelector(".main-menu [data-action=settings]")?.click()');
-      await sleep(500);
+      await until(() => js('!!document.querySelector("dialog[open] .tabs button")'), 1000);
       await js('[...document.querySelectorAll("dialog[open] .tabs button")].find((b) => /^(Ansicht|View)$/.test(b.textContent.trim()))?.click()');
-      await sleep(200);
-      if (await js('!!document.querySelector("dialog[open] .view-settings .view-row")?.offsetParent')) return;
+      if (await until(() => js('!!document.querySelector("dialog[open] .view-settings .view-row")?.offsetParent'), 1000)) return;
     }
   };
   // Admin mode the way a person switches it (#23): offered under Settings → View, then the switch next to Help → app
@@ -64,6 +75,8 @@ export async function featureChecks(ctx) {
     const mine = (await vault.summaries()).filter((x) => x.containerId === kvc.id);
     console.log(`[features] ${kvc.name}: ${mine.length} entries – ${mine.map((x) => x.title).join(', ')}`);
   }
+  // A full run has a PIN by now (the personal vault flow); a partial run starts with the same state.
+  if (ctx.areas.partial) await ctx.ensurePin();
   const created = [];
   const save = async (item) => {
     const saved = await vault.saveItem(kvc.id, item);
@@ -73,9 +86,10 @@ export async function featureChecks(ctx) {
     await sleep(500);
     return saved;
   };
-  const openItem = async (title) => {
+  const openItem = async (title, folder) => {
     await js('document.querySelector(".folder-crumb .icon-btn")?.click()');
     await sleep(300);
+    if (folder) { await js(`[...document.querySelectorAll(".list .folder-row")].find((r) => r.querySelector(".row-title")?.textContent === ${JSON.stringify(folder)})?.click()`); await sleep(400); }
     // The list redraws after a save: wait until the entry is in it, then open it.
     const find = `[...document.querySelectorAll(".list li.row-item[data-key]")].find((r) => r.querySelector(".row-title, .t, b")?.textContent.trim() === ${JSON.stringify(title)} || r.textContent.includes(${JSON.stringify(title)}))`;
     for (let i = 0; i < 15 && !(await js(`!!${find}`)); i++) await sleep(200);
@@ -119,7 +133,9 @@ export async function featureChecks(ctx) {
     }
   };
   const step = async (area, fn) => {
+    if (!ctx.areas.runs(area)) return;
     const started = Date.now();
+    ctx.note(`features/${area}`);
     await uiReady();
     try {
       await Promise.race([fn(), new Promise((_r, reject) => setTimeout(() => reject(new Error('timeout after 45 s')), 45_000))]);
@@ -138,22 +154,58 @@ export async function featureChecks(ctx) {
     await js(`[...document.querySelectorAll(".sidebar .nav")].find((n) => n.textContent.includes(${JSON.stringify(kvc.name)}))?.click()`);
     await sleep(600);
 
+    // ---- build kind (#445): a source run is a Developer build – labelled, update button stays, nothing installs by itself
+    await step('buildkind', async () => {
+      const tag = await js('(() => { const b = document.getElementById("app-version"); return b ? { text: b.textContent, dev: b.classList.contains("developer"), button: b.tagName === "BUTTON" } : null; })()');
+      if (!tag || !/Keevault \S+ · Developer( \([0-9a-f]{7,}\))?$/.test(tag.text) || !tag.dev) fail('buildkind', `version label of a developer build: ${JSON.stringify(tag)}`);
+      if (!tag?.button) fail('buildkind', 'update button missing');
+      const s = await js('window.pwsafe.invoke("state", []).then((r) => r.result && { developer: r.result.build?.developer, auto: r.result.autoUpdates })');
+      if (!s?.developer) fail('buildkind', 'state does not mark the build as Developer');
+      if (s?.auto) fail('buildkind', 'developer build would update automatically');
+    });
+
     // ---- clipboard: the copy button in an entry, the helper program (history markers), auto-type helper mode
     await step('clipboard', async () => {
       const login = await save({ type: 'login', title: 'Smoke Copy', username: `copy-${Date.now()}@contoso.com`, password: 'Cp-1' });
       changed();
       await sleep(700);
       await openItem('Smoke Copy');
-      await js('document.querySelector(".detail-pane .field-row .icon-btn[title=Kopieren], .detail-pane .field-row .icon-btn[title=Copy]")?.click()');
+      await js('document.querySelector(".detail-pane .act-row .act-label")?.click()');
       // The copy runs through Keevault-Update.exe (a process start): wait up to 3 s for the text.
       let arrived = false;
       for (let i = 0; i < 10 && !arrived; i++) { await sleep(300); arrived = await clipboardHas(login.username); }
       // Someone copying on the same machine meanwhile overwrites it: one more click before it counts as failed.
       if (!arrived) {
-        await js('document.querySelector(".detail-pane .field-row .icon-btn[title=Kopieren], .detail-pane .field-row .icon-btn[title=Copy]")?.click()');
+        await js('document.querySelector(".detail-pane .act-row .act-label")?.click()');
         for (let i = 0; i < 10 && !arrived; i++) { await sleep(300); arrived = await clipboardHas(login.username); }
       }
       if (!arrived) fail('clipboard', 'copy button in the entry did not reach the clipboard');
+      // #449: password row – action text "Copy securely", a click on the row copies through the same path and keeps it masked;
+      // the arrow menu offers show/hide, large display, typing; "Show" works and the large display opens (display only).
+      const pwRow = '[...document.querySelectorAll(".detail-pane .field")].find((f) => /^(Passwort|Password)$/.test(f.querySelector("label")?.textContent.trim()))?.querySelector(".act-row")';
+      const hv = await js(`(() => { const r = ${pwRow}; return r ? { act: r.querySelector(".act-label")?.textContent, more: r.querySelector(".act-more")?.getAttribute("aria-haspopup"), masked: !r.querySelector(".value.secret").classList.contains("revealed") } : null; })()`);
+      if (!hv || !/^(Sicher kopieren|Copy securely)$/.test(hv.act) || hv.more !== 'menu' || !hv.masked) fail('clipboard', `password row: ${JSON.stringify(hv)}`);
+      else {
+        await js(`${pwRow}.querySelector(".value.secret").click()`);
+        let pw = false;
+        for (let i = 0; i < 10 && !pw; i++) { await sleep(300); pw = await clipboardHas('Cp-1'); }
+        if (!pw) fail('clipboard', 'click on the password row did not reach the clipboard');
+        if (!(await js('!document.querySelector(".detail-pane .value.secret").classList.contains("revealed")'))) fail('clipboard', 'password became visible by copying');
+        await js(`${pwRow}.querySelector(".act-more").click()`);
+        await sleep(300);
+        const acts = await js('[...document.querySelectorAll(".context-menu [data-action]")].map((b) => b.dataset.action).join(",")');
+        if (acts !== 'reveal,big,type') fail('clipboard', `password menu entries: ${acts}`);
+        await js('document.querySelector(".context-menu [data-action=reveal]").click()');
+        await sleep(200);
+        if (!(await js('document.querySelector(".detail-pane .value.secret").classList.contains("revealed") && document.querySelector(".detail-pane .value.secret").textContent === "Cp-1"'))) fail('clipboard', 'menu entry Show did not reveal the password');
+        await js(`${pwRow}.querySelector(".act-more").click()`);
+        await sleep(300);
+        await js('document.querySelector(".context-menu [data-action=big]").click()');
+        await sleep(300);
+        if ((await js('[...document.querySelectorAll("dialog[open] .big-ch")].map((c) => c.textContent).join("")')) !== 'Cp-1') fail('clipboard', 'large display does not show the password');
+        await js('document.querySelector("dialog[open] .modal-footer button")?.click()');
+        await sleep(200);
+      }
       if (await js('!!document.querySelector(".toast.error")')) fail('clipboard', `error toast: ${await js('document.querySelector(".toast.error")?.textContent')}`);
       const marker = `kv-smoke-${Date.now()}`;
       if (await ctx.copyViaHelperExe(marker)) {
@@ -164,13 +216,14 @@ export async function featureChecks(ctx) {
       }
       // Auto-type through the helper: with empty input the mode runs and types nothing.
       if (process.platform === 'win32' && !(await ctx.typeViaHelperExe(''))) fail('autotype', 'Keevault-Update.exe --type not available');
+      await autotypeFallbackCheck((area, msg) => fail(area, msg)); // #352
     });
 
     // ---- main menu: entries open their dialogs, view switches take effect, no bottom-bar setting any more
     await step('mainmenu', async () => {
       const openMenu = async () => {
         await js('document.querySelector(".main-menu")?.remove(); document.querySelector(".menu-btn")?.click()');
-        await sleep(300);
+        await until(() => js('!!document.querySelector(".main-menu")'), 1000);
       };
       await openMenu();
       const actions = await js('[...document.querySelectorAll(".main-menu [data-action]")].map((b) => b.dataset.action).join(",")');
@@ -187,26 +240,22 @@ export async function featureChecks(ctx) {
       await openViewSettings();
       await js('document.querySelector("dialog[open] .view-settings .seg[aria-label=\'Admin-Modus anbieten\'] button")?.click()');
       await closeDialogs();
-      let foot = '';
-      for (let i = 0; i < 10 && !foot; i++) {
-        await sleep(300);
-        foot = String(await js('(() => { const f = document.querySelector(".sidebar-foot"); const a = f?.querySelector(".admin-foot"), help = f?.querySelector(".help-btn"); return a && help && Math.abs(a.getBoundingClientRect().top - help.getBoundingClientRect().top) < 4 ? a.getAttribute("aria-checked") : ""; })()'));
-      }
+      const foot = String(await until(() => js('(() => { const f = document.querySelector(".sidebar-foot"); const a = f?.querySelector(".admin-foot"), help = f?.querySelector(".help-btn"); return a && help && Math.abs(a.getBoundingClientRect().top - help.getBoundingClientRect().top) < 4 ? a.getAttribute("aria-checked") : ""; })()')));
       if (foot !== 'false') fail('mainmenu', `no admin switch next to Help after offering it (${foot})`);
       config.update({ adminOffered: false });
       changed();
-      await sleep(400);
+      await until(() => js('!document.querySelector(".sidebar-foot .admin-foot")'));
       for (const { action, what } of [{ action: 'settings', what: 'settings dialog' }, { action: 'generator', what: 'password generator' }, { action: 'health', what: 'password check' }]) {
         await openMenu();
         await js(`document.querySelector(".main-menu [data-action=${action}]")?.click()`);
-        await sleep(500);
+        await until(() => js(`!!document.querySelector("dialog[open]${action === 'settings' ? ' select[name=updateChannel]' : ''}")`));
         if (!(await js('!!document.querySelector("dialog[open]")'))) fail('mainmenu', `${what} did not open`);
         if (action === 'settings' && !(await js('!!document.querySelector("dialog[open] select[name=updateChannel] option[value=beta]")'))) fail('mainmenu', 'settings without the update channel (Stable / Early Access)');
         await closeDialogs();
-        await sleep(200);
       }
-      // Design in the menu; transparency only under Settings → View.
-      const segClick = async (label, text) => {
+      // Design in the menu; transparency only under Settings → View. `applied`: the switch has reached the settings and the
+      // window; the checks after it ask again.
+      const segClick = async (label, text, applied) => {
         if (label === 'Design') {
           await openMenu();
           await js(`[...document.querySelectorAll('.main-menu .seg[aria-label="${label}"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
@@ -214,7 +263,7 @@ export async function featureChecks(ctx) {
           await openViewSettings();
           await js(`[...document.querySelectorAll('dialog[open] .view-settings .seg[aria-label="${label}"] button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
         }
-        await sleep(400);
+        await until(applied);
         await closeDialogs();
       };
       await openViewSettings();
@@ -233,12 +282,12 @@ export async function featureChecks(ctx) {
       await closeDialogs();
       // The update window (Keevault-Update.exe) gets the app's own theme, not Windows' app mode.
       const updaterTheme = () => { const a = ctx.updaterArgs(); return a[a.indexOf('--theme') + 1]; };
-      await segClick('Design', 'Dunkel');
+      await segClick('Design', 'Dunkel', () => config.get().theme === 'dark' && updaterTheme() === 'dark');
       if (config.get().theme !== 'dark') fail('mainmenu', `theme not switched (${config.get().theme})`);
       if (updaterTheme() !== 'dark') fail('mainmenu', `update window not dark with the dark theme (${ctx.updaterArgs().join(' ')})`);
-      await segClick('Design', 'Hell');
+      await segClick('Design', 'Hell', () => config.get().theme === 'light' && updaterTheme() === 'light');
       if (updaterTheme() !== 'light') fail('mainmenu', `update window not light with the light theme (${ctx.updaterArgs().join(' ')})`);
-      await segClick('Design', 'System');
+      await segClick('Design', 'System', () => config.get().theme === 'system');
       // Small window: the menu ends inside the window and scrolls. Checked before the transparency is switched – a
       // window resized right after switching the see-through material kept its page at the small size.
       const [w, h] = win.getSize();
@@ -251,10 +300,10 @@ export async function featureChecks(ctx) {
       await resizeTo(w, h, "mainmenu");
       // The resize event arrives late and closes open context menus – wait until it is through.
       await sleep(1000);
-      await segClick('Transparenz', 'Stark');
+      await segClick('Transparenz', 'Stark', () => config.get().transparency === 'strong' && Math.abs(win.getOpacity() - 0.95) <= 0.01);
       if (config.get().transparency !== 'strong') fail('mainmenu', `transparency not switched (${config.get().transparency})`);
       if (Math.abs(win.getOpacity() - 0.95) > 0.01) fail('mainmenu', `strong transparency is not 95 % (${win.getOpacity()})`);
-      await segClick('Transparenz', 'Leicht');
+      await segClick('Transparenz', 'Leicht', () => config.get().transparency === 'light' && Math.abs(win.getOpacity() - 0.985) <= 0.01);
       // Light (the default) is barely see-through.
       if (Math.abs(win.getOpacity() - 0.985) > 0.01) fail('mainmenu', `light transparency is not 98.5 % (${win.getOpacity()})`);
     });
@@ -298,9 +347,9 @@ export async function featureChecks(ctx) {
       const all = String(await visible());
       await js('document.querySelector(".vault-find .icon-btn").click(); const q = document.querySelector(".vault-find input"); q.value = "Team-Datei"; q.dispatchEvent(new Event("input"))');
       await sleep(300);
-      // Open, the field spans the header from its left edge up to the magnifier (not a stub over a cut label).
+      // Open, the field spans the header up to the magnifier. Final size: transitions do not run in a never-shown window.
       const box = JSON.parse(await js(`JSON.stringify((() => {
-        const r = (el) => el.getBoundingClientRect();
+        document.querySelector(".vault-find").getAnimations({ subtree: true }).forEach((a) => a.finish()); const r = (el) => el.getBoundingClientRect();
         const sec = r(document.querySelector(".vault-find").closest(".nav-section")), q = r(document.querySelector(".vault-find input")), b = r(document.querySelector(".vault-find .icon-btn"));
         return { left: Math.round(q.left - sec.left), gap: Math.round(b.left - q.right), width: Math.round(q.width), section: Math.round(sec.width) };
       })())`));
@@ -312,6 +361,10 @@ export async function featureChecks(ctx) {
       for (let i = 0; i < 10 && again !== all; i++) { await sleep(200); again = String(await visible()); }
       if (again !== all) fail('vaultsearch', 'Esc did not show all vaults again');
     });
+
+    // ---- sharing hint in the members view of a file vault (#446)
+    await step('sharehint', () => shareHintCheck({ js, fail: (m) => fail('sharehint', m), home: kvc.name }));
+    await step('exthint', () => extensionHintCheck({ js, fail: (m) => fail('exthint', m), simulate: ctx.simulateExtensionClients }));
 
     // ---- vault order: drag a vault row before another one – the sidebar shows and keeps the new order
     await step('vaultorder', async () => {
@@ -478,6 +531,14 @@ export async function featureChecks(ctx) {
       const shown = await js('document.querySelector(".detail-pane")?.innerText || ""');
       if (!/Anmeldung über|Signs in with/.test(shown) || !shown.includes('Smoke Domain') || !shown.includes('CONTOSO\\smoke')) fail('loginlink', `linked login not shown: ${shown.slice(0, 200)}`);
       if (!(await js('[...document.querySelectorAll(".detail-pane .field label")].some((l) => /^(Passwort|Password)$/.test(l.textContent.trim()))'))) fail('loginlink', 'password of the linked login missing in the detail view');
+      // #449: the URL row says "Open and fill", has a menu with "Copy address" and the action button is keyboard-reachable
+      // (the click runs the existing open path, not opened here).
+      const uh = await js('(() => { const r = document.querySelector(".detail-pane .act-row a.url")?.closest(".act-row"); return r ? { act: r.querySelector(".act-label").textContent, tab: r.querySelector(".act-label").tabIndex, menu: !!r.querySelector(".act-more") } : null; })()');
+      if (!uh || !/^(Öffnen und ausfüllen|Open and fill)$/.test(uh.act) || uh.tab !== 0 || !uh.menu) fail('loginlink', `URL row: ${JSON.stringify(uh)}`);
+      globalThis.kvSmokeOpened = 0;
+      await js('document.querySelector(".detail-pane .act-row a.url").click()');
+      await sleep(500);
+      if (globalThis.kvSmokeOpened !== 1) fail('loginlink', `one click on the URL opened ${globalThis.kvSmokeOpened} times, expected 1`);
       // Editor: the link is chosen, own user name and password are hidden; the stored entry keeps no copy.
       await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
       await sleep(300);
@@ -506,11 +567,12 @@ export async function featureChecks(ctx) {
       // In use by another entry (#34): the domain login cannot be deleted until the link is gone.
       const refused = await api.delete(kvc.id, domain.id).then(() => '', (e) => e.message);
       if (!/Smoke Intranet/.test(refused)) fail('loginlink', `login in use was deleted or without naming its user (${refused})`);
-      // Microsoft link: opening the website starts the one-click sign-in for exactly that Microsoft account.
+      // Microsoft link: opening the website starts no one-click job (#425): the foreign portal's tab never gets it, a
+      // later trusted tab would. The Microsoft bar offers the accounts there.
       ctx.clearSignIns();
-      await api.openWithMicrosoft({ containerId: kvc.id, id: partner.id, url: 'https://partner.contoso.com' });
-      const job = await ctx.signInFor('login.microsoftonline.com');
-      if (job?.username !== 'smoke-link@contoso.onmicrosoft.com' || ctx.lastAdminUrl() !== 'https://partner.contoso.com') fail('loginlink', `Microsoft link: sign-in job ${job?.username}, opened ${ctx.lastAdminUrl()}`);
+      const opened = await api.openWithMicrosoft({ containerId: kvc.id, id: partner.id, url: 'https://partner.contoso.com' });
+      const job = await ctx.signInFor('login.microsoftonline.com', 'smoke:1');
+      if (job || opened?.signIn !== false || ctx.lastAdminUrl() !== 'https://partner.contoso.com') fail('loginlink', `Microsoft link: sign-in job ${job?.username || 'none'}, opened ${ctx.lastAdminUrl()}`);
       if (await api.openWithMicrosoft({ containerId: kvc.id, id: intranet.id, url: 'https://intranet.contoso.com' }).then(() => true, () => false)) fail('loginlink', 'one-click Microsoft sign-in for a domain-linked login');
       ctx.clearSignIns();
     });
@@ -623,6 +685,10 @@ export async function featureChecks(ctx) {
       await sleep(600);
     });
 
+    // ---- first start (#399): one wizard, nothing starts over after it (desktop/smoke-first-start.js)
+    await step('firstwizard', () => firstStartCheck({ js, sleep, api, config, changed, kvc, ensurePin: ctx.ensurePin, fail }));
+    await step('recoverykey', () => recoveryKeyCheck({ js, sleep, api, config, changed, kvc, ensurePin: ctx.ensurePin, fail: (m) => fail('recoverykey', m) }));
+
     // ---- start: admin mode is always off after a start (#8)
     await step('adminstart', async () => {
       config.update({ adminTools: true });
@@ -674,6 +740,8 @@ export async function featureChecks(ctx) {
       if (!r.free) fail('version', 'the end of the entry lies under the version');
     });
 
+    await step('versionchannel', () => versionChannelCheck({ js, sleep, fail, config, changed }));
+
     // ---- list: right-click on the empty area, entry without the removed bottom toolbar
     await step('list', async () => {
       await save({ type: 'login', title: 'Smoke Copy', username: 'list@contoso.com', password: 'x' });
@@ -696,27 +764,27 @@ export async function featureChecks(ctx) {
       const front = () => ({ visible: win.isVisible(), top: win.isAlwaysOnTop() });
       win.hide();
       const asked = ctx.confirmAgentRead({ agent: 'smoke-agent', title: 'Smoke Front', vault: 'Smoke' });
-      await sleep(600);
+      await until(() => js('!!document.querySelector("dialog[open] .question.agent-read")'));
       const during = front();
       if (!during.visible || !during.top) fail('agentfront', `read request did not come to the front: ${JSON.stringify(during)}`);
       if (!(await js('!!document.querySelector("dialog[open] .question.agent-read")'))) fail('agentfront', 'read request dialog not shown');
       await js('[...document.querySelectorAll("dialog[open] button")].find((b) => b.closest("dialog").querySelector(".question") && /Ablehnen|Deny/.test(b.textContent))?.click()');
       if ((await Promise.race([asked, sleep(3000).then(() => 'timeout')])) !== 'deny') fail('agentfront', 'deny did not answer the request');
-      await sleep(200);
+      await until(() => !win.isAlwaysOnTop(), 200);
       if (win.isAlwaysOnTop()) fail('agentfront', 'window stays on top after the answer');
       // #331: a passkey sign-in names the account it signs in with.
       const pk = ctx.confirmAgentPasskey({ agent: 'smoke-agent', title: 'Microsoft', username: 'smoke.user@contoso.com', vault: 'Smoke', rpId: 'login.microsoft.com', origin: 'https://login.microsoft.com' });
-      await sleep(600);
+      await until(() => js('!!document.querySelector("dialog[open] .question.agent-passkey")'));
       const user = await js('document.querySelector("dialog[open] .question.agent-passkey .q-target-user")?.textContent || ""');
       if (user !== 'smoke.user@contoso.com') fail('agentfront', `passkey request without the user name: "${user}"`);
       await js('[...document.querySelectorAll("dialog[open] button")].find((b) => b.closest("dialog").querySelector(".question") && /Ablehnen|Deny/.test(b.textContent))?.click()');
       if ((await Promise.race([pk, sleep(3000).then(() => 'timeout')])) !== false) fail('agentfront', 'deny did not answer the passkey request');
-      await sleep(200);
+      await questionsGone(js);
       await microsoftChoiceCheck({ js, sleep, fail, chooseAgentMicrosoft: ctx.chooseAgentMicrosoft });
       win.hide();
       let open = false;
       const waiting = ctx.waitForUnlock({ ms: 4000, isOpen: () => open });
-      await sleep(600);
+      await until(() => front().visible && front().top, 600);
       const locked = front();
       if (!locked.visible || !locked.top) fail('agentfront', `locked: unlock screen did not come to the front: ${JSON.stringify(locked)}`);
       open = true;
@@ -729,6 +797,7 @@ export async function featureChecks(ctx) {
     await step('agententer', () => deliberateAnswerCheck({ ...ctx, fail }));
     await step('agentrevoke', () => agentAdmissionCheck({ ...ctx, fail }));
     await step('agentwrite', () => writeDetailsCheck({ ...ctx, fail }));
+    await step('agentlock', () => lockRefusesCheck({ ...ctx, fail, kvc }));
 
     // ---- AI agents: "never ask again" for one entry shows "Revoke AI approval" in its context menu, which removes it
     await step('agenttrust', async () => {
@@ -756,6 +825,10 @@ export async function featureChecks(ctx) {
       await js('document.querySelector(".context-menu")?.remove()');
     });
 
+    await step('passkeypin', () => passkeyPinSettingCheck({ ...ctx, fail, js, sleep })); // #439
+    await step('passkeypinagent', () => passkeyPinAgentCheck({ ...ctx, fail, js, sleep }));
+    await step('passkeypinwindows', () => passkeyPinWindowsCheck({ ...ctx, fail, js, sleep }));
+    await step('passkeypinbrowser', () => passkeyPinBrowserCheck({ ...ctx, fail }));
     // ---- folders: drag a folder onto another one – it moves in with its entries; never into itself
     await step('folderdrag', async () => {
       await save({ type: 'login', title: 'Smoke in A', username: 'a', password: 'x', folder: 'Smoke A' });
@@ -834,6 +907,8 @@ export async function featureChecks(ctx) {
     });
 
     await step('multiclear', () => multiClearCheck({ js, sleep, fail, vaultName: kvc.name }));
+    await step('deleterefused', () => deleteRefusedCheck({ js, fail, vault, changed, kvc }));
+    await step('deleterace', () => deleteRaceCheck({ js, fail, vault, changed, kvc }));
     // ---- passkey: drag it from the entry onto another login in the list – it moves there (after one confirmation)
     // ---- AI agents (#308, #315): passkey sign-ins and Microsoft sign-ins for tools are two switches, off by default
     await step('mcpextra', async () => {
@@ -863,7 +938,7 @@ export async function featureChecks(ctx) {
     // ---- help: "Report a bug" and "Feature request" lead to the form on keevault.de (#311)
     await step('helpfeedback', async () => {
       await js('document.querySelector(".sidebar-foot .help-btn")?.click()');
-      await sleep(400);
+      await until(() => js('!!document.querySelector("dialog[open] [data-feedback]")'));
       const fb = String(await js('[...document.querySelectorAll("dialog[open] [data-feedback]")].map((b) => b.dataset.feedback).join()'));
       if (fb !== 'bug,feature') fail('helpfeedback', `help without "Report a bug" / "Feature request" (${fb})`);
       await closeDialogs();
@@ -970,6 +1045,17 @@ export async function featureChecks(ctx) {
       await sleep(400);
       await js('[...document.querySelectorAll(".list li.row-item[data-key]")].find((x) => x.textContent.includes("Grafana"))?.click()');
       await sleep(600);
+      // #453: in the normal view the passkey card has no move/remove buttons and cannot be dragged; both only in edit mode.
+      const view = await js('JSON.stringify({ rows: document.querySelectorAll(".detail-pane .passkey-row").length, buttons: document.querySelectorAll(".detail-pane .passkey-row .icon-btn").length, drag: document.querySelectorAll(".detail-pane .passkey-row[draggable=true]").length })');
+      const v = JSON.parse(view);
+      if (!v.rows) { fail('passkeydrag', 'no passkey card in the detail view'); return; }
+      if (v.buttons || v.drag) fail('passkeydrag', '#453: passkey card offers actions in the normal view: ' + view);
+      await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
+      await sleep(300);
+      await js('document.querySelector(".context-menu [data-action=edit]")?.click()');
+      await sleep(600);
+      const edit = JSON.parse(await js('JSON.stringify({ move: !!document.querySelector(".detail-pane .passkey-row .icon-btn[title*=verschieben], .detail-pane .passkey-row .icon-btn[title*=Move], .detail-pane .passkey-row .icon-btn[title*=another]"), trash: !!document.querySelector(".detail-pane .passkey-row .icon-btn[title*=entfernen], .detail-pane .passkey-row .icon-btn[title*=Remove]"), drag: !!document.querySelector(".detail-pane .passkey-row[draggable=true]") })'));
+      if (!edit.move || !edit.trash || !edit.drag) fail('passkeydrag', '#453: edit mode lacks move/remove/drag for the passkey: ' + JSON.stringify(edit));
       const r = await js(`(() => {
         const src = document.querySelector(".detail-pane .passkey-row[draggable=true]");
         const dst = [...document.querySelectorAll(".list li.row-item[data-key]")].find((x) => x.textContent.includes("Smoke PK Ziel"));
@@ -1089,6 +1175,15 @@ export async function featureChecks(ctx) {
       if (fw) {
         const used = await api.linkedEntries(kvc.id, fw.id);
         if (!used.some((e) => e.title === 'Smoke WIN' && e.uses.includes('rdp'))) fail('devices', `linked assets of a login: ${JSON.stringify(used)}`);
+        // #451: the button shows only for a login that is used – on for the firewall, off for a login nothing links to.
+        const plain = await save({ type: 'login', title: 'Smoke ohne Assets', username: 'x', password: 'y' });
+        const showsButton = async (title, folder) => {
+          await openItem(title, folder); for (let i = 0; i < 10 && !(await js('document.querySelector(".detail-pane h2")?.textContent.includes(' + JSON.stringify(title) + ')')); i++) await sleep(300);
+          await sleep(300); return js('!!document.querySelector(".detail-pane .linked-assets")');
+        };
+        if (!(await showsButton(fw.title, fw.folder))) fail('devices', '#451: linked-assets button missing on a login that assets use');
+        if (await showsButton('Smoke ohne Assets')) fail('devices', '#451: linked-assets button shown on a login without linked assets');
+        await vault.deleteItem(kvc.id, plain.id); created.splice(created.indexOf(plain.id), 1); // gone at once: without a license a vault holds 10 entries
       }
       // Auto-type on an asset (#316): Ctrl+Shift+P types the linked RDP account's password (the server has none itself).
       if (fw) {
@@ -1104,23 +1199,33 @@ export async function featureChecks(ctx) {
       if (fw && !(await clipboardHas((await vault.getItem(kvc.id, fw.id)).password))) fail('devices', 'RDP with Credential Guard: the clipboard does not hold the password');
       // … and a window explains why there is no automatic sign-in and what to do (#338): the account, Ctrl+V.
       const rdpHint = ctx.hintsShown.find((h) => h.kind === 'rdp');
-      if (fw && (!rdpHint || rdpHint.user !== (await vault.getItem(kvc.id, fw.id)).username || !rdpHint.content.steps.some((x) => /Strg\+V/.test(x)) || !/Credential Guard/.test(rdpHint.content.why))) fail('devices', `RDP with Credential Guard: no explanation window (${JSON.stringify(rdpHint?.content?.title)})`);
+      if (fw && (!rdpHint || rdpHint.user !== (await vault.getItem(kvc.id, fw.id)).username || !rdpHint.content.steps.some((x) => /Strg\+V/.test(x)) || !/Credential Guard/.test(rdpHint.content.why) || (/\d/.test(rdpHint.content.note) && !rdpHint.content.note.includes('120')))) fail('devices', `RDP with Credential Guard: no explanation window, or not the longer clearing time of #349 (${JSON.stringify(rdpHint?.content)})`);
       // Auto-type into Windows' credential dialog: the same kind of window, naming the value that was copied.
       const secureHint = ctx.hintContent({ kind: 'secure', what: 'u' });
       if (!/Benutzername/.test(secureHint.title) || secureHint.steps.length !== 3 || !/Windows-Sicherheit/.test(secureHint.why)) fail('devices', `auto-type hint for the credential dialog: ${JSON.stringify(secureHint)}`);
       // The extension's copies go through the app's protected clipboard (#337).
       if (!(await ctx.browserCopy('kv-smoke-ext-copy')) || !(await clipboardHas('kv-smoke-ext-copy'))) fail('devices', 'extension copy not on the protected clipboard');
+      await versionMixCheck(ctx, fail, clipboardHas); // #347
       if (!(await methods(lnx.id)).includes('ssh') || (await methods(lnx.id)).includes('rdp')) fail('devices', 'Linux server: SSH instead of RDP expected');
       if (!(await methods(vmw.id)).includes('mgmt')) fail('devices', 'VMware VM without vSphere client');
       if ((await vault.getItem(kvc.id, lnx.id)).server.port !== 22) fail('devices', 'Linux server: default port not 22');
       const conn = (id, method) => api.connectServer({ containerId: kvc.id, id, method });
       if ((await conn(win1.id, 'rdp')).method !== 'rdp') fail('devices', 'RDP failed');
       if (!(await conn(lnx.id, 'ssh')).copied) fail('devices', 'SSH: password not handed over');
+      const tv = await save({ type: 'server', title: 'Smoke TV', server: { kind: 'windows', host: 'tv', tvId: '123456789', tvPassword: 'tv-secret' } });
+      if (!(await conn(tv.id, 'teamviewer')).copied) fail('devices', 'TeamViewer: password not on the clipboard (#374)');
       if ((await conn(vmw.id, 'mgmt')).method !== 'mgmt') fail('devices', 'management page failed');
       if ((await conn(az.id, 'bastion')).method !== 'bastion') fail('devices', 'Bastion failed');
       ctx.clearSignIns();
       const evil = await save({ type: 'server', title: 'Smoke EVIL', server: { kind: 'linux', host: '-oProxyCommand=calc' } });
       if (await conn(evil.id, 'ssh').then(() => true, () => false)) fail('devices', 'SSH option injection not refused');
+      // #371: an RDP host with a line break (would add .rdp settings / shift the helper's fields) or an option is refused.
+      // The entry of the check above gets the new hosts: the vault without a license holds only 10 entries, more entries would not fit.
+      let bad = evil;
+      for (const host of ['10.9.0.9\r\ndrivestoredirect:s:*', '/admin', 'srv /w:1']) {
+        bad = await save({ ...(bad ? { id: bad.id } : {}), type: 'server', title: 'Smoke EVIL', server: { kind: 'windows', host } });
+        if (await conn(bad.id, 'rdp').then(() => true, () => false)) fail('devices', `RDP host ${JSON.stringify(host)} not refused`);
+      }
       const foreign = (await vault.summaries()).find((x) => x.containerId !== kvc.id && x.type === 'login');
       if (foreign && await api.save(kvc.id, { type: 'server', title: 'X', server: { host: 'x', rdpLink: foreign.key } }).then(() => true, () => false)) fail('devices', 'link into another vault saved');
       // Devices only in their tab; the form's link picker searches.
@@ -1228,6 +1333,8 @@ export async function featureChecks(ctx) {
       config.update({ adminPim: false });
     });
 
+    await step('offlinedelete', () => offlineDeleteCheck({ vault, kvc, fail }));
+
     // ---- Windows locked (#28): the app locks too and asks for the PIN again (Windows' lock state is simulated)
     await step('winlock', async () => {
       process.env.KVPWSAFE_TEST_WINDOWS_LOCKED = '0';
@@ -1251,6 +1358,9 @@ export async function featureChecks(ctx) {
       await js(`[...document.querySelectorAll(".sidebar .nav")].find((n) => n.textContent.includes(${JSON.stringify(kvc.name)}))?.click()`);
       await sleep(500);
     });
+
+    // ---- release signing (#378, #417): refused in tests, the approval dialog with test files, counter-tests
+    await step('releasesign', () => releaseSignCheck({ api, fail, sleep, release: ctx.release }));
 
     // ---- PIM on the unlock screen: off by default, switched on in Settings → View, then shown when locked
     // (last check: it locks the app and unlocks it again with the PIN)

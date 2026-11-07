@@ -4,6 +4,38 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## Unveröffentlicht
+- (noch leer)
+
+### English
+- (empty for now)
+
+## 0.9.29 – 2026-11-07
+- Jede Passkey-Nutzung verlangt die App-PIN: bei der Anmeldung über die Browser-Erweiterung, über den Windows-Passkey-Anbieter und bei KI-Agenten. Die PIN gilt für genau eine Nutzung und wird in der App oder im Fenster der Erweiterung eingegeben, nie auf einer Webseite. Ohne gesetzte PIN wird kein Passkey verwendet. Neue Einstellung „PIN vor jeder Passkey-Nutzung“ (Sicherheit): standardmäßig an, abschaltbar mit Warnung; die Richtlinie RequirePin hält sie fest an. Die Browser-Erweiterung muss auf 0.9.29 aktualisiert werden, ältere können mit der App nicht mehr signieren (#439).
+- Versionsanzeige unten rechts nennt den Update-Kanal, zum Beispiel „Keevault 0.9.29 · Early Access“ oder „· Stable“. Maßgeblich ist die wirksame Einstellung samt Richtlinie; ein Wechsel in den Einstellungen wirkt sofort ohne Neustart (#389).
+- Eintragsansicht: Ein Klick auf Benutzername oder Passwort kopiert den Wert. Ein Klick auf die Adresse öffnet sie und füllt die Anmeldung aus. Beim Überfahren mit der Maus steht daneben, was der Klick tut („Öffnen und ausfüllen“) (#443).
+- Versionsanzeige: Selbst gebaute Entwicklerversionen zeigen „Developer (Commit)“ statt Early Access oder Stable. Sie installieren keine Updates von selbst; ein Update kommt nur auf Klick (#445).
+- Datei-Tresore: Mehrere Sicherheitsverbesserungen bei geteilten Datei-Tresoren. Was sie schützen und was nicht, steht in der Wissensdatenbank unter „Datei-Tresore teilen“.
+- Datei-Tresore: Ist ein geteilter Datei-Tresor abgelehnt, bietet die App den Knopf „Aus bekanntem Stand reparieren“ an. Hast du die Datei nicht selbst geändert, sag deiner IT Bescheid (#446).
+- Sicherheitsverbesserungen bei der Microsoft-Anmeldung und in der Browser-Erweiterung.
+- Remotedesktop unter Credential Guard: Das kopierte Passwort bleibt mindestens 120 Sekunden in der Zwischenablage, damit du es rechtzeitig einfügen kannst (#349).
+- Beim Update beendet Keevault die Verbindungen zur Browser-Erweiterung und zu KI-Agenten sofort, statt darauf zu warten (#351).
+- Gelöschte Einträge bleiben gelöscht, auch wenn im selben Moment eine Aktualisierung läuft (#408). Nennt die App den Grund, warum ein Löschen nicht geht, steht er jetzt im Kontextmenü und bei Mehrfachauswahl (#407).
+- Systemdialoge der App nennen sie jetzt „Keevault“ (#74).
+
+### English
+- Every passkey use asks for the app PIN: sign-in through the browser extension, the Windows passkey provider and AI agents. The PIN counts for exactly one use and is typed in the app or in the extension's window, never on a web page. Without a PIN set no passkey is used. New setting "PIN before every passkey use" (Security): on by default, can be switched off with a warning; the RequirePin policy keeps it on. The browser extension must be updated to 0.9.29, older ones can no longer sign with the app (#439).
+- Entry view: a click on the user name or the password copies the value. A click on the address opens it and fills in the sign-in. Hovering shows a hint next to it on what the click does ("Open and fill") (#443).
+- Version label: self-built developer versions show "Developer (Commit)" instead of Early Access or Stable. They do not install updates by themselves; an update comes only on click (#445).
+- File vaults: several security improvements for shared file vaults. The knowledge base article "Sharing file vaults" explains what they protect and what they do not.
+- File vaults: when a shared file vault has been refused, the app offers the button "Repair from known state". If you did not change the file yourself, tell your IT department (#446).
+- Security improvements in the Microsoft sign-in and in the browser extension.
+- Remote desktop under Credential Guard: the copied password stays on the clipboard for at least 120 seconds, so you can paste it in time (#349).
+- On an update, Keevault now ends the connections to the browser extension and to AI agents at once instead of waiting (#351).
+- Deleted entries stay deleted, even if an update runs at the same moment (#408). Where the app gives a reason why a delete is not possible, it now shows it in the context menu and for multi-selection (#407).
+- Native dialogs of the app now call it "Keevault" (#74).
+- The version label at the bottom right names the update channel, for example "Keevault 0.9.29 · Early Access" or "· Stable". The effective setting counts, policy included; a change in the settings shows right away without a restart (#389).
+
 ## 0.9.28 – 2026-11-05
 - Mehrfachauswahl: „Auswahl aufheben“ wirkt wieder, in der Detailspalte und im Kontextmenü. Bisher blieb die Markierung stehen (#330).
 - KI-Agenten: Anfragen bestätigst du jetzt bewusst. Die Schaltfläche wird nach gut einer Sekunde aktiv, und in der Microsoft-Kontoauswahl wählst du das Konto selbst aus der Liste. Enter im Suchfeld meldet nicht mehr an (#368).

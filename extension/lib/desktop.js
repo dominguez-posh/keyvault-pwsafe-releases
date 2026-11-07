@@ -97,9 +97,13 @@ function request(cmd, args = {}, timeout = 30_000) {
   });
 }
 
+// The app version this extension needs (passkeys and protected copy, see the caps checks below); sent in hello so the app
+// can say "update the app" itself when it is older (#454).
+const MIN_APP_VERSION = '0.9.29';
+
 function ready() {
   // The first hello may wait for the approval in the desktop app.
-  if (!hello) hello = request('hello', {}, 120_000).catch((e) => { hello = null; throw e; });
+  if (!hello) hello = request('hello', { extVersion: chrome.runtime.getManifest().version, minApp: MIN_APP_VERSION }, 120_000).catch((e) => { hello = null; throw e; });
   return hello;
 }
 
@@ -145,7 +149,7 @@ const changedHere = (result) => {
 export async function status() {
   try {
     const s = await snapshot();
-    return { connected: true, version: s.version, opened: !!s.opened, pinSet: !!s.pinSet };
+    return { connected: true, version: s.version, opened: !!s.opened, pinSet: !!s.pinSet, ...(s.passkeyPin ? { passkeyPin: s.passkeyPin } : {}) };
   } catch (e) {
     return { connected: false, error: e.message, reason: e.name };
   }
@@ -162,7 +166,7 @@ export const app = {
   },
   getItem: (containerId, itemId) => call('item', { containerId, itemId }),
   /** Admin tools: the account of a sign-in the user just started in the app, only for this host (else null). */
-  signIn: (host) => call('signIn', { host }),
+  signIn: (host, tab) => call('signIn', { host, tab }),
   signInDone: (host) => call('signInDone', { host }),
   saveItem: async (containerId, item, { expectedVersion } = {}) => changedHere(await call('save', { containerId, item, expectedVersion })),
   deleteItem: async (containerId, itemId) => changedHere(await call('delete', { containerId, itemId })),
@@ -173,11 +177,20 @@ export const app = {
     const list = await call('passkeyCandidates', { rpId });
     return list.filter((c) => filterPasskeys([c.passkey], rpId, allowCredentials).length);
   },
+  /** #439: the app signs (an app before 0.9.29 has no such command: the answer says so, there is no local fallback). */
+  passkeySign: async (args) => {
+    if (!(await ready()).caps?.includes('passkeySign')) throw new Error(t('Die Keevault-App ist zu alt für Passkeys in der Erweiterung – bitte die App aktualisieren (ab Version 0.9.29)'));
+    return call('passkeySign', args);
+  },
   /** Reloads the vaults from Azure in the app (popup "Reload"). */
   refresh: async () => changedHere(await call('refresh', {}, 120_000)),
   focus: () => call('focus'),
   /** Copies through the app: kept out of Windows' clipboard history and cloud clipboard, cleared after a while (#337). */
-  copy: (text) => call('copy', { text }),
+  // An app without the copy capability (before 0.9.27) says so clearly. Never a fallback to the browser's clipboard.
+  copy: async (text) => {
+    if (!(await ready()).caps?.includes('copy')) throw new Error(t('Die Keevault-App ist zu alt zum geschützten Kopieren – bitte die App aktualisieren (ab Version 0.9.27)'));
+    return call('copy', { text });
+  },
   lock: async () => changedHere(await call('lock')),
   /** Unlocks the app with its PIN (silent sign-in in the app; a Microsoft window only if the tenant insists). */
   unlockPin: async (pin) => changedHere(await call('unlockPin', { pin }, 120_000)),

@@ -87,6 +87,7 @@
 
   let inline = null; // { pageId, kind, requestId, candidates, site, containers, containerId, choice }
   let pill = null; // the tag element (name kept from the earlier bar)
+  let pillGuard = null; // its "Use passkey" / "Save" button has really been visible long enough for a click (#401)
   const SHIELD_PATH = 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z';
   // The Keevault logo (blue tile, white shield, keyhole) drawn inline: no web-accessible image a page could probe.
   // Waiting: the shield breathes and a light sweeps over the tile; success: green stamp. Locked: small padlock.
@@ -113,6 +114,8 @@
     if (!pill) return;
     const gone = pill;
     pill = null;
+    pillGuard?.stop();
+    pillGuard = null;
     gone.classList.add('hide');
     setTimeout(() => gone.remove(), 320);
   }
@@ -132,54 +135,8 @@
     return row;
   }
 
-  /** App locked with a PIN: PIN field in the tag; after unlocking the tag continues with the passkeys (or saving). */
-  function showPinPill(pageId, info) {
-    if (info.ui) texts = info.ui;
-    inline = { pageId, kind: 'unlock', requestId: info.requestId, candidates: [], site: info.site, containers: [] };
-    const tag = newTag(texts.lockedTitle || 'Keevault');
-    const sub = el('div', 'sub', texts.pinPrompt || 'PIN');
-    const pin = el('input', 'pin');
-    Object.assign(pin, { type: 'password', inputMode: 'numeric', autocomplete: 'off', placeholder: texts.pin || 'PIN' });
-    pin.setAttribute('aria-label', texts.pin || 'PIN');
-    const go = el('button', 'primary', texts.unlockButton || 'OK');
-    go.type = 'button';
-    const submit = async () => {
-      const cur = inline;
-      if (!cur || !pin.value) return;
-      go.disabled = true;
-      pin.disabled = true;
-      sub.textContent = texts.passkeyWait || '…';
-      try {
-        const r = await call('cs:webauthnUnlock', { requestId: cur.requestId, pin: pin.value });
-        if (r.inline) showPasskeyPill(cur.pageId, r.inline);
-        else {
-          inline = null;
-          hidePill();
-          toPage({ id: cur.pageId, fallback: true });
-        }
-      } catch (err) {
-        sub.textContent = err.message;
-        tag.classList.remove('shake');
-        void tag.offsetWidth; // restart the animation
-        tag.classList.add('shake');
-        go.disabled = false;
-        pin.disabled = false;
-        pin.value = '';
-        pin.focus();
-      }
-    };
-    go.addEventListener('click', (e) => { if (e.isTrusted) submit(); });
-    pin.addEventListener('keydown', (e) => { if (e.isTrusted && e.key === 'Enter') submit(); });
-    const head = el('div', 'head');
-    head.append(el('div', 'title', texts.lockedTitle || 'Keevault'), sub);
-    tag.append(shieldBadge(true), head, pin, go, links());
-    ui().append(tag);
-    pin.focus({ preventScroll: true });
-  }
-
   function showPasskeyPill(pageId, info) {
     if (info.ui) texts = info.ui;
-    if (info.kind === 'unlock') return showPinPill(pageId, info);
     inline = { pageId, kind: info.kind || 'get', requestId: info.requestId, candidates: info.candidates || [], site: info.site, containers: info.containers || [], containerId: info.defaultContainer };
     const create = inline.kind === 'create';
     inline.choice = inline.candidates[0];
@@ -191,8 +148,8 @@
     const sw = el('button', 'switch');
     sw.type = 'button';
     const who = el('span', 'who');
-    const main = el('span', 'main');
-    const sub = el('span', 'sub');
+    const main = el('span', 'main pc');
+    const sub = el('span', 'sub pc');
     who.append(main, sub);
     sw.append(who, el('span', 'chev', '⌄'));
     const list = el('div', 'list');
@@ -200,11 +157,11 @@
     const draw = () => {
       if (create) {
         const vault = inline.containers.find((c) => c.id === inline.containerId);
-        main.textContent = vault?.name || '';
-        sub.textContent = info.alreadyRegistered ? (texts.alreadySaved || '') : (info.user || info.rpName || '');
+        main.dataset.t = vault?.name || '';
+        sub.dataset.t = info.alreadyRegistered ? (texts.alreadySaved || '') : (info.user || info.rpName || '');
       } else {
-        main.textContent = inline.choice?.userName || texts.noUser || '';
-        sub.textContent = [inline.choice?.title, inline.choice?.container].filter(Boolean).join(' · ');
+        main.dataset.t = inline.choice?.userName || texts.noUser || '';
+        sub.dataset.t = [inline.choice?.title, inline.choice?.container].filter(Boolean).join(' · ');
       }
     };
     const fill = () => {
@@ -215,7 +172,7 @@
       for (const o of options) {
         const b = el('button', `opt${o.on ? ' on' : ''}`);
         b.type = 'button';
-        b.append(el('span', 'main', o.main), el('span', 'sub', o.sub));
+        b.append(hide(el('span', 'main'), o.main), hide(el('span', 'sub'), o.sub));
         b.addEventListener('click', (e) => { if (!e.isTrusted) return; o.pick(); draw(); toggle(false); });
         list.append(b);
       }
@@ -237,11 +194,12 @@
 
     const use = el('button', 'primary', create ? (texts.savePasskey || 'Save') : (texts.usePasskey || 'Passkey'));
     use.type = 'button';
-    use.addEventListener('click', (e) => { if (e.isTrusted) (create ? savePasskey(inline.containerId) : choosePasskey(inline.choice)); });
+    use.addEventListener('click', (e) => { if (trusted(e, pillGuard, tag)) (create ? savePasskey(inline.containerId) : choosePasskey(inline.choice)); });
     const head = create ? el('div', 'title', texts.saveQuestion || 'Passkey') : null;
     tag.append(shieldBadge(), ...(head ? [head] : []), sw, list, use, links());
     ui().append(tag);
-    use.focus({ preventScroll: true });
+    // No focus on the button: the page picks the moment, and a space or Enter while typing would sign in (#405).
+    pillGuard = watch(use); // the button itself: the tag's drop-in and swing (about 2 s) keep it "not visible" until they end
     return undefined;
   }
 
@@ -314,7 +272,7 @@
     try {
       const r = await call('cs:webauthnWindow', { requestId: cur.requestId });
       modalRequests.set(r.pending, cur.pageId);
-      pendingKinds.set(r.pending, cur.kind === 'unlock' ? 'get' : cur.kind);
+      pendingKinds.set(r.pending, cur.kind);
     } catch {
       toPage({ id: cur.pageId, fallback: true });
     }
@@ -441,106 +399,7 @@
 
   // ------------------------------------------------------------ UI host (closed shadow root)
 
-  const CSS = `
-    :host { all: initial; }
-    * { box-sizing: border-box; font-family: "Segoe UI", system-ui, sans-serif; }
-    .menu, .banner { position: fixed; background: #fff; color: #1b1b1f; border: 1px solid #d0d4dc; border-radius: 10px;
-      box-shadow: 0 8px 28px rgba(0,0,0,.18); font-size: 13px; overflow: hidden; }
-    .menu { min-width: 260px; max-width: 380px; max-height: 320px; overflow-y: auto; padding: 4px; }
-    .head { display: flex; align-items: center; gap: 6px; padding: 6px 8px 4px; font-size: 11px; color: #5b6170; text-transform: uppercase; letter-spacing: .04em; }
-    .entry { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; padding: 8px; border-radius: 7px; cursor: pointer; text-align: left; color: inherit; font-size: 13px; }
-    .entry:hover, .entry:focus { background: #eef3fb; outline: none; }
-    .avatar { flex: none; width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-weight: 600; background: #0f6cbd; }
-    .avatar.pk { background: #5b4fc4; }
-    .avatar.lock { background: #5b6170; }
-    .t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .s { color: #5b6170; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .txt { min-width: 0; }
-    .banner { top: 16px; right: 16px; width: 340px; padding: 14px 16px; }
-    .banner .title { font-weight: 600; margin-bottom: 4px; display: flex; gap: 8px; align-items: center; }
-    .banner .user { color: #5b6170; margin: 2px 0 10px; word-break: break-all; }
-    .banner select { width: 100%; margin-bottom: 10px; padding: 6px; border-radius: 6px; border: 1px solid #c4c9d4; font-size: 13px; }
-    .banner input.q { width: 100%; margin: 6px 0 4px; padding: 6px 8px; border-radius: 6px; border: 1px solid #c4c9d4; font-size: 13px; background: #fff; color: inherit; outline: none; }
-    .banner input.q:focus { border-color: #0f6cbd; box-shadow: 0 0 0 2px rgba(15,108,189,.18); }
-    .ms-list { max-height: 264px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
-    .entry-row { display: flex; align-items: center; gap: 6px; }
-    .entry-row .entry { flex: 1; min-width: 0; }
-    .entry-row button.b { flex: none; padding: 4px 8px; font-size: 12px; }
-    .ms-none { padding: 8px; }
-    [hidden] { display: none !important; }
-    .row { display: flex; gap: 8px; flex-wrap: wrap; }
-    button.b { border: 1px solid #c4c9d4; background: #fff; color: #1b1b1f; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-    button.b.primary { background: #0f6cbd; border-color: #0f6cbd; color: #fff; }
-    button.x { position: absolute; top: 8px; right: 8px; border: 0; background: none; font-size: 18px; cursor: pointer; color: #5b6170; }
-    .logo { width: 18px; height: 18px; border-radius: 5px; background: #0f6cbd; display: inline-grid; place-items: center; color: #fff; font-size: 11px; }
-    /* Keevault key tag (passkeys): hangs top center from the browser frame, drops in and swings out; symmetric layout. */
-    .kvtag { --kv: #0f6cbd; --kv-soft: #e3effa; --ok: #1f9d55; --line: #dde2ec; --muted: #5d6779; --surface: #fff; --ink: #141a26;
-      position: fixed; top: 12px; left: 0; right: 0; margin: 0 auto; z-index: 2147483647; width: 268px; box-sizing: border-box;
-      display: grid; gap: 10px; justify-items: center; text-align: center; padding: 18px 16px 12px;
-      background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 18px; font-size: 13px;
-      box-shadow: 0 18px 40px rgba(15,108,189,.18), 0 2px 8px rgba(20,26,38,.10);
-      transform-origin: 50% -12px; animation: kvt-drop .6s cubic-bezier(.3,1.4,.5,1) both, kvt-swing 1.5s ease-in-out .6s; }
-    .kvtag::before { content: ""; position: absolute; top: -9px; left: calc(50% - 8px); width: 16px; height: 16px; background: var(--surface);
-      border-left: 1px solid var(--line); border-top: 1px solid var(--line); transform: rotate(45deg); border-radius: 3px 0 0 0; }
-    .kvtag.hide { animation: kvt-away .35s ease-in forwards; }
-    .kvtag.shake { animation: kvt-shake .35s ease; }
-    .kvtag .badge { position: relative; width: 56px; height: 56px; display: grid; place-items: center; filter: drop-shadow(0 6px 14px rgba(15,108,189,.28)); }
-    .kvtag .logo { width: 56px; height: 56px; display: block; overflow: hidden; border-radius: 14px; }
-    .kvtag .logo .sweep { transform: translateX(-30px); }
-    .kvtag .lock { position: absolute; right: -6px; bottom: -6px; font-size: 15px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,.25)); }
-    .kvtag .shield { width: 30px; height: 30px; display: block; }
-    .kvtag .shield .fill { fill: var(--kv); opacity: .14; }
-    .kvtag .shield .outline { fill: none; stroke: var(--kv); stroke-width: 2; stroke-linejoin: round; }
-    .kvtag .shield .lockbody { fill: var(--kv); }
-    .kvtag .shield .lockarc { fill: none; stroke: var(--kv); stroke-width: 1.6; }
-    .kvtag .stamp { position: absolute; left: calc(50% - 11px); bottom: -11px; width: 22px; height: 22px; border-radius: 50%; background: var(--ok); color: #fff;
-      display: grid; place-items: center; font-size: 12px; font-weight: 800; border: 2px solid var(--surface); opacity: 0; }
-    .kvtag .title { font-weight: 700; font-size: 14px; }
-    .kvtag .head { display: grid; gap: 2px; }
-    .kvtag .sub { color: var(--muted); font-size: 12px; }
-    .kvtag .switch { width: 100%; display: grid; grid-template-columns: 14px 1fr 14px; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: var(--surface); color: var(--ink); cursor: pointer; text-align: center; font: inherit; }
-    .kvtag .switch::before { content: ""; }
-    .kvtag .switch:hover, .kvtag .switch.open { border-color: var(--kv); }
-    .kvtag .who { flex: 1; min-width: 0; display: grid; }
-    .kvtag .who .main, .kvtag .opt .main { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .kvtag .who .sub, .kvtag .opt .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .kvtag .chev { color: var(--muted); font-size: 12px; }
-    .kvtag [hidden] { display: none !important; }
-    .kvtag .list { width: 100%; display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 12px; padding: 4px; max-height: 220px; overflow: auto; }
-    .kvtag .opt { display: grid; text-align: center; border: 0; border-radius: 8px; background: none; color: var(--ink); padding: 7px 9px; cursor: pointer; font: inherit; }
-    .kvtag .opt:hover, .kvtag .opt.on { background: var(--kv-soft); }
-    .kvtag .opt-window .main { font-weight: 600; color: var(--muted); }
-    .kvtag .primary { width: 100%; border: 0; border-radius: 12px; background: var(--kv); color: #fff; font: inherit; font-weight: 700; font-size: 14px; padding: 10px; cursor: pointer; }
-    .kvtag .primary:hover { filter: brightness(1.08); }
-    .kvtag .primary:disabled { opacity: .6; cursor: default; }
-    .kvtag input.pin { width: 140px; text-align: center; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 15px; letter-spacing: .3em; background: var(--surface); color: var(--ink); }
-    .kvtag input.pin:focus, .kvtag button:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15,108,189,.28); }
-    .kvtag .links { display: flex; gap: 16px; justify-content: center; }
-    .kvtag .link { border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; padding: 2px 4px; cursor: pointer; }
-    .kvtag .link:hover { color: var(--kv); }
-    .kvtag .note { font-weight: 700; font-size: 13px; }
-    .kvtag.anim { width: 220px; padding-bottom: 16px; }
-    .kvtag.wait .logo .sh { animation: kvt-breathe 1.2s ease-in-out infinite; }
-    .kvtag.wait .logo .sweep { animation: kvt-sweep 1.4s ease-in-out infinite; }
-    
-    .kvtag.ok .stamp { animation: kvt-stamp .4s cubic-bezier(.3,1.6,.5,1) forwards; }
-    @keyframes kvt-drop { from { transform: translateY(-120%); opacity: 0; } to { transform: none; opacity: 1; } }
-    @keyframes kvt-swing { 0% { transform: rotate(0); } 25% { transform: rotate(2.5deg); } 55% { transform: rotate(-1.6deg); } 80% { transform: rotate(.8deg); } 100% { transform: rotate(0); } }
-    @keyframes kvt-away { to { transform: translateY(-110%); opacity: 0; } }
-    @keyframes kvt-shake { 0%, 100% { transform: none; } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
-    @keyframes kvt-breathe { 50% { opacity: .55; } }
-    @keyframes kvt-sweep { from { transform: translateX(-30px); } to { transform: translateX(70px); } }
-    @keyframes kvt-draw { 0% { stroke-dashoffset: 80; } 60% { stroke-dashoffset: 0; } 100% { stroke-dashoffset: -80; } }
-    @keyframes kvt-stamp { from { transform: scale(2.2) rotate(-20deg); opacity: 0; } to { transform: none; opacity: 1; } }
-    @media (prefers-reduced-motion: reduce) { .kvtag, .kvtag * { animation-duration: .01s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; } }
-    @media (prefers-color-scheme: dark) {
-      .menu, .banner { background: #23252b; color: #eceef2; border-color: #3a3d46; }
-      .kvtag { --kv: #5aa6ff; --kv-soft: #17304d; --ok: #4cc38a; --line: #2a3344; --muted: #9aa6ba; --surface: #171d28; --ink: #e8edf5; }
-      .entry:hover, .entry:focus { background: #2f3440; }
-      .head, .s, .banner .user, button.x { color: #a6abb8; }
-      button.b { background: #2b2e36; color: #eceef2; border-color: #464a55; }
-      .banner select, .banner input.q { background: #2b2e36; color: #eceef2; border-color: #464a55; }
-    }`;
+  const CSS = globalThis.kvpwsafeCss;
 
   let host = null;
   let root = null;
@@ -593,14 +452,26 @@
     return e;
   }
 
-  function avatarFor(title, extra = '') {
-    const a = el('span', `avatar ${extra}`, (String(title || '?').trim()[0] || '?').toUpperCase());
-    return a;
-  }
+  // Clickjacking (#373, #401): a click on the tag or a bar counts only after the browser reported its surface as really
+  // visible for a while (visible-guard.js). Otherwise nothing happens and the note says so.
+  // Account names are drawn by CSS (.pc::after, content: attr(data-t)): window.find() of the page finds text inside a closed
+  // shadow root, but not generated content (#383). A page could otherwise test guesses at names without any input.
+  const hide = (e, text) => { e.dataset.t = text; e.className += ' pc'; return e; };
+  const watch = (surface) => globalThis.kvpwsafeVisibleGuard?.(surface) || null;
+  const trusted = (e, guard, where) => {
+    if (!e.isTrusted) return false;
+    if (guard?.clear()) return true;
+    const note = where?.querySelector?.('.user, .sub, .title');
+    if (note && texts.menuRefused) { if (note.className.split(' ').includes('pc')) note.dataset.t = texts.menuRefused; else note.textContent = texts.menuRefused; }
+    return false;
+  };
+
+  const avatarFor = (title, extra = '') => el('span', `avatar ${extra}`, (String(title || '?').trim()[0] || '?').toUpperCase());
 
   // ------------------------------------------------------------ field menu
 
   let menu = null;
+  let menuGuard = null; // the menu has really been visible long enough for a click (visible-guard.js, #373)
   let anchor = null;
   let lastFocused = null;
   let engaged = null; // the field the user reached or operated by real input
@@ -618,6 +489,7 @@
   }
 
   function hideMenu() {
+    menuGuard?.stop();
     menu?.remove();
     menu = null;
     anchor = null;
@@ -631,8 +503,9 @@
     }
     const r = anchor.getBoundingClientRect();
     const below = window.innerHeight - r.bottom > 200 || r.top < 200;
-    menu.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - 270))}px`;
-    menu.style.minWidth = `${Math.max(260, Math.min(r.width, 380))}px`;
+    menu.style.minWidth = `${Math.min(Math.max(260, Math.min(r.width, 380)), window.innerWidth - 8)}px`;
+    menu.style.maxHeight = `${Math.max(0, Math.min(320, (below ? window.innerHeight - r.bottom : r.top) - 8))}px`; // all inside the window, or a click doesn't count (visible-guard.js)
+    menu.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - menu.getBoundingClientRect().width - 4))}px`;
     if (below) {
       menu.style.top = `${r.bottom + 4}px`;
       menu.style.bottom = '';
@@ -640,6 +513,7 @@
       menu.style.top = '';
       menu.style.bottom = `${window.innerHeight - r.top + 4}px`;
     }
+    menuGuard?.moved();
   }
 
   function entryButton(onPick, ...children) {
@@ -650,14 +524,15 @@
     b.addEventListener('mousedown', (e) => e.preventDefault());
     b.addEventListener('click', (e) => {
       if (!e.isTrusted) return;
-      onPick();
+      if (menuGuard?.clear()) onPick();
+      else if (texts.menuRefused) { const head = menu?.querySelector('.head'); head?.classList.add('refused'); head?.replaceChildren(texts.menuRefused); position(); }
     });
     return b;
   }
 
   function text(title, sub) {
     const t = el('div', 'txt');
-    t.append(el('div', 't', title), el('div', 's', sub));
+    t.append(hide(el('div', 't'), title), hide(el('div', 's'), sub));
     return t;
   }
 
@@ -688,6 +563,7 @@
       }
     }
     ui().append(menu);
+    menuGuard = globalThis.kvpwsafeVisibleGuard?.(menu) || null;
     position();
   }
 
@@ -793,12 +669,19 @@
   let lastUsername = '';
   let lastCapture = '';
   document.addEventListener('input', (e) => {
-    if (e.isTrusted && isUsernameLike(e.target) && e.target.value) lastUsername = e.target.value;
+    if (!e.isTrusted) return;
+    if (isUsernameLike(e.target) && e.target.value) lastUsername = e.target.value;
+    if (isPassword(e.target)) typedPassword.set(e.target, e.target.value); // the value that real input left in the field
   }, true);
 
+  // Only a password the user's own input left in the field is looked at (#383): the browser fires the submit event of
+  // requestSubmit() as trusted too, so a page that sets a guess and submits would learn from the missing bar whether it
+  // equals the saved one. Typing, pasting and the browser's own autofill give trusted input events; a value the page set
+  // (or changed after the typing) does not match and offers nothing to save.
+  const typedPassword = new WeakMap();
   function captureFrom(origin) {
     const scope = origin?.form || origin?.closest?.('form') || document;
-    const passwords = [...scope.querySelectorAll('input[type=password]')].filter((p) => p.value);
+    const passwords = [...scope.querySelectorAll('input[type=password]')].filter((p) => p.value && typedPassword.get(p) === p.value);
     if (!passwords.length) return;
     const password = passwords.find((p) => /new-password/.test(p.autocomplete)) || passwords[passwords.length - 1];
     const { username } = loginFields(scope);
@@ -809,7 +692,8 @@
     call('cs:capture', { username: user, password: password.value }).catch(() => {});
   }
 
-  document.addEventListener('submit', (e) => captureFrom(e.target), true);
+  // Real submits only: a page that sets the password itself and calls requestSubmit() could test guesses against the saved one (#383).
+  document.addEventListener('submit', (e) => { if (e.isTrusted) captureFrom(e.target); }, true);
   document.addEventListener('click', (e) => {
     if (!e.isTrusted) return;
     const b = e.target.closest?.('button, input[type=submit], [role=button]');
@@ -825,23 +709,25 @@
   }, true);
 
   let banner = null;
+  let saveGuard = null; // the bar has really been visible long enough for a click: "Update" replaces a stored password (#411)
+  const endBanner = () => { saveGuard?.stop(); saveGuard = null; banner?.remove(); };
   function showSaveBanner(info) {
     if (!info || info.action === 'none') return;
     if (info.ui) texts = info.ui;
-    banner?.remove();
+    endBanner();
     banner = el('div', 'banner');
     const close = el('button', 'x', '×');
     close.title = texts.close;
     close.addEventListener('click', (e) => {
       if (!e.isTrusted) return;
-      banner.remove();
+      endBanner();
       call('cs:dismissCaptured', { never: false }).catch(() => {});
     });
     const title = el('div', 'title');
     const bastion = info.action === 'bastion';
     title.append(el('span', 'logo', 'K'), document.createTextNode(bastion ? texts.bastionTitle : info.action === 'update' ? texts.updateTitle : texts.saveTitle));
-    const desc = el('div', '', bastion ? `VM „${info.title}“` : info.action === 'update' ? `„${info.title}“ (${info.host})` : info.host);
-    const user = el('div', 'user', info.username || texts.noUser);
+    const desc = hide(el('div'), bastion ? `VM „${info.title}“` : info.action === 'update' ? `„${info.title}“ (${info.host})` : info.host);
+    const user = hide(el('div', 'user'), info.username || texts.noUser);
     banner.append(close, title, desc, user);
     let select = null;
     let folder = null;
@@ -864,12 +750,12 @@
     const row = el('div', 'row');
     const save = el('button', 'b primary', info.action === 'update' ? texts.update : texts.save);
     save.addEventListener('click', async (e) => {
-      if (!e.isTrusted) return;
+      if (!trusted(e, saveGuard, banner)) return;
       save.disabled = true;
       try {
         await call('cs:saveCaptured', { containerId: select?.value || info.defaultContainer, folder: folder?.value || '' });
         banner.replaceChildren(title, el('div', '', texts.saved));
-        setTimeout(() => banner?.remove(), 2500);
+        setTimeout(endBanner, 2500);
       } catch (err) {
         save.disabled = false;
         desc.textContent = err.message;
@@ -877,14 +763,15 @@
     });
     const never = el('button', 'b', texts.never);
     never.addEventListener('click', (e) => {
-      if (!e.isTrusted) return;
-      banner.remove();
+      if (!trusted(e, saveGuard, banner)) return;
+      endBanner();
       call('cs:dismissCaptured', { never: true }).catch(() => {});
     });
     row.append(save);
     if (info.action === 'save' || bastion) row.append(never);
     banner.append(row);
     ui().append(banner);
+    saveGuard = watch(banner);
   }
 
   // ------------------------------------------------------------ one-click sign-in (admin tools, Microsoft sign-in)
@@ -920,6 +807,7 @@
   function offerBastionAccounts() {
     let shownFor = '';
     let bar = null;
+    let barGuard = null; // the bar has really been visible long enough for a click (#401)
     const look = () => {
       if (!alive) return;
       if (shownFor && shownFor !== location.href) { bar?.remove(); shownFor = ''; }
@@ -964,12 +852,12 @@
       const entries = offer.accounts.map((a) => {
         const b = el('button', 'entry');
         const text = el('div', 'txt');
-        text.append(el('div', 't', a.title), el('div', 's', [a.username, a.container].filter(Boolean).join(' · ')));
-        b.append(el('span', 'avatar', (a.title || '?').slice(0, 1).toUpperCase()), text);
-        b.addEventListener('click', (e) => { if (e.isTrusted) start(a); });
+        text.append(hide(el('div', 't'), a.title), hide(el('div', 's'), [a.username, a.container].filter(Boolean).join(' · ')));
+        b.append(hide(el('span', 'avatar'), (a.title || '?').slice(0, 1).toUpperCase()), text);
+        b.addEventListener('click', (e) => { if (trusted(e, barGuard, bar)) start(a); });
         const keep = el('button', 'b save-only', texts.bastionSaveOnly);
         keep.title = texts.bastionSaveOnlyHint || '';
-        keep.addEventListener('click', (e) => { if (e.isTrusted) saveOnly(a); });
+        keep.addEventListener('click', (e) => { if (trusted(e, barGuard, bar)) saveOnly(a); });
         const row = el('div', 'entry-row');
         row.append(b, keep);
         row.dataset.q = [a.title, a.username, a.container].join(' ').toLowerCase();
@@ -995,9 +883,11 @@
       });
       box.append(none);
       const parts = [close, title, el('div', 'user', `VM „${offer.vmName}“`)];
-      if (offer.asset) parts.push(el('div', 's', fill(texts.bastionAsset, { title: offer.asset.title, vault: offer.asset.container })));
+      if (offer.asset) parts.push(hide(el('div', 's'), fill(texts.bastionAsset, { title: offer.asset.title, vault: offer.asset.container })));
       bar.append(...parts, q, box, saveLabel);
       ui().append(bar);
+      barGuard?.stop();
+      barGuard = watch(bar);
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', look, { once: true });
     else look();
@@ -1186,6 +1076,7 @@
       if ((waited += 500) < 15_000) setTimeout(whenAsked, 500);
     };
     let msBanner = null;
+    let msGuard = null; // the bar has really been visible long enough for a click (#401)
     const show = async () => {
       const offer = await call('cs:msAccounts').catch(() => null);
       if (!offer?.accounts?.length) return;
@@ -1201,6 +1092,8 @@
       msBanner.append(close, title);
       // Attached first: the countdown below only runs while the bar is on the page.
       ui().append(msBanner);
+      msGuard?.stop();
+      msGuard = watch(msBanner);
       const start = async (account, remember) => {
         if (remember) await call('cs:msRemember', { key: account.key }).catch(() => {});
         const job = await call('cs:msAccount', { containerId: account.containerId, id: account.id }).catch(() => null);
@@ -1217,9 +1110,9 @@
         const entries = offer.accounts.map((a) => {
           const b = el('button', 'entry');
           const text = el('div', 'txt');
-          text.append(el('div', 't', a.title), el('div', 's', [a.username, a.container].filter(Boolean).join(' · ')));
-          b.append(el('span', 'avatar', (a.title || '?').slice(0, 1).toUpperCase()), text);
-          b.addEventListener('click', (e) => { if (e.isTrusted) start(a, remember.checked); });
+          text.append(hide(el('div', 't'), a.title), hide(el('div', 's'), [a.username, a.container].filter(Boolean).join(' · ')));
+          b.append(hide(el('span', 'avatar'), (a.title || '?').slice(0, 1).toUpperCase()), text);
+          b.addEventListener('click', (e) => { if (trusted(e, msGuard, msBanner)) start(a, remember.checked); });
           b.dataset.q = [a.title, a.username, a.container].join(' ').toLowerCase();
           return b;
         });
@@ -1251,7 +1144,7 @@
         if (offer.defaultKey) {
           const forget = el('button', 'b', texts.msForget);
           forget.addEventListener('click', (e) => {
-            if (!e.isTrusted) return;
+            if (!trusted(e, msGuard, msBanner)) return;
             call('cs:msRemember', { key: null }).catch(() => {});
             offer.defaultKey = null;
             forget.remove();

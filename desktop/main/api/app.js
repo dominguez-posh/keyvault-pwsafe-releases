@@ -4,7 +4,7 @@ import { app, shell, net } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { entraSettings } from '../../auth.js';
-import { hashPin, verifyPin, MIN_PIN_LENGTH } from '../../pin.js';
+import { hashPin, verifyPin, inPinQueue, MIN_PIN_LENGTH } from '../../pin.js';
 import { warmUpAutoType } from '../../autotype.js';
 import { UPDATE_MODES } from '../../updater.js';
 import { vaultHost } from '../../../extension/core/keyvault.js';
@@ -16,9 +16,10 @@ import { auth, config, files, mcp, opened, setOpened, updater, vault, win } from
 import { api } from './index.js';
 import { applyBrowserIntegration } from '../browser.js';
 import { diag } from '../diag.js';
+import { appSigningRefusal } from '../release-gate.js';
 import { pinGuard, requireOpen, requirePin } from '../guards.js';
 import { otherInstallation } from '../install.js';
-import { bindPersonalKeys, personalPaths, recentPin, setRecentPin, unlockPersonalWithPin } from '../personal.js';
+import { bindPersonalKeys, pendingRecoveryIds, personalPaths, recentPin, renewedRecoveryIds, setRecentPin, unlockPersonalWithPin } from '../personal.js';
 import {
   applyLanguage, changed, forcedLanguage, keptAccount, keptVault, lockNow, mirrorWanted, newSession, offline, offlineMirror, offlineMode, refreshAll,
   setKeptVault, setOfflineMode, signedIn,
@@ -26,6 +27,7 @@ import {
 import { syncSettings } from '../settings-sync.js';
 import { applyShortcuts } from '../typing.js';
 import { applyStartWithWindows, applyView, setTitleBarDimmed, titleBarColors, titleBarDimmed } from '../window.js';
+import { buildKind } from '../../build-kind.js';
 import { setupWindowsProvider } from '../windows-passkeys.js';
 
 export const appApi = {
@@ -51,13 +53,19 @@ export const appApi = {
       offlineAt: offlineMode ? offline?.at || null : null,
       signInMode: auth.useBroker?.() ? 'windows' : 'browser',
       requirePin: !!settings.requirePin,
+      passkeyPinFixed: !!settings.requirePin,
       account: auth.account ? { name: auth.account.name, username: auth.account.username, tenantId: auth.account.tenantId } : null,
       containers: out,
+      recoveryPending: pendingRecoveryIds(),
+      recoveryRenewed: renewedRecoveryIds(),
       settings: forcedLanguage() ? { ...settings, language: forcedLanguage() } : settings,
       version: app.getVersion(),
+      build: buildKind(),
+      autoUpdates: updater ? updater.mode() === 'auto' : false,
       updateKind: updater?.kind || 'dev',
       passkeyAvailable: process.platform === 'win32' || !!demo,
       smoke: !!smokeTest, // tests: no dialogs that open by themselves
+      releaseSigning: !appSigningRefusal(app, { demo, smoke: smokeTest }), // menu entries "Release signieren"
       platform: process.platform,
     };
   },
@@ -96,7 +104,8 @@ export const appApi = {
     return config.get();
   },
   /** entra: also sign in to Microsoft Entra ID (Key Vault containers). */
-  async verifyPin(pin) {
+  // #439: one after the other – parallel guesses must not slip past the attempt lock.
+  verifyPin: (pin) => inPinQueue(async () => {
     const record = config.get().appPin;
     if (!record) return true;
     const wait = pinGuard.waitSeconds();
@@ -113,7 +122,7 @@ export const appApi = {
     pinGuard.failure();
     config.update({ pinGuard: pinGuard.toJSON() });
     throw new Error(pinGuard.waitSeconds() ? t('Falsche PIN – bitte {seconds} Sekunden warten', { seconds: pinGuard.waitSeconds() }) : t('Falsche PIN'));
-  },
+  }),
   /** Admin mode on: only with the app PIN (no PIN set → not possible). Returns the settings. */
   async activateAdminMode(pin) {
     requireOpen();
@@ -231,6 +240,16 @@ export const appApi = {
   /** Settings ↔ personal vault right now (the first-start wizard waits for the settings of another device). */
   syncSettings: () => syncSettings(),
 
+  /**
+   * True for exactly one caller: the first start's wizards open once. Checked and set without waiting in between,
+   * because the window may draw twice at the same moment (#399).
+   */
+  claimFirstStart() {
+    if (config.get().setupOffered) return false;
+    config.update({ personalOffered: true, setupOffered: true });
+    return true;
+  },
+
   /** Renderer: a dialog opened or closed – the window buttons follow the veil behind it. */
   titleBarDim(dim) {
     setTitleBarDimmed(!!dim);
@@ -241,7 +260,10 @@ export const appApi = {
   /** Windows "Installed apps" (to remove a second Keevault installation). */
   openAppsSettings: () => shell.openExternal('ms-settings:appsfeatures'),
   openExternal: (url) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    if (!/^https?:\/\//i.test(url)) return;
+    // Smoke runs open no browser; they count the calls (#443: one click opens once).
+    if (smokeTest) globalThis.kvSmokeOpened = (globalThis.kvSmokeOpened || 0) + 1;
+    else shell.openExternal(url);
   },
   updateState: () => updater?.state || null,
   checkForUpdates: () => updater.check(),

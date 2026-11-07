@@ -18,6 +18,7 @@ import { normalizeFolderIcon } from './folder-icons.js';
 import {
   ContainerKey, ContainerLockedError, setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries, mergeKeyrings,
 } from './protect.js';
+import { rekeyKeyvault, finishKeyChange, dropStaleKey, currentKey } from './session-rekey.js';
 
 export const KEYRING_SECRET = 'pws-keyring';
 const KEYRING_TYPE = 'application/vnd.kvpwsafe.keyring+json; v=1';
@@ -62,6 +63,9 @@ export class ConflictError extends Error {
     this.name = 'ConflictError';
   }
 }
+
+/** A local index that came from a whole load. Without one, an own change only makes a partial list: it says nothing of the rest of the vault. */
+const loadedEntry = (entry) => !!entry && !entry.partial && !entry.error && !entry.locked;
 
 export class MemoryStore {
   constructor() {
@@ -418,7 +422,7 @@ export class VaultSession {
     if (c.kind !== 'keyvault') return this.adapter(c).setLogo(containerId, dataUrl);
     if (dataUrl && !isImageDataUrl(dataUrl)) throw new Error(t('Das Bild ist zu groß'));
     let logo = dataUrl || null;
-    if (logo && (await this.readKeyring(c))) logo = { sealed: await (await this.requireKey(containerId)).encrypt(logo, `${containerId}/${CONTAINER_SECRET}/logo`) };
+    if (logo && (await this.readKeyring(c))) logo = { sealed: await (await currentKey(this, containerId)).encrypt(logo, `${containerId}/${CONTAINER_SECRET}/logo`) };
     await this.writeContainerMeta(this.kv(c), { logo, name: c.name });
     return null;
   }
@@ -469,7 +473,7 @@ export class VaultSession {
     icons ??= (await this.folderDoc(c)).icons;
     let value = JSON.stringify({ folders: [...new Set(list)].sort(), ...(Object.keys(icons).length ? { icons } : {}) });
     if (value.length > FOLDERS_MAX) throw new Error(t('Zu viele eigene Ordner-Bilder – bitte einige durch Standardsymbole ersetzen'));
-    if (await this.readKeyring(c)) value = JSON.stringify({ [SEALED]: await (await this.requireKey(c.id)).encrypt(value, `${c.id}/${FOLDERS_SECRET}`) });
+    if (await this.readKeyring(c)) value = JSON.stringify({ [SEALED]: await (await currentKey(this, c.id)).encrypt(value, `${c.id}/${FOLDERS_SECRET}`) });
     await this.kv(c).setSecret(FOLDERS_SECRET, value, { contentType: FOLDERS_TYPE, tags: { kvpwsafe: 'folders' } });
   }
 
@@ -546,10 +550,11 @@ export class VaultSession {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).protectionInfo(containerId, rpId);
     const keyring = await this.readKeyring(c);
+    const key = keyring ? await dropStaleKey(this, containerId, keyring) : null;
     return {
       kind: c.kind,
       protected: !!keyring,
-      locked: !!keyring && !(await this.containerKey(containerId)),
+      locked: !!keyring && !key,
       methods: keyring ? describeKeyring(keyring, rpId) : null,
       passkeys: keyring ? passkeyEntries(keyring, rpId) : [],
     };
@@ -563,6 +568,7 @@ export class VaultSession {
     if (!keyring) throw new Error(t('Dieser Tresor ist nicht zusätzlich geschützt'));
     const r = await unlockKeyring(keyring, params);
     await this.store.set(`ck:${containerId}`, r.ck.exported);
+    if (keyring.prev) await finishKeyChange(this, c, r.ck).catch(() => {}); // a key change was stopped halfway (#402)
     await this.refreshIndex([containerId]);
     return { via: r.entry.type, entryId: r.entry.id };
   }
@@ -586,7 +592,8 @@ export class VaultSession {
     const c = await this.container(containerId);
     const actor = await this.actor();
     if (c.kind !== 'keyvault') return this.adapter(c).updateKeyring(containerId, op, actor);
-    const key = await this.requireKey(containerId);
+    if (op?.type === 'rekey') return rekeyKeyvault(this, c, op.password, actor);
+    const key = await currentKey(this, containerId);
     const keyring = await this.readKeyring(c);
     const { keyring: next, ...extra } = await applyKeyringOp(keyring, key, op, actor);
     await this.writeKeyring(c, next);
@@ -645,7 +652,7 @@ export class VaultSession {
   async disableProtection(containerId, onProgress = () => {}) {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') throw new Error(t('Datei-Tresore sind immer verschlüsselt'));
-    const key = await this.requireKey(containerId);
+    const key = await currentKey(this, containerId);
     const kv = this.kv(c);
     const secrets = (await kv.listSecrets()).filter((s) => isItemSecret(s));
     const failed = [];
@@ -709,6 +716,7 @@ export class VaultSession {
     const containers = await this.kvContainers();
     const targets = containerIds ? containers.filter((c) => containerIds.includes(c.id)) : containers;
     const fresh = {};
+    const seen = this.indexRevisions(targets);
     const sizes = this.onProgress ? await this.index() : {};
     await mapLimit(targets, 4, async (c) => {
       this.busy(c.id, 1);
@@ -734,7 +742,7 @@ export class VaultSession {
         if (!isProtected || key) {
           const before = (await this.index())[c.id];
           const known = before && !before.error && !before.locked ? before.items : null;
-          if (!known || !sameSummaries(known, items) || !before.fast && !before.indexed) this.scheduleFastIndex(c.id);
+          if (!known || !sameSummaries(known, items) || !before.fast && !before.indexed || this.fastIndexDirty?.has(c.id)) this.scheduleFastIndex(c.id);
         }
       } catch (e) {
         fresh[c.id] = { items: [], loadedAt: Date.now(), error: { status: e.status || 0, message: e.message, code: e.code || e.name, tenantId: e.tenantId, detail: e.detail || '' } };
@@ -743,11 +751,40 @@ export class VaultSession {
       }
     });
     return this.locked(async () => {
-      const index = { ...(await this.index()), ...fresh };
+      const index = await this.mergeIndex(fresh, seen);
       for (const id of Object.keys(index)) if (!containers.some((c) => c.id === id)) delete index[id];
       await this.store.set('index', index);
       return index;
     });
+  }
+
+  /** Own changes per vault so far: a result loaded before a change is older than the local index (#408). */
+  indexRevisions(containers) {
+    return new Map(containers.map((c) => [c.id, this.indexRevision?.get(c.id) || 0]));
+  }
+
+  /**
+   * The local index with what was just loaded. A vault changed here since loading started keeps its local state (the next
+   * refresh loads it again), if that state is a whole list: a list made of own changes alone gets the load with those changes
+   * on top, or it would stay partial (Konrad F15). The copy of an entry that is gone goes too, it may hold the password (#408).
+   */
+  async mergeIndex(fresh, seen) {
+    const index = { ...(await this.index()) };
+    for (const [id, loaded] of Object.entries(fresh)) {
+      const changedSince = (this.indexRevision?.get(id) || 0) !== seen.get(id);
+      if (changedSince && (loadedEntry(index[id]) || loaded.error || loaded.locked)) continue;
+      let entry = loaded;
+      if (!entry.error && !entry.locked) {
+        const changes = this.unloadedChanges?.get(id) || [];
+        this.unloadedChanges?.delete(id);
+        entry = { ...entry, items: changes.reduce((items, change) => change(items), entry.items) };
+        if (changes.length) this.scheduleFastIndex(id, { own: true });
+        const ids = new Set(entry.items.map((i) => i.id));
+        for (const old of index[id]?.items || []) if (!ids.has(old.id)) await this.store.remove(`item:${id}/${old.id}`);
+      }
+      index[id] = entry;
+    }
+    return index;
   }
 
   /**
@@ -765,11 +802,19 @@ export class VaultSession {
       this.fastIndexTimers.delete(c.id);
       await this.writeFastIndex(c.id).catch(() => {});
     }
+    // A write under way would still leave the older index to read.
+    await Promise.all(targets.map((c) => this.fastIndexWriting?.get(c.id)?.catch(() => {})));
     const fresh = {};
     const slow = [];
+    const seen = this.indexRevisions(targets);
     await mapLimit(targets, 4, async (c) => {
       this.busy(c.id, 1);
       try {
+        // The vault's index misses an own change (its write failed): only the listing knows better.
+        if (this.fastIndexDirty?.has(c.id)) {
+          slow.push(c.id);
+          return;
+        }
         const entry = await this.loadFastIndex(c);
         if (entry) fresh[c.id] = entry;
         else slow.push(c.id);
@@ -781,8 +826,7 @@ export class VaultSession {
     });
     if (Object.keys(fresh).length) {
       await this.locked(async () => {
-        const index = { ...(await this.index()), ...fresh };
-        await this.store.set('index', index);
+        await this.store.set('index', await this.mergeIndex(fresh, seen));
       });
     }
     if (slow.length) await this.refreshIndex(slow);
@@ -834,13 +878,30 @@ export class VaultSession {
     }
   }
 
-  async writeFastIndex(containerId) {
+  /** One write per vault at a time; refreshIndexFast waits for it. Written without a later change: the vault is current. */
+  writeFastIndex(containerId) {
+    this.fastIndexWriting ||= new Map();
+    const run = (this.fastIndexWriting.get(containerId) || Promise.resolve()).catch(() => {}).then(async () => {
+      const revision = this.indexRevision?.get(containerId) || 0;
+      const written = await this.writeFastIndexNow(containerId);
+      if (written !== null && (this.indexRevision?.get(containerId) || 0) === revision) this.fastIndexDirty?.delete(containerId);
+      return !!written;
+    });
+    this.fastIndexWriting.set(containerId, run);
+    const done = () => { if (this.fastIndexWriting.get(containerId) === run) this.fastIndexWriting.delete(containerId); };
+    run.then(done, done);
+    return run;
+  }
+
+  /** → true written, false already current in the vault, null nothing could be written. */
+  async writeFastIndexNow(containerId) {
     const c = await this.container(containerId);
-    if (c.kind !== 'keyvault' || c.access?.write === false) return false;
+    if (c.kind !== 'keyvault' || c.access?.write === false) return null;
     const entry = (await this.index())[containerId];
-    if (!entry || entry.error || entry.locked) return false;
-    const key = entry.protected ? await this.containerKey(containerId) : null;
-    if (entry.protected && !key) return false;
+    // Partial: the vault's index would lose everything not changed here (Konrad F15). The load that completes it writes.
+    if (!loadedEntry(entry)) return null;
+    const key = entry.protected ? await currentKey(this, containerId, { quiet: true }) : null;
+    if (entry.protected && !key) return null;
     const { header, shards } = await encodeIndex(entry.items, { by: await this.actor(), isProtected: !!entry.protected });
     const kv = this.kv(c);
     // Already current in the vault (another app wrote the same content): no write – with 50 users otherwise every
@@ -870,11 +931,21 @@ export class VaultSession {
   }
 
   async updateIndex(containerId, change) {
+    // Without write access nothing can bring the vault's index up to date: "dirty" would send every refresh to the full list (Konrad F16).
+    const canWrite = (await this.container(containerId)).access?.write !== false;
     await this.locked(async () => {
       const index = await this.index();
-      const entry = index[containerId] || { items: [], loadedAt: Date.now(), error: null };
-      index[containerId] = { ...entry, items: change(entry.items) };
+      // loadedAt 0: never loaded, so the next summaries() loads it.
+      const entry = index[containerId] || { items: [], loadedAt: 0, error: null };
+      const partial = !loadedEntry(index[containerId]);
+      if (partial) {
+        this.unloadedChanges ||= new Map();
+        this.unloadedChanges.set(containerId, [...(this.unloadedChanges.get(containerId) || []), change]);
+      }
+      index[containerId] = { ...entry, items: change(entry.items), ...(partial ? { partial: true } : {}) };
       await this.store.set('index', index);
+      (this.indexRevision ||= new Map()).set(containerId, (this.indexRevision.get(containerId) || 0) + 1);
+      if (canWrite) (this.fastIndexDirty ||= new Set()).add(containerId);
     });
     this.scheduleFastIndex(containerId, { own: true });
   }
@@ -915,12 +986,20 @@ export class VaultSession {
     const summary = await this.summary(containerId, id);
     if (!fresh) {
       const cached = await this.store.get(key);
-      if (cached && (!summary || cached.updated === summary.updated)) return cached.item;
+      // Without a summary the entry may be deleted: the vault decides, not an old copy (#408).
+      if (cached && summary && cached.updated === summary.updated) return cached.item;
     }
     const bundle = await this.kv(c).getSecret(id);
     const item = await this.decodeBundle(c, bundle);
     const updated = (bundle.attributes?.updated || 0) * 1000;
+    // Deleted while this was on its way: no copy of the password stays behind (#408).
+    if (summary && !(await this.summary(containerId, id))) return item;
     await this.store.set(key, { item, updated });
+    // The extension's store is asynchronous: the deletion can also have come while this was being written.
+    if (summary && !(await this.summary(containerId, id))) {
+      await this.store.remove(key);
+      return item;
+    }
     if (summary && summary.updated !== updated) {
       const current = { ...summaryFromSecret({ name: id, tags: serializeItem(item).tags, attributes: { updated: updated / 1000 } }, containerId), unprotected: summary.unprotected };
       await this.updateIndex(containerId, (list) => list.map((x) => (x.id === id ? current : x)));
@@ -1008,7 +1087,7 @@ export class VaultSession {
     const plain = serializeItem({ ...item, id }, actor);
     let { value, contentType, tags } = plain;
     if (await this.isProtected(c)) {
-      const key = await this.requireKey(containerId);
+      const key = await currentKey(this, containerId);
       value = JSON.stringify({ [SEALED]: 1, data: await key.encrypt(value, `${containerId}/${id}`) });
       contentType = `${contentType}; enc=1`;
       tags = await this.sealTags(key, `${containerId}/${id}`, tags);
@@ -1091,7 +1170,8 @@ export class VaultSession {
     await this.requireUnlinked(containerId, id);
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).deleteItem(containerId, id, await this.actor());
-    await this.kv(c).deleteSecret(id);
+    // Already gone from the vault (another app): what is left is the entry in the list (#408).
+    await this.kv(c).deleteSecret(id).catch((e) => { if (e.status !== 404) throw e; });
     await this.updateIndex(containerId, (list) => list.filter((i) => i.id !== id));
     await this.store.remove(`item:${containerId}/${id}`);
     return undefined;

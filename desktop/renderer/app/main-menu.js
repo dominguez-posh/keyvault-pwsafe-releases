@@ -179,6 +179,9 @@ function mainMenu(anchor) {
       entry('health', 'shield', t('Passwort-Check'), () => healthDialog(reportCtx()), expiring ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiring) : null),
       st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
       entry('trash', 'trash', t('Papierkorb'), openTrash),
+      st.releaseSigning ? entry('release-sign', 'key', t('Release signieren'), () => call('signRelease').catch((e) => toast(e.message, 'error'))) : null,
+      st.releaseSigning ? entry('release-setup', 'key', t('Release-Schlüssel einrichten'), () => call('setupReleaseKey').catch((e) => toast(e.message, 'error'))) : null,
+      st.releaseSigning ? entry('release-approvers', 'key', t('Release-Freigeber anzeigen'), () => call('showReleaseApprovers').catch((e) => toast(e.message, 'error'))) : null,
       h('div', { class: 'context-sep' }),
       entry('lock', 'lock', t('Sperren'), () => call('lock'))));
   const close = () => {

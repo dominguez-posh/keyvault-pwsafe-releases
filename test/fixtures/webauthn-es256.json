@@ -1,0 +1,10 @@
+{
+ "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEJOFnb8w7WqNs74ITK9T1cc/7HpxdRPOhTNoN8HCTsO83luJGsj64DJyvvwFl7aTvIKTl4y2AnkXPI3aoz5vuuA==",
+ "challenge": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+ "authData": "SZYN5YgOjGh0NBcPZHZgW4/krrmihjLHmVzzuoMdl2MBAAAAAg==",
+ "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3YyIsIm9yaWdpbiI6Imh0dHA6Ly9sb2NhbGhvc3Q6NTczNzQiLCJjcm9zc09yaWdpbiI6ZmFsc2V9",
+ "signature": "MEYCIQD9zDtLpn2e9mq7J0GmMhD5WjnArKvQpZDzgGaFbFtZjQIhAP3atxM7PLKN69QzR7Q/oysG4wVbSJcFGfdOoJd/MTeu",
+ "credId": "HrmflTSv/rO26fhVIhtAFpqpr3E/2/79clSJLLHsbNc=",
+ "attObjLen": 194,
+ "prf": "{}"
+}

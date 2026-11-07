@@ -8,6 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { parseClientVersion } from './versions.js';
 
 export const HOST_NAME = 'com.kvpwsafe.desktop';
 // Firefox identifies extensions by their gecko ID (manifest browser_specific_settings), not by an origin.
@@ -250,6 +251,9 @@ export class BrowserBridge {
     try {
       if (msg.cmd === 'hello') {
         client.origin = String(msg.origin || '');
+        // The extension's own claim (hint only, see versions.js): checked for its form, null when it does not fit.
+        client.extVersion = parseClientVersion(msg.extVersion);
+        client.minApp = parseClientVersion(msg.minApp); // the app version the extension needs (#454)
         client.approved = await this.approve(client.origin);
         if (!client.approved) {
           reply({ ok: false, error: { name: 'NotApproved', message: 'Browser not approved in Keevault' } });

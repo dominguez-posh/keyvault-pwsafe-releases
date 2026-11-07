@@ -8,6 +8,10 @@ import { demo } from './boot.js';
 import { config, mcp, opened, win } from './state.js';
 import { send } from './session.js';
 import { showWindow } from './window.js';
+import { passkeyPin } from './guards.js';
+import { requireUsablePasskeyPin } from './passkey-use.js';
+// #381: the agent names itself (MCP client name), so its name is shown like every other value it sends.
+import { renewedAgentRule, shown } from '../mcp.js';
 
 export const mcpScriptPath = () => path.join(app.getPath('userData'), 'mcp', 'keevault-mcp.cjs');
 export const mcpTrusted = () => (Array.isArray(config.get().mcpTrusted) ? config.get().mcpTrusted : [])
@@ -34,11 +38,16 @@ export async function approveAgent(agent) {
   if (!s.mcpEnabled || demo) return false;
   if (agentAdmitted(agent)) return true;
   // The approval ran out: ask again.
-  if (s.approvedAgents.includes(agent)) config.update({ approvedAgents: s.approvedAgents.filter((x) => x !== agent) });
+  // #381: what the old approval granted (read grants for a session or an hour) ends with it.
+  if (s.approvedAgents.includes(agent)) {
+    config.update({ approvedAgents: s.approvedAgents.filter((x) => x !== agent) });
+    mcp?.revoke(agent);
+  }
+  const previous = s.agentRules?.[agent];
   const answer = await askInApp({
     kind: 'agent-connect',
-    agent,
-    title: t('„{agent}“ möchte sich verbinden', { agent }),
+    agent: shown(agent),
+    title: t('„{agent}“ möchte sich verbinden', { agent: shown(agent) }),
     lead: t('Ein KI-Agent möchte Keevault nutzen. Erlaube das nur für Agenten, die du selbst eingerichtet hast.'),
     choices: [
       // #369: the first choice is preselected, so read-only comes first.
@@ -52,7 +61,7 @@ export async function approveAgent(agent) {
   if (answer === 'deny') return false;
   config.update({
     approvedAgents: [...config.get().approvedAgents, agent],
-    agentRules: { ...config.get().agentRules, [agent]: { write: answer === 'write', until: null } },
+    agentRules: { ...config.get().agentRules, [agent]: renewedAgentRule(previous, answer === 'write') },
   });
   return true;
 }
@@ -60,8 +69,8 @@ export async function approveAgent(agent) {
 export async function confirmAgentRead({ agent, title, vault: vaultName }) {
   return askInApp({
     kind: 'agent-read',
-    agent,
-    title: t('„{agent}“ möchte ein Passwort lesen', { agent }),
+    agent: shown(agent),
+    title: t('„{agent}“ möchte ein Passwort lesen', { agent: shown(agent) }),
     entry: title,
     vault: vaultName,
     choices: [
@@ -79,10 +88,13 @@ export async function confirmAgentRead({ agent, title, vault: vaultName }) {
 
 /** #308: every single passkey sign-in of an agent – no "for this session", no "never ask again". */
 export async function confirmAgentPasskey({ agent, title, username = '', vault: vaultName, rpId, origin }) {
+  // #439: no PIN set → no passkey is used (the app asks for one); the PIN is typed in this dialog, never by the agent.
+  requireUsablePasskeyPin();
   return (await askInApp({
+    pin: passkeyPin.state().required,
     kind: 'agent-passkey',
-    agent,
-    title: t('„{agent}“ möchte sich mit einem Passkey anmelden', { agent }),
+    agent: shown(agent),
+    title: t('„{agent}“ möchte sich mit einem Passkey anmelden', { agent: shown(agent) }),
     lead: t('Website: {origin} (Passkey für {rpId}). Keevault signiert nur diese eine Anmeldung, der Passkey selbst bleibt im Tresor.', { origin, rpId }),
     entry: title,
     // #331: which account signs in – several Microsoft logins are otherwise hard to tell apart.
@@ -98,8 +110,8 @@ export async function confirmAgentPasskey({ agent, title, username = '', vault: 
 export async function chooseAgentMicrosoft({ agent, purpose, accounts }) {
   const answer = await askInApp({
     kind: 'agent-microsoft',
-    agent,
-    title: t('„{agent}“ möchte sich bei Microsoft anmelden', { agent }),
+    agent: shown(agent),
+    title: t('„{agent}“ möchte sich bei Microsoft anmelden', { agent: shown(agent) }),
     lead: purpose ? t('Zweck laut Tool: {purpose}', { purpose }) : t('Wähle das Konto, mit dem sich das Tool anmelden soll.'),
     // #333: accounts of the requested tenant come first; the others stay selectable, marked as another tenant
     // #339: all accounts (no cut at 20) – the dialog has a search and a vault filter; vault and search text per choice.
@@ -121,8 +133,8 @@ export async function chooseAgentMicrosoft({ agent, purpose, accounts }) {
 export async function confirmAgentWrite({ agent, action, title, vault: vaultName, fields, changes }) {
   return (await askInApp({
     kind: 'agent-write',
-    agent,
-    title: action === 'create' ? t('„{agent}“ möchte einen Eintrag anlegen', { agent }) : t('„{agent}“ möchte einen Eintrag ändern', { agent }),
+    agent: shown(agent),
+    title: action === 'create' ? t('„{agent}“ möchte einen Eintrag anlegen', { agent: shown(agent) }) : t('„{agent}“ möchte einen Eintrag ändern', { agent: shown(agent) }),
     entry: title,
     vault: vaultName,
     fields,
@@ -134,7 +146,35 @@ export async function confirmAgentWrite({ agent, action, title, vault: vaultName
 
 // ---- Questions to the user from background requests (AI agents): a dialog in the app's own style, window in front.
 export const questions = new Map(); // id → resolve
+const refusals = new Map(); // id → the answer that refuses
+const pinQuestions = new Set(); // ids of questions that are answered only with the app PIN (#439)
 let questionSeq = 0;
+
+/**
+ * The window's answer to a question. A question with a PIN (a passkey use) is answered with anything but a refusal only
+ * with the right app PIN: otherwise it stays open and the window shows why (wrong PIN, too many attempts). The PIN is used
+ * up by this one answer.
+ */
+export async function answerQuestionFromWindow(id, value, pin) {
+  if (!questions.has(id)) return false;
+  if (pinQuestions.has(id) && String(value) !== refusals.get(id)) await passkeyPin.check(typeof pin === 'string' ? pin : '');
+  const resolve = questions.get(id);
+  if (!resolve) return false;
+  questions.delete(id);
+  pinQuestions.delete(id);
+  resolve(String(value));
+  return true;
+}
+
+/** Locking: an open question is refused. Allowed later, it would hand out what was read before the lock (#374). */
+export function cancelQuestions() {
+  for (const [id, resolve] of questions) {
+    questions.delete(id);
+    pinQuestions.delete(id);
+    send({ type: 'questionClose', id });
+    resolve(refusals.get(id));
+  }
+}
 
 /** The native dialog can't delay its buttons (#368): "Deny" is its default, so Enter right after it opens refuses. */
 export function nativeQuestion(spec) {
@@ -156,6 +196,8 @@ export function nativeQuestion(spec) {
  */
 export async function askInApp(spec) {
   showWindow();
+  // The native dialog has no field for the PIN: a question that needs one is refused instead.
+  if (spec.pin && (!win || win.webContents.isLoading())) return spec.cancel;
   if (!win || win.webContents.isLoading()) {
     const { options, box } = nativeQuestion(spec);
     const r = await dialog.showMessageBox(win || null, box);
@@ -167,16 +209,21 @@ export async function askInApp(spec) {
   try {
     return await new Promise((resolve) => {
       questions.set(id, resolve);
+      refusals.set(id, spec.cancel);
+      if (spec.pin) pinQuestions.add(id);
       send({ type: 'question', id, ...spec });
       // Nobody answers within 5 minutes: treated as the cancel choice (the agent gets a refusal, not a hang).
       setTimeout(() => {
         if (questions.delete(id)) {
+          pinQuestions.delete(id);
           send({ type: 'questionClose', id });
           resolve(spec.cancel);
         }
       }, 5 * 60_000);
     });
   } finally {
+    refusals.delete(id);
+    pinQuestions.delete(id);
     if (!questions.size && win) {
       win.setAlwaysOnTop(false);
       win.flashFrame(false);

@@ -9,6 +9,7 @@ import { OfflineMirror } from '../offline.js';
 import { setLanguage, t } from '../../extension/core/i18n.js';
 import { demo, smokeTest } from './boot.js';
 import { auth, bridge, config, files, mcp, opened, setOpened, setVault, vault, win, windows } from './state.js';
+import { cancelQuestions } from './agents.js';
 import { lastBackup, pendingRestore, setLastBackup, setPendingRestore } from './backup.js';
 import { busySince, diag, timedFetch, timedToken } from './diag.js';
 import { scheduleSettingsSync } from './settings-sync.js';
@@ -154,6 +155,7 @@ export function lockIfWindowsLocked() {
 
 export async function lockNow() {
   mcp?.revoke();
+  cancelQuestions();
   if (!opened && !auth.account) return;
   clearInterval(reconcileTimer);
   if (opened && !offlineMode) await vault.flushFastIndex().catch(() => {});

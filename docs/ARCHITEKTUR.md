@@ -54,9 +54,11 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `windows-passkeys.js` | Windows-Passkey-Anbieter: Anfragen und Registrierung |
 | `agents.js` | KI-Agenten (MCP): Freigabe, Bestätigungen, Protokoll |
 | `backup.js` | Verschlüsselte Backups: laufendes Backup/Restore, Druckblatt |
+| `release-sign.js` | Release signieren (#378): Ordner prüfen, Freigabefenster, Hardware-Schlüssel, `latest.yml.sig2`. Nur `api/release.js` importiert es (`npm run check`); Schlüssel in `desktop/release-key.js`, Sperre in `release-gate.js` |
 | `diag.js` | Diagnoseprotokoll, Zeitmessung langsamer Netzwerkanfragen |
 | `install.js` | Erkennt eine zweite Installation |
 | `smoke.js` | Smoke-Test der ganzen App (`npm run smoke`) |
+| `smoke-guard.js` | Jeder Smoke-Lauf endet mit Urteil und Exit-Code: Fehler, unbehandelte Ablehnung oder Frist; Teilläufe (`--only`, Bereiche in `desktop/smoke-areas.js`) melden `SMOKE PARTIAL OK` |
 | `api/index.js` | Die API für das Fenster: fügt die Teile unten zusammen und nimmt die Aufrufe an |
 | `api/app.js` | Zustand, Einstellungen, PIN, Admin-Modus, Entsperren, An- und Abmelden, Updates |
 | `api/items.js` | Einträge: lesen, speichern, verschieben, Versionen, Papierkorb, Import, Export |
@@ -67,6 +69,7 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `api/admin.js` | Admin-Werkzeuge: Microsoft-Anmeldung, Admin Center, Verbindungen zu Assets |
 | `api/integrations.js` | Windows-Passkey-Anbieter und KI-Agenten |
 | `api/reports.js` | Passwort-Check, Zugriffsbericht, Berichte speichern |
+| `api/release.js` | Release signieren und Release-Schlüssel einrichten (nur in der installierten App, nie über MCP oder Browser) |
 
 ### Fenster: `desktop/renderer/app/`
 

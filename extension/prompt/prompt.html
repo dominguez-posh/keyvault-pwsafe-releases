@@ -13,7 +13,8 @@
     .site .icon { color: var(--passkey); }
     .site b { display: block; overflow-wrap: anywhere; }
     .choice { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-    .choice:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .choice:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+    .choice:disabled { opacity: .55; cursor: default; }
     .choice .row-text { flex: 1; }
     .radio { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; }
     .radio input { margin-top: 3px; }

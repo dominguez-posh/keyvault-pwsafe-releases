@@ -65,15 +65,22 @@ export async function renderDetail() {
   const shown = await resolveLogin(item, (c, i) => call('item', c, i));
   if (ui.selected !== key || ui.editing) return undefined;
   const canWrite = writable(st.containers.find((c) => c.id === containerId) || {});
+  // #451: the button only when at least one asset or login uses this login.
+  const hasLinkedAssets = adminMode() && shown.type === 'login'
+    && (await call('linkedEntries', containerId, id).then((e) => e.length > 0, () => false));
+  if (ui.selected !== key || ui.editing) return undefined;
   pane.replaceChildren(itemDetail(shown, {
     copy,
-    // Linked to a Microsoft login: the website opens with a one-click sign-in for that account.
+    hoverActions: true,
+    // Menu "Type into window": the existing auto-type of the selected entry (u = user name, p = password).
+    typeInto: (what) => call('autoType', containerId, id, what).catch((e) => toast(e.message, 'error')),
+    // Linked to a Microsoft login: the website opens; on Microsoft's sign-in the bar offers the accounts (#425).
     openUrl: shown.linked?.microsoft ? (u) => call('openWithMicrosoft', { containerId, id, url: u })
-      .then((r) => toast(r.signIn ? t('Geöffnet – die Browser-Erweiterung meldet dich mit dem Microsoft-Login an') : t('Geöffnet – ohne Browser-Erweiterung bitte selbst anmelden')), (e) => toast(e.message, 'error')) : openUrl,
+      .then(() => toast(t('Geöffnet – bei Microsoft das Konto in der Keevault-Leiste wählen')), (e) => toast(e.message, 'error')) : openUrl,
     containerName,
     connect: (it, method) => connectServer(it.containerId, it.id, method),
     adminLinks: st.settings?.adminTools === true ? ADMIN_LINKS.map((l) => ({ ...l, open: (it) => openAdminLink(l, `${it.containerId}/${it.id}`) })) : null,
-    showLinkedAssets: adminMode() ? (it) => linkedAssetsDialog(it) : null,
+    showLinkedAssets: hasLinkedAssets ? (it) => linkedAssetsDialog(it) : null,
     linkTitle,
     saveFile: async (name, data) => {
       try {
@@ -83,23 +90,6 @@ export async function renderDetail() {
         toast(e.message, 'error');
       }
     },
-    onMovePasskey: canWrite ? (passkey) => movePasskeyDialog(item, passkey) : null,
-    passkeyDrag: canWrite ? (e, passkey) => {
-      e.stopPropagation();
-      setDraggedPasskey({ from: `${item.containerId}/${item.id}`, credentialId: passkey.credentialId });
-      e.dataTransfer.setData(DRAG_PASSKEY, JSON.stringify(draggedPasskey));
-      e.dataTransfer.effectAllowed = 'move';
-    } : null,
-    passkeyDragEnd: () => { setDraggedPasskey(null); },
-    onRemovePasskey: canWrite ? async (credentialId) => {
-      if (!(await confirmDialog(t('Passkey entfernen'), t('Passkey aus dem Eintrag entfernen? Die Anmeldung bei der Website damit ist danach nicht mehr möglich – entferne ihn dort ebenfalls.'), { confirmLabel: t('Entfernen'), danger: true }))) return;
-      try {
-        await call('save', containerId, { ...item, passkeys: item.passkeys.filter((p) => p.credentialId !== credentialId) }, item.version);
-        await reloadAll();
-      } catch (e) {
-        toast(e.message, 'error');
-      }
-    } : null,
     // "⋯" in the head opens the same menu as a right-click in the list.
     menu: (anchor, items, { below = false } = {}) => {
       const r = anchor.getBoundingClientRect();
@@ -161,6 +151,15 @@ function renderEditor() {
   const knownFolders = [...new Set([...folderList(folderTarget), ...modeItems(folderTarget).map((i) => i.folder).filter(Boolean)])].sort();
   const folderContainer = st.containers.find((c) => c.id === folderTarget);
   const form = itemForm(item, {
+    // Moving a passkey: edit mode only (#453).
+    onMovePasskey: (passkey) => movePasskeyDialog(item, passkey),
+    passkeyDrag: (e, passkey) => {
+      e.stopPropagation();
+      setDraggedPasskey({ from: `${item.containerId}/${item.id}`, credentialId: passkey.credentialId });
+      e.dataTransfer.setData(DRAG_PASSKEY, JSON.stringify(draggedPasskey));
+      e.dataTransfer.effectAllowed = 'move';
+    },
+    passkeyDragEnd: () => { setDraggedPasskey(null); },
     isNew,
     linkOptions: linkOptions(),
     devices: adminMode(),

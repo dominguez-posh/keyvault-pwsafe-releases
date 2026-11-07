@@ -353,6 +353,12 @@ bei jedem Passwortmanager – nicht.
   Kopien der Datei von vor dem Entfernen bleiben für die Person lesbar.
 - **Grenzen:** Wer Schreibzugriff auf den Speicherort hat, kann die Datei löschen oder Einträge unlesbar machen
   (Verfügbarkeit), aber nichts unbemerkt verändern oder lesen. Die Zeitstempel stammen von den Clients.
+- **Dokumentierte Grenze (Entscheidung Lucas, 07.11.2026, #446):** Geteilte Datei-Tresore schützen gegen
+  Außenstehende, nicht gegen ein Mitglied mit Schreibzugriff auf die Freigabe. Für Teams mit getrennten Rechten
+  empfehlen wir Key Vault. Weitere Härtung dieser Art gibt es nur noch bei hohen Befunden. Ein Gerät, das einen Stand
+  gesehen hat, merkt sich die gültigen Zuweisungen vollständig: Eine Datei mit einer veränderten oder fehlenden
+  bekannten Zuweisung wird abgelehnt und lässt sich in der App „Aus bekanntem Stand reparieren“. Ein Gerät ohne diesen
+  Stand (neu, Datei neu hinzugefügt) kann eine solche Änderung nicht erkennen.
 
 ## Einsatzempfehlung und Reifegrad
 

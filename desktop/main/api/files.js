@@ -8,7 +8,7 @@ import { config, files, opened, setOpened, vault, win } from '../state.js';
 import { api } from './index.js';
 import { requireFeature } from '../guards.js';
 import { passkeyCeremony, registerPasskey } from '../passkey-window.js';
-import { bindPersonalKeys, createPersonal, personalEntries, personalInfo, usePersonal } from '../personal.js';
+import { bindPersonalKeys, confirmPersonalRecovery, createPersonal, personalEntries, personalInfo, renewPersonalRecovery, usePersonal } from '../personal.js';
 import { actor, changed, cleanEmail, send } from '../session.js';
 
 async function protectionCtx(containerId) {
@@ -43,6 +43,10 @@ export const filesApi = {
     if (canceled || !filePaths[0]) return null;
     return files.open(filePaths[0]);
   },
+  /** Another vault in a known file, compared with its creator and accepted by the person (#404). */
+  acceptFileSwap: ({ path: filePath, id }) => files.acceptSwap(String(filePath || ''), String(id || '')),
+  /** A known file refused for a changed grant, put back from the state seen here (#446). */
+  repairFile: (id) => files.repair(String(id || '')),
   renameFile: (id, name) => files.rename(id, name),
   showFile: async (id) => {
     const c = (await files.containers()).find((x) => x.id === id);
@@ -71,6 +75,8 @@ export const filesApi = {
   },
   createPersonal: (opts) => createPersonal(opts),
   usePersonal: (opts) => usePersonal(opts),
+  renewPersonalRecovery: (id, password) => renewPersonalRecovery(id, password),
+  confirmPersonalRecovery: (id) => confirmPersonalRecovery(id),
   /** After unlocking the personal vault with the master password: bind its key to this device and the PIN. */
   async bindPersonalWithPin(pin) {
     await api.verifyPin(String(pin || ''));

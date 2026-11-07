@@ -4,6 +4,7 @@ import { totpCode } from '../../extension/core/totp.js';
 import { fqdnUserName } from '../../extension/core/model.js';
 import { bridge } from './state.js';
 import { splitEntryKey, usableItem } from './devices.js';
+import { claimJob } from '../signin-claim.js';
 
 // Sign-in handed to the browser extension: for two minutes, only on the named sign-in hosts, the extension may ask
 // for this one account (bridge "signIn"; the host comes from the browser, not from the page). Several steps (account,
@@ -22,11 +23,11 @@ export function addSignInJob(hosts, source, mode) {
   bridge?.broadcast('signin');
 }
 
-export async function signInFor(host) {
+export async function signInFor(host, tab) {
   const now = Date.now();
   signInJobs = signInJobs.filter((j) => j.until > now);
   const job = signInJobs.find((j) => hostIn(String(host || '').toLowerCase(), j.hosts));
-  if (!job) return null;
+  if (!job || !claimJob(job, tab)) return null;
   const item = typeof job.source === 'string' ? await usableItem(...splitEntryKey(job.source)) : job.source;
   // Bastion's sign-in on the VM always gets the FQDN form (user@contoso.local) when the account knows its domain.
   const username = job.mode === 'form' || job.mode === 'bastion' ? fqdnUserName(item) : item.username || '';

@@ -191,8 +191,13 @@ class ProviderError extends Error {
 }
 
 export class WindowsProvider {
-  /** vault(): VaultSession, isOpen(): bool, actor(): string, show(): bring the app to the front, notify(): UI update */
-  constructor({ vault, isOpen, actor, show, notify }) {
+  /**
+   * vault(): VaultSession, isOpen(): bool, actor(): string, show(): bring the app to the front, notify(): UI update,
+   * pin: { state() → { required, pinSet }, check(pin) } – the app PIN that every passkey use needs (#439)
+   */
+  constructor({ vault, isOpen, actor, show, notify, pin }) {
+    if (!pin) throw new Error('WindowsProvider needs the passkey PIN check');
+    this.pin = pin;
     this.vault = vault;
     this.isOpen = isOpen;
     this.actor = actor;
@@ -243,6 +248,7 @@ export class WindowsProvider {
         id: p.id, kind: p.kind, rpId: p.rpId, rpName: p.parsed.rp?.name || p.rpId,
         user: p.kind === 'create' ? { name: p.parsed.user.name, displayName: p.parsed.user.displayName } : null,
         locked: !this.isOpen(),
+        pin: this.pin.state(),
       };
       if (this.isOpen()) {
         const vault = this.vault();
@@ -303,6 +309,8 @@ export class WindowsProvider {
       this.scheduleSync();
       return;
     }
+    // #439: the PIN for this one use – wrong, missing or none set: nothing is signed and the request stays open.
+    await this.pin.check(decision.pin);
     const candidate = (await vault.passkeyCandidates(p.rpId, p.parsed.allowList))
       .find((c) => c.containerId === decision.containerId && c.itemId === decision.itemId && c.passkey.credentialId === decision.credentialId);
     if (!candidate) throw new Error(t('Passkey nicht gefunden'));

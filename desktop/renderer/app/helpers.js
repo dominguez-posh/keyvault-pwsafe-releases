@@ -14,7 +14,13 @@ export const copy = (text, label = t('Wert')) => Promise.resolve(text).then((val
   .catch((e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error'));
 export const openUrl = (url) => call('openExternal', url);
 export const formatDate = (iso) => new Date(iso).toLocaleDateString(locale(), { day: '2-digit', month: '2-digit', year: 'numeric' });
-export const field = (label, input, hint) => h('div', { class: 'field' }, h('label', {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
+let fieldSeq = 0;
+// The label belongs to its control (screen readers, click on the label); a control that has no id gets one.
+export const field = (label, input, hint) => {
+  const control = input instanceof Element && /^(INPUT|SELECT|TEXTAREA)$/.test(input.tagName) ? input : null;
+  if (control && !control.id) control.id = `fld-${++fieldSeq}`;
+  return h('div', { class: 'field' }, h('label', control ? { for: control.id } : {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
+};
 
 /** Tab bar + panels for a dialog; the active tab per key survives closing (e.g. reopening the settings after Save). */
 const activeTabs = {};

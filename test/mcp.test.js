@@ -42,6 +42,49 @@ function service({ read = 'session', write = true, locked = false } = {}) {
   return { mcp, client, v, asked, audit };
 }
 
+// #374: locked while the user is asked. The entry was read before the question, so "allow" must not hand it out.
+function lockedWhileAsking(extra = {}) {
+  const v = fakeVault();
+  let open = true;
+  const answering = (answer) => async () => { open = false; return answer; };
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }), vault: () => (open ? v : null),
+    confirmRead: answering('once'), confirmWrite: answering(true), confirmPasskey: answering(true), ...extra(answering) });
+  return { mcp, v };
+}
+
+test('mcp #374: an answer that comes after locking hands out and changes nothing', async () => {
+  const none = () => ({});
+  const client = { agent: 'claude-ai' };
+  const locked = /gesperrt|locked/i;
+  await assert.rejects(lockedWhileAsking(none).mcp.call(client, 'get_entry', { vaultId: 'kv-team', entryId: 'pws-1' }), locked);
+  await assert.rejects(lockedWhileAsking(none).mcp.call(client, 'get_totp', { vaultId: 'kv-team', entryId: 'pws-1' }), locked);
+  const write = lockedWhileAsking(none);
+  await assert.rejects(write.mcp.call(client, 'update_entry', { vaultId: 'kv-team', entryId: 'pws-1', title: 'Neu' }), locked);
+  assert.deepEqual(write.v.saved, []);
+  const ms = lockedWhileAsking((answering) => ({ features: () => ({ microsoft: true }), chooseMicrosoft: answering('kv-team/pws-1') }));
+  await assert.rejects(ms.mcp.call(client, 'request_microsoft_login', {}), locked);
+});
+
+test('mcp #374: the audit log names the account chosen and the origin', async () => {
+  const audit = [];
+  const mcp = new McpService({ admitted: () => true, vault: () => fakeVault(), audit: (e) => audit.push(e),
+    features: () => ({ microsoft: true, passkeys: true }), chooseMicrosoft: async () => 'kv-team/pws-1', confirmPasskey: async () => false });
+  const client = { agent: 'claude-ai' };
+  await mcp.call(client, 'request_microsoft_login', {});
+  assert.equal(audit.at(-1).account, 'admin@contoso.com');
+  assert.equal(audit.at(-1).entry, 'pws-1');
+  assert.equal(audit.at(-1).vault, 'kv-team');
+  assert.ok(!JSON.stringify(audit).includes('S3cret'), 'no secret in the log');
+  await mcp.call(client, 'sign_in_with_passkey', { vaultId: 'kv-team', entryId: 'pws-1', origin: 'https://evil.example', challenge: 'A'.repeat(32) }).catch(() => {});
+  assert.equal(audit.at(-1).origin, 'https://evil.example');
+});
+
+test('mcp #374: tools that sign in or hand out a sign-in do not call themselves read-only', () => {
+  for (const name of ['sign_in_with_passkey', 'request_microsoft_login']) {
+    assert.equal(MCP_TOOLS.find((x) => x.name === name).annotations.readOnlyHint, false, name);
+  }
+});
+
 test('mcp: search shows metadata only, never secrets', async () => {
   const { mcp, client, asked } = service();
   const r = await mcp.call(client, 'search_entries', { query: 'azure' });
@@ -433,4 +476,30 @@ test('mcp: Microsoft sign-in for a tool – off by default, the user picks the a
   await assert.rejects(mcp.call(client, 'request_microsoft_login', {}), /abgelehnt/, 'no choice, nothing returned');
   pick = 'kv/gh';
   await assert.rejects(mcp.call(client, 'request_microsoft_login', {}), /abgelehnt/, 'a key that was not offered is refused');
+});
+
+test('mcp: a passkey use that the app does not confirm with the PIN signs nothing (#439)', async () => {
+  const { createCredential } = await import('../extension/core/webauthn.js');
+  const { b64uEncode, randomBytes } = await import('../extension/core/util.js');
+  const origin = 'https://github.com';
+  const { passkey } = await createCredential({ origin, rpId: 'github.com', rpName: 'GitHub', user: { id: b64uEncode(randomBytes(16)), name: 'alice', displayName: 'Alice' }, challenge: b64uEncode(randomBytes(32)), pubKeyCredParams: [{ type: 'public-key', alg: -7 }] });
+  const items = new Map([['pk-1', { id: 'pk-1', version: 'v1', type: 'login', title: 'GitHub', username: 'alice', password: '', urls: ['https://github.com/'], totp: '', notes: '', folder: '', fields: [], passkeys: [passkey], card: {}, cert: {} }]]);
+  const v = { containers: async () => [{ id: 'kv', name: 'Team', kind: 'keyvault', access: { write: true } }], summaries: async () => [], getItem: async (_c, id) => structuredClone(items.get(id)), saveItem: async (_c, i) => i };
+  let outcome = new Error('no PIN set');
+  outcome.name = 'PinNotSet';
+  let asked = 0;
+  const mcp = new McpService({ admitted: () => true, policy: () => ({ write: true }), vault: () => v, confirmRead: async () => 'deny', confirmWrite: async () => false, audit: () => {}, features: () => ({ passkeys: true }),
+    confirmPasskey: async () => { asked++; if (outcome instanceof Error) throw outcome; return outcome; } });
+  const client = { agent: 'claude-code' };
+  mcp.connect(client);
+  const args = { vaultId: 'kv', entryId: 'pk-1', origin, challenge: b64uEncode(randomBytes(32)) };
+  // The app refuses (no PIN set, wrong PIN, blocked): the agent gets an error, not an assertion.
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', args), (e) => e.name === 'PinNotSet');
+  outcome = Object.assign(new Error('Falsche PIN'), { name: 'PinWrong' });
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', args), /Falsche PIN/);
+  outcome = false;
+  await assert.rejects(mcp.call(client, 'sign_in_with_passkey', args), /abgelehnt/);
+  assert.equal(asked, 3);
+  outcome = true;
+  assert.ok((await mcp.call(client, 'sign_in_with_passkey', args)).credential, 'only a confirmed use is signed');
 });

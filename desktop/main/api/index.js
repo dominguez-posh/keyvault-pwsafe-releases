@@ -10,6 +10,7 @@ import { filesApi } from './files.js';
 import { foldersApi } from './folders.js';
 import { integrationsApi } from './integrations.js';
 import { itemsApi } from './items.js';
+import { releaseApi } from './release.js';
 import { reportsApi } from './reports.js';
 import { vaultsApi } from './vaults.js';
 import { lockNow } from '../session.js';
@@ -24,6 +25,7 @@ export const api = {
   ...adminApi,
   ...integrationsApi,
   ...reportsApi,
+  ...releaseApi,
 };
 
 ipcMain.handle('api', async (event, method, args) => {

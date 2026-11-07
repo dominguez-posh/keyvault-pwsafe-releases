@@ -122,3 +122,24 @@ test('Bastion frames: only inside the portal, portal.azure.net never on its own'
   assert.equal(bastionFrameAllowed({ host: 'reactblade.portal.azure.net', frameId: 0, topIsPortal: false }), false);
   assert.equal(bastionFrameAllowed({ host: 'bst-1.bastion.azure.com', frameId: 7, topIsPortal: false }), false);
 });
+
+test('a confirmed fill goes only to the confirmed origin (#412)', async () => {
+  const { confirmedOriginFits } = await import('../extension/core/match.js');
+  assert.equal(confirmedOriginFits('https://shop.example/login', 'https://shop.example'), true);
+  assert.equal(confirmedOriginFits('https://evil.example/', 'https://shop.example'), false, 'the tab moved on');
+  assert.equal(confirmedOriginFits('http://shop.example/', 'https://shop.example'), false);
+  assert.equal(confirmedOriginFits('https://shop.example:8443/', 'https://shop.example'), false);
+  assert.equal(confirmedOriginFits('https://shop.example/', ''), false, 'nothing was confirmed');
+  assert.equal(confirmedOriginFits('chrome://settings', ''), false, 'no origin at all');
+  const read = (name) => readFileSync(fileURLToPath(new URL(`../extension/${name}`, import.meta.url)), 'utf8');
+  assert.ok(read('popup/popup.js').includes('fillItem(s, true, pageOrigin(tab?.url))'), 'the popup sends what it named');
+  assert.ok(read('background.js').includes('confirmedOriginFits(targets[0].url, origin)'), 'the background compares it');
+});
+
+test('the confirmation names scheme, host and port of the page (#381)', async () => {
+  const { pageOrigin } = await import('../extension/core/match.js');
+  assert.equal(pageOrigin('https://shop.example/login?x=1', 'x'), 'https://shop.example');
+  assert.equal(pageOrigin('http://shop.example:8080/a', 'x'), 'http://shop.example:8080');
+  assert.equal(pageOrigin('chrome://settings', 'fallback'), 'fallback');
+  assert.equal(pageOrigin(undefined, 'fallback'), 'fallback');
+});

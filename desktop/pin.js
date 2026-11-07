@@ -46,10 +46,11 @@ export class PinGuard {
     return Math.max(0, Math.ceil((this.blockedUntil - Date.now()) / 1000));
   }
 
-  success() {
+  /** unlock: false for checks that must not open the one unlock a verified PIN allows (passkey use, #439). */
+  success({ unlock = true } = {}) {
     this.failures = 0;
     this.blockedUntil = 0;
-    this.okUntil = Date.now() + 120_000;
+    if (unlock) this.okUntil = Date.now() + 120_000;
   }
 
   failure() {
@@ -63,4 +64,13 @@ export class PinGuard {
     this.okUntil = 0;
     return ok;
   }
+}
+
+// #439: PIN checks run one after the other. Parallel requests would all pass the "blocked?" test before any failure was
+// counted and so get more guesses than the lock allows. One queue for every check that uses the shared counter.
+let pinQueueTail = Promise.resolve();
+export function inPinQueue(fn) {
+  const run = pinQueueTail.then(() => fn());
+  pinQueueTail = run.catch(() => {});
+  return run;
 }

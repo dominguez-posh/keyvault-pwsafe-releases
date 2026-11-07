@@ -8,6 +8,10 @@ import { FileVault } from '../extension/core/filevault.js';
 import { canWrite } from '../extension/core/members.js';
 import { setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries } from '../extension/core/protect.js';
 import { t } from '../extension/core/i18n.js';
+import { vaultIdentity } from './file-identity.js';
+import { floorOf, mergeFloors, repairFromFloor } from '../extension/core/rollback.js';
+
+const SWAPPED = () => t('In der Datei liegt ein anderer Tresor als beim letzten Öffnen. Gleiche Erstellerin und Sicherheitscode mit der Erstellerin außerhalb der App ab (Telefon oder persönlich), bevor du ihn annimmst.');
 
 // OneDrive, the virus scanner or the indexer hold the file for a moment after each change (EPERM/EBUSY on Windows):
 // the step is tried again for a while instead of failing.
@@ -56,12 +60,18 @@ export class FileContainers {
    * paths(): configured file paths, setPaths(paths), onChange(): notify UI/browser.
    * pins() / setPins(map): file ID seen per path – a file swapped for another one is refused.
    */
-  constructor({ paths, setPaths, onChange, pins = () => ({}), setPins = () => {}, personalPaths = () => [], locations = new Map() }) {
+  constructor({ paths, setPaths, onChange, pins = () => ({}), setPins = () => {}, pinNotes = () => ({}), setPinNotes = () => {}, personalPaths = () => [], locations = new Map(), onReloadError = () => {}, onRekey = () => {} }) {
+    // A refused reload of a changed file is shown (container warning), not dropped (#430).
+    this.onReloadError = onReloadError;
+    // Creator and safety code of the vault seen per path, shown next to those of a vault that replaced it (#404).
+    this.pinNotes = pinNotes;
+    this.setPinNotes = setPinNotes;
     this.paths = paths;
     // The personal vault (free, one person, never local – desktop/main.js) and where each file lives.
     this.personalPaths = personalPaths;
     this.isPersonal = (p) => !!p && (this.personalPaths() || []).includes(p);
     this.locations = locations;
+    this.onRekey = onRekey;
     this.setPaths = setPaths;
     this.pins = pins;
     this.setPins = setPins;
@@ -79,29 +89,148 @@ export class FileContainers {
     const vault = new FileVault(fileIo(filePath));
     let id = `missing:${filePath}`;
     let error = null;
+    let swap = null;
+    // The floor remembered for this path (#432): an older state of the same secured file is refused by load().
+    vault.floor = this.pinNotes()[filePath]?.floor || null;
+    // After each own save (e.g. a member removed): remembered at once, not only when the watcher reads it (Konrad).
+    vault.onPersisted = (v) => { if (this.pins()[filePath] === v.id) this.noteFloor(filePath, v); };
     try {
       await vault.load();
       id = vault.id;
       const pinned = this.pins()[filePath];
       if (pinned && pinned !== id) {
+        // Another vault where a known one was: never taken by itself, also not after removing and opening again – only
+        // after the person compared creator and safety code with the creator (acceptSwap, #404).
+        swap = await this.swapInfo(filePath, pinned, vault);
         id = `missing:${filePath}`;
-        throw new Error(t('Die Datei wurde gegen einen anderen Tresor ausgetauscht. Entferne sie und öffne sie neu, wenn das gewollt war.'));
+        throw new Error(SWAPPED());
       }
-      if (!pinned) this.setPins({ ...this.pins(), [filePath]: id });
+      // Remembered as secured, now in the old format under the same ID (#430): refused (the core refuses it, too).
+      if (pinned && this.pinNotes()[filePath]?.secure === true && !vault.secure) {
+        id = `missing:${filePath}`;
+        throw new Error(t('Die Datei wurde manipuliert: ein abgesicherter Tresor im alten Format'));
+      }
+      if (!pinned) await this.remember(filePath, vault);
+      else this.noteFloor(filePath, vault);
     } catch (e) {
       error = e.message;
     }
     const existing = [...this.entries.values()].find((e) => e.id === id && e.path !== filePath);
     if (existing) throw new Error(t('Dieser Tresor ist bereits geöffnet ({path})', { path: existing.path }));
-    const entry = { id, path: filePath, vault: error ? null : vault, error };
+    const entry = { id, path: filePath, vault: error ? null : vault, error, swap };
     this.entries.set(id, entry);
     if (!error) {
       watchFile(filePath, { interval: 3000 }, (cur, prev) => {
         // In the queue (#326): a reload in the middle of a save replaced the document and lost the entry being saved.
-        if (cur.mtimeMs !== prev.mtimeMs) this.serial(entry.id, () => entry.vault.load()).then(() => this.onChange(), () => {});
+        if (cur.mtimeMs !== prev.mtimeMs) this.watched(entry);
       });
     }
     return entry;
+  }
+
+  /** The file changed on disk: read again; a refusal (tampered file) stays visible as the container's warning (#430). */
+  watched(entry) {
+    return this.serial(entry.id, () => this.reload(entry)).then(() => {
+      if (entry.vault) this.noteFloor(entry.path, entry.vault);
+      entry.warning = null;
+      this.onChange();
+    }, (e) => {
+      entry.warning = e.message;
+      this.onReloadError(entry.path, e);
+      this.onChange();
+    });
+  }
+
+  /** Changed on disk: the same vault is read again; another vault in its place is refused like at the start (#404). */
+  async reload(entry) {
+    const fresh = new FileVault(fileIo(entry.path));
+    await fresh.load();
+    // The same ID in the old format after the secured one (#430): FileVault.load refuses, the open vault stays as it was.
+    if (fresh.id === entry.id) return entry.vault.load();
+    unwatchFile(entry.path);
+    entry.vault.lock();
+    this.entries.delete(entry.id);
+    const swapped = { id: `missing:${entry.path}`, path: entry.path, vault: null, error: SWAPPED(), swap: await this.swapInfo(entry.path, entry.id, fresh) };
+    this.entries.set(swapped.id, swapped);
+    return null;
+  }
+
+  async swapInfo(filePath, pinned, vault) {
+    const before = this.pinNotes()[filePath] || {};
+    return { path: filePath, before: { id: pinned, name: before.name || '', creator: before.creator || '', code: before.code || '' }, now: await vaultIdentity(vault) };
+  }
+
+  /** The vault seen at this path from now on: its file ID and what identifies it to a person. */
+  async remember(filePath, vault) {
+    const { id: _id, ...note } = await vaultIdentity(vault);
+    this.setPins({ ...this.pins(), [filePath]: vault.id });
+    this.setPinNotes({ ...this.pinNotes(), [filePath]: { ...note, floor: floorOf(vault.doc, vault.roster) } });
+  }
+
+  /** The highest state of this secured file seen so far, kept across restarts (#432). */
+  noteFloor(filePath, vault) {
+    const notes = this.pinNotes();
+    const floor = mergeFloors(notes[filePath]?.floor, floorOf(vault.doc, vault.roster));
+    if (!floor || JSON.stringify(floor) === JSON.stringify(notes[filePath]?.floor)) return;
+    this.setPinNotes({ ...notes, [filePath]: { ...(notes[filePath] || {}), floor } });
+  }
+
+  /**
+   * The person compared creator and safety code with the creator and takes the vault now at this path. id: the file ID
+   * the dialog showed – a file changed again meanwhile is refused.
+   */
+  async acceptSwap(filePath, id) {
+    const entry = [...this.entries.values()].find((e) => e.path === filePath && e.swap);
+    if (!entry) throw new Error(t('Tresor nicht gefunden'));
+    const vault = new FileVault(fileIo(filePath));
+    await vault.load();
+    if (vault.id !== id) throw new Error(t('Die Datei hat sich inzwischen wieder geändert – bitte erneut prüfen.'));
+    await this.remember(filePath, vault);
+    this.entries.delete(entry.id);
+    const fresh = await this.attach(filePath);
+    if (!this.paths().includes(filePath)) this.setPaths([...this.paths(), filePath]);
+    this.onChange();
+    return fresh.id;
+  }
+
+  /** Refused (at the start or on a reload) and a known state with whole grants (#446) is there to repair it from. */
+  repairable(e) {
+    return !!((e.error || e.warning) && !e.swap && this.pinNotes()[e.path]?.floor?.members?.length);
+  }
+
+  /**
+   * #446: a file refused because a known grant was changed or taken out (anyone with write access to the share can do
+   * that) is put back from the state seen here – the grants exactly as they were signed. Written only if the result
+   * passes the same checks with that state; otherwise the reason is thrown and the file stays as it is. → container id
+   */
+  async repair(id) {
+    const entry = this.entries.get(id);
+    if (!entry) throw new Error(t('Tresor nicht gefunden'));
+    const floor = mergeFloors(this.pinNotes()[entry.path]?.floor, entry.vault ? floorOf(entry.vault.doc, entry.vault.roster) : null);
+    const io = fileIo(entry.path);
+    await this.serial(entry.id, async () => {
+      const text = await io.read();
+      let fixed = null;
+      try {
+        fixed = text == null ? null : await repairFromFloor(JSON.parse(text), floor);
+      } catch {
+        fixed = null;
+      }
+      if (!fixed) throw new Error(t('Die Datei lässt sich nicht aus dem bekannten Stand reparieren.'));
+      const probe = new FileVault({ read: async () => JSON.stringify(fixed), write: async () => {} });
+      probe.floor = floor;
+      await probe.load();
+      if (probe.id !== this.pins()[entry.path]) throw new Error(t('Die Datei lässt sich nicht aus dem bekannten Stand reparieren.'));
+      await io.write(JSON.stringify(fixed, null, 1));
+    });
+    if (entry.vault) {
+      await this.watched(entry);
+      return entry.id;
+    }
+    this.entries.delete(entry.id);
+    const fresh = await this.attach(entry.path);
+    this.onChange();
+    return fresh.id;
   }
 
   get(id) {
@@ -124,6 +253,9 @@ export class FileContainers {
       protected: true,
       locked: !e.vault || e.vault.locked,
       error: e.error ? { status: 0, message: e.error } : null,
+      swap: e.swap || null,
+      warning: e.warning || null,
+      repairable: this.repairable(e),
       sources: ['file'],
       secure: !!e.vault?.secure,
       role: e.vault && !e.vault.locked ? e.vault.role : null,
@@ -225,18 +357,28 @@ export class FileContainers {
     for (const e of this.entries.values()) e.vault?.lock();
   }
 
-  async updateKeyring(id, op, actor) {
-    const vault = this.get(id);
-    if (vault.secure) throw new Error(t('Abgesicherte Dateien verwalten Zugriff über Benutzer und Rollen'));
-    if (vault.locked) throw new Error(t('Der Datei-Tresor ist gesperrt'));
-    // The personal vault belongs to one person: no invitations.
-    if (op?.type === 'createInvite' && this.isPersonal(this.entries.get(id)?.path)) throw new Error(t('Der persönliche Tresor lässt sich nicht teilen'));
-    // ... and keeps its master password (new devices open it with it).
-    if (op?.type === 'removeEntry' && this.isPersonal(this.entries.get(id)?.path)
-      && vault.keyring?.entries?.find((e) => e.id === op.entryId)?.type === 'password') throw new Error(t('Das Masterpasswort des persönlichen Tresors lässt sich nicht entfernen'));
-    const { keyring, ...extra } = await applyKeyringOp(vault.keyring, vault.ck, op, actor);
-    await vault.setKeyring(keyring);
-    return extra;
+  // In the vault's queue: read, change and write of the keyring belong together, or one change overwrites another (#399).
+  updateKeyring(id, op, actor) {
+    return this.serial(id, async () => {
+      const vault = this.get(id);
+      if (vault.secure) throw new Error(t('Abgesicherte Dateien verwalten Zugriff über Benutzer und Rollen'));
+      if (vault.locked) throw new Error(t('Der Datei-Tresor ist gesperrt'));
+      if (op?.type === 'rekey') {
+        // New key (#402): the device binding (PIN) holds the old key and is renewed or dropped.
+        const r = await vault.rekey(op.password, actor);
+        await this.onRekey(this.entries.get(id));
+        this.onChange();
+        return r;
+      }
+      // The personal vault belongs to one person: no invitations.
+      if (op?.type === 'createInvite' && this.isPersonal(this.entries.get(id)?.path)) throw new Error(t('Der persönliche Tresor lässt sich nicht teilen'));
+      // ... and keeps its master password (new devices open it with it).
+      if (op?.type === 'removeEntry' && this.isPersonal(this.entries.get(id)?.path)
+        && vault.keyring?.entries?.find((e) => e.id === op.entryId)?.type === 'password') throw new Error(t('Das Masterpasswort des persönlichen Tresors lässt sich nicht entfernen'));
+      const { keyring, ...extra } = await applyKeyringOp(vault.keyring, vault.ck, op, actor);
+      await vault.setKeyring(keyring);
+      return extra;
+    });
   }
 
   // ---------------------------------------------------------------- secured files: members, log, folders
@@ -319,7 +461,7 @@ export class FileContainers {
     this.entries.delete(id);
     entry.id = newId;
     this.entries.set(newId, entry);
-    this.setPins({ ...this.pins(), [entry.path]: newId });
+    await this.remember(entry.path, entry.vault);
     this.onChange();
     return newId;
   }
@@ -334,6 +476,7 @@ export class FileContainers {
     await vault.persist();
     this.setPaths([...this.paths().filter((p) => p !== filePath), filePath]);
     const entry = await this.attach(filePath);
+    Object.assign(vault, { floor: entry.vault.floor, onPersisted: entry.vault.onPersisted });
     entry.vault = vault;
     this.onChange();
     return { id: entry.id };
@@ -347,6 +490,10 @@ export class FileContainers {
     const { keyring, ck, recoveryKey } = await setupKeyring(vault.id, methods, actor);
     vault.doc.keyring = keyring;
     await vault.persist();
+    // A new file on purpose, none was there: the file seen here before is gone. Its pin would refuse the new one and the
+    // recovery key, made only once, would be lost with an error (#399). Only now: a failed write must leave the pin's check.
+    const { [filePath]: _gone, ...pins } = this.pins();
+    if (_gone) this.setPins(pins);
     await vault.unlock(ck);
     this.setPaths([...this.paths().filter((p) => p !== filePath), filePath]);
     const entry = await this.attach(filePath);
@@ -359,6 +506,13 @@ export class FileContainers {
     const already = [...this.entries.values()].find((e) => e.path === filePath);
     if (already) return already.id;
     const entry = await this.attach(filePath);
+    // Another vault where a known one was (#404): listed with its notice, the person compares and accepts it there.
+    // A known file refused for a changed grant, too: listed, to be repaired from the known state there (#446).
+    if (entry.swap || this.repairable(entry)) {
+      this.setPaths([...this.paths(), filePath]);
+      this.onChange();
+      return entry.id;
+    }
     if (entry.error) {
       this.entries.delete(entry.id);
       throw new Error(entry.error);

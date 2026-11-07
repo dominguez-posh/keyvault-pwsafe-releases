@@ -8,12 +8,13 @@ import { t } from './i18n.js';
 import { hostFromUrl } from './match.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 import { expiryState } from './health.js';
+import { secretRow, urlRow, userRow } from './field-row.js';
 
 /**
  * @param {object} item  parsed item
  * @param {{ copy: (text: string, label: string) => void, openUrl: (url: string) => void,
  *           containerName: (id: string) => string, actions?: Array<{ icon, label, onClick, danger?, primary? }>,
- *           onRemovePasskey?: (credentialId: string) => void }} ctx
+ *           showLinkedAssets?: (item: object) => void }} ctx
  */
 /** Admin centers of a Microsoft account: PIM ("activate a role") on top, then the centers grouped as tiles. */
 function adminPanel(item, links) {
@@ -66,16 +67,16 @@ export function itemDetail(item, ctx) {
       h('div', { class: 'field-row' }, h('span', { class: 'value linked' }, icon('link', 14), ' ',
         l && !l.missing ? [l.title, l.username].filter(Boolean).join(' · ') : t('Verknüpfter Eintrag (nicht verfügbar)')))));
   }
-  if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
-  if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
+  if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx, { hover: true, typeWhat: 'u' }));
+  if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx, { typeWhat: item.type === 'certificate' ? null : 'p' }));
   if (item.totp) rows.push(totpField(item.totp, ctx));
   if (item.urls.length) {
     rows.push(h('div', { class: 'field' }, h('label', {}, item.urls.length > 1 ? t('Websites') : t('Website')),
-      ...item.urls.map((u) => h('div', { class: 'field-row' },
+      ...item.urls.map((u) => (ctx.hoverActions ? urlRow(u, ctx) : h('div', { class: 'field-row' },
         h('a', { href: '#', class: 'url', title: u, onclick: (e) => { e.preventDefault(); ctx.openUrl(u); } }, u),
-        iconButton('copy', t('Kopieren'), () => ctx.copy(u, t('Adresse')))))));
+        iconButton('copy', t('Kopieren'), () => ctx.copy(u, t('Adresse'))))))));
   }
-  if (item.passkeys.length) rows.push(passkeyList(item.passkeys, ctx));
+  if (item.passkeys.length) rows.push(passkeyList(item.passkeys));
   for (const f of item.fields) rows.push(customField(f, ctx));
   if (item.notes) rows.push(h('div', { class: 'field' }, h('label', {}, t('Notizen')), h('div', { class: 'notes' }, item.notes)));
 
@@ -135,12 +136,14 @@ export function expiryBadge(expires) {
   return h('span', { class: 'badge expiry' }, icon('clock', 11), t('Gültig bis {date}', { date }));
 }
 
-function textField(label, value, ctx) {
+function textField(label, value, ctx, { hover = false, typeWhat = null } = {}) {
+  if (hover && ctx.hoverActions) return h('div', { class: 'field' }, h('label', {}, label), userRow(label, value, ctx, { typeWhat }));
   return h('div', { class: 'field' }, h('label', {}, label),
     h('div', { class: 'field-row' }, h('span', { class: 'value' }, value), iconButton('copy', t('Kopieren'), () => ctx.copy(value, label))));
 }
 
-function secretField(label, value, ctx, { masked = '••••••••••••', copyValue = value } = {}) {
+function secretField(label, value, ctx, { masked = '••••••••••••', copyValue = value, typeWhat = null } = {}) {
+  if (ctx.hoverActions) return h('div', { class: 'field' }, h('label', {}, label), secretRow(label, value, ctx, { masked, copyValue, typeWhat }));
   const span = h('span', { class: 'value secret' }, masked);
   let shown = false;
   const toggle = iconButton('eye', t('Anzeigen'), () => {
@@ -289,17 +292,14 @@ function mgmtLabel(kind) {
   return t('Verwaltungsseite');
 }
 
-function passkeyList(passkeys, ctx) {
+/** Detail view: the passkey card only shows; moving and removing a passkey is edit mode only (the form passkey rows). */
+function passkeyList(passkeys) {
   return h('div', { class: 'field' }, h('label', {}, passkeys.length > 1 ? t('Passkeys') : t('Passkey')),
-    ...passkeys.map((p) => h('div', { class: 'passkey-row', ...(ctx.passkeyDrag ? {
-      draggable: 'true', title: t('Auf einen anderen Login in der Liste ziehen, um den Passkey dorthin zu verschieben'),
-      ondragstart: (e) => ctx.passkeyDrag(e, p), ondragend: () => ctx.passkeyDragEnd?.() } : {}) },
+    ...passkeys.map((p) => h('div', { class: 'passkey-row' },
       icon('key'),
       h('div', { class: 'passkey-text' },
         h('div', {}, p.userName || p.userDisplayName || t('(ohne Benutzername)')),
-        h('div', { class: 'muted small' }, t('{rpId} · erstellt {date}', { rpId: p.rpId, date: formatDateTime(p.created) }))),
-      ctx.onMovePasskey ? iconButton('move', t('In anderen Eintrag verschieben'), () => ctx.onMovePasskey(p)) : null,
-      ctx.onRemovePasskey ? iconButton('trash', t('Passkey entfernen'), () => ctx.onRemovePasskey(p.credentialId)) : null)));
+        h('div', { class: 'muted small' }, t('{rpId} · erstellt {date}', { rpId: p.rpId, date: formatDateTime(p.created) }))))));
 }
 
 const secretInputEl = (name, value) => h('input', { name, type: 'password', value, autocomplete: 'off', spellcheck: 'false' });
@@ -525,9 +525,12 @@ export function itemForm(item, ctx) {
   let passkeys = it.passkeys;
   const passkeyBox = h('div');
   const renderPasskeys = () => {
-    passkeyBox.replaceChildren(...(passkeys.length ? [h('label', {}, t('Passkeys')), ...passkeys.map((p) => h('div', { class: 'passkey-row' },
+    passkeyBox.replaceChildren(...(passkeys.length ? [h('label', {}, t('Passkeys')), ...passkeys.map((p) => h('div', { class: 'passkey-row', ...(ctx.passkeyDrag ? {
+      draggable: 'true', title: t('Auf einen anderen Login in der Liste ziehen, um den Passkey dorthin zu verschieben'),
+      ondragstart: (e) => ctx.passkeyDrag(e, p), ondragend: () => ctx.passkeyDragEnd?.() } : {}) },
       icon('key'),
       h('div', { class: 'passkey-text' }, h('div', {}, p.userName || t('(ohne Benutzername)')), h('div', { class: 'muted small' }, p.rpId)),
+      ctx.onMovePasskey ? iconButton('move', t('In anderen Eintrag verschieben'), () => ctx.onMovePasskey(p)) : null,
       iconButton('trash', t('Passkey entfernen'), () => { passkeys = passkeys.filter((x) => x !== p); renderPasskeys(); })))] : []));
   };
   renderPasskeys();

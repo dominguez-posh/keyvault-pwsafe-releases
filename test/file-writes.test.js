@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { FileContainers, retryBusy } from '../desktop/files.js';
+import { FileVault } from '../extension/core/filevault.js';
 
 test('file vault: parallel saves (import) all land in the file, no temporary files left', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kv-writes-'));
@@ -21,6 +22,110 @@ test('file vault: parallel saves (import) all land in the file, no temporary fil
     await fresh.unlock(id, { password: 'Smoke-Pass-1234' });
     assert.equal((await fresh.summaries(id)).length, 20);
     assert.deepEqual((await fs.readdir(dir)).filter((f) => f.endsWith('.tmp')), []);
+    containers.close();
+    fresh.close();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('file vault: a new file where an old one was removed and deleted opens; a file swapped under an open path is still refused (#399)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kv-pins-'));
+  let paths = [];
+  let pins = {};
+  const containers = new FileContainers({ paths: () => paths, setPaths: (p) => { paths = p; }, pins: () => pins, setPins: (p) => { pins = p; }, onChange: () => {} });
+  try {
+    const file = path.join(dir, 'Persoenlich.kvpws');
+    const first = await containers.create(file, 'Eins', { password: 'Smoke-Pass-1234' }, 'me');
+    containers.remove(first.id);
+    await fs.rm(file);
+    const second = await containers.create(file, 'Zwei', { password: 'Smoke-Pass-1234' }, 'me');
+    assert.notEqual(second.id, first.id);
+    assert.match(second.recoveryKey, /^RK-/);
+    assert.equal(containers.get(second.id).locked, false);
+    assert.equal(pins[file], second.id);
+    // The check of the pin itself stays: the same path with another vault's file.
+    const other = path.join(dir, 'Andere.kvpws');
+    const third = await containers.create(other, 'Drei', { password: 'Smoke-Pass-1234' }, 'me');
+    const swapped = new FileContainers({ paths: () => [file], setPaths: () => {}, pins: () => ({ [file]: third.id }), setPins: () => {}, onChange: () => {} });
+    await swapped.load();
+    assert.ok([...swapped.entries.values()].every((e) => e.error), 'refused');
+    swapped.close();
+  } finally {
+    containers.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('file vault: a failed write of a new file leaves the pin of the old one (#399, Konrad F13)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kv-pins-'));
+  const file = path.join(dir, 'Persoenlich.kvpws');
+  let pins = { [file]: 'file-old' };
+  const containers = new FileContainers({ paths: () => [], setPaths: () => {}, pins: () => pins, setPins: (p) => { pins = p; }, onChange: () => {} });
+  const { persist } = FileVault.prototype;
+  FileVault.prototype.persist = async () => { throw new Error('disk full'); };
+  try {
+    await assert.rejects(containers.create(file, 'Neu', { password: 'Smoke-Pass-1234' }, 'me'), /disk full/);
+    assert.equal(pins[file], 'file-old');
+  } finally {
+    FileVault.prototype.persist = persist;
+    containers.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('file vault: parallel new recovery keys leave one working key, the last (#399)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kv-keyring-'));
+  let paths = [];
+  const containers = new FileContainers({ paths: () => paths, setPaths: (p) => { paths = p; }, onChange: () => {} });
+  try {
+    const file = path.join(dir, 'Keyring.kvpws');
+    const { id } = await containers.create(file, 'Keyring', { password: 'Smoke-Pass-1234' }, 'me');
+    // Read, change and write of the keyring don't overlap: each change starts from the one before.
+    const vault = containers.get(id);
+    const write = vault.setKeyring.bind(vault);
+    let writing = 0;
+    let most = 0;
+    vault.setKeyring = async (keyring) => {
+      most = Math.max(most, ++writing);
+      await new Promise((r) => setTimeout(r, 50));
+      await write(keyring);
+      writing--;
+    };
+    const [first, second] = await Promise.all([
+      containers.updateKeyring(id, { type: 'newRecovery' }, 'me'),
+      containers.updateKeyring(id, { type: 'newRecovery' }, 'me'),
+    ]);
+    assert.equal(most, 1, 'keyring changes overlapped');
+    assert.equal(containers.get(id).keyring.entries.filter((e) => e.type === 'recovery').length, 1);
+    const fresh = new FileContainers({ paths: () => [file], setPaths: () => {}, onChange: () => {} });
+    await fresh.load();
+    await assert.rejects(fresh.unlock(id, { code: first.recoveryKey }));
+    await fresh.unlock(id, { code: second.recoveryKey });
+    fresh.close();
+  } finally {
+    containers.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('file vault: parallel keyring changes both stay (#399)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kv-keyring-'));
+  try {
+    const file = path.join(dir, 'Keyring.kvpws');
+    let paths = [];
+    const containers = new FileContainers({ paths: () => paths, setPaths: (p) => { paths = p; }, onChange: () => {} });
+    const { id } = await containers.create(file, 'Keyring', { password: 'Smoke-Pass-1234' }, 'me');
+    const [, renewed] = await Promise.all([
+      containers.updateKeyring(id, { type: 'setPassword', password: 'Neues-Passwort-5678' }, 'me'),
+      containers.updateKeyring(id, { type: 'newRecovery' }, 'me'),
+    ]);
+    const fresh = new FileContainers({ paths: () => [file], setPaths: () => {}, onChange: () => {} });
+    await fresh.load();
+    await fresh.unlock(id, { password: 'Neues-Passwort-5678' }); // the password change was not written over
+    fresh.get(id).lock();
+    await fresh.unlock(id, { code: renewed.recoveryKey }); // nor the new recovery key
+    assert.equal(fresh.get(id).keyring.entries.filter((e) => e.type === 'recovery').length, 1);
     containers.close();
     fresh.close();
   } finally {

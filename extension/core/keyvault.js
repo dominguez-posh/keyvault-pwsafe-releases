@@ -168,6 +168,11 @@ export class KeyVaultClient {
     return { ...data, ...parseId(data.id) };
   }
 
+  /** Switches off one older version of a secret (it can no longer be read; the version list stays). */
+  async disableSecretVersion(name, version) {
+    return this.send('PATCH', this.url(`/secrets/${encodeURIComponent(name)}/${encodeURIComponent(version)}`), { attributes: { enabled: false } });
+  }
+
   async deleteSecret(name) {
     return this.send('DELETE', this.url(`/secrets/${encodeURIComponent(name)}`));
   }

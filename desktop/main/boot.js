@@ -1,12 +1,14 @@
 // First thing in the process: command-line switches (--smoke-test, --demo, --screenshot, --theme), the profile
 // folder, the single-instance lock and Chromium switches. Runs while the module graph loads, before anything else.
 
-import { app, protocol, nativeTheme } from 'electron';
+import { app, BrowserWindow, protocol, nativeTheme } from 'electron';
 import path from 'node:path';
 import { rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { purgeDiskCaches } from '../secure-net.js';
 import { createDemoBackend } from '../../extension/core/demo.js';
+import { keepWindowsHidden } from './smoke-windows.js';
+import { startSmokeGuard } from './smoke-guard.js';
 
 export const here = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const appRoot = path.join(here, '..');
@@ -18,6 +20,8 @@ export const smokeTest = process.argv.includes('--smoke-test');
 // Smoke runs are headless: an uncaught error must end the run, not open Electron's error dialog on the desktop
 // (Electron only shows it when nobody else listens).
 if (smokeTest) process.on('uncaughtException', (e) => { console.error(`SMOKE FAIL (main process): ${e?.stack || e}`); process.exit(1); });
+export const smokeGuard = smokeTest ? startSmokeGuard({ exit: (code) => app.exit(code) }) : null;
+if (smokeTest && !app.isPackaged) keepWindowsHidden({ BrowserWindow, app });
 export const screenshot = process.argv.find((a) => a.startsWith('--screenshot='))?.slice('--screenshot='.length);
 // --theme=dark|light: screenshots in a fixed colour scheme (otherwise Windows' app mode decides).
 export const forcedTheme = process.argv.find((a) => a.startsWith('--theme='))?.slice('--theme='.length);
@@ -28,6 +32,11 @@ protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: t
 
 // The product was renamed to Keevault; the profile (settings, encrypted token cache, PIN) stays in the folder of the
 // old product name so that updates keep it.
+// Native dialogs and windows without a title show the app name (the package name "keyvault-pwsafe" in development runs):
+// shown name Keevault, the profile folder stays where it is.
+const profileDir = app.getPath('userData');
+app.setName('Keevault');
+app.setPath('userData', profileDir);
 if (app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), 'KeyVault PwSafe'));
 // Development runs get their own pipe (bridge.js pipePath) and never register themselves as the browser's native
 // host or the Windows passkey command – the installed app keeps both (KVPWSAFE_DEV_INTEGRATION=1 to test them).

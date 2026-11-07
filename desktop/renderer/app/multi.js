@@ -85,9 +85,15 @@ export function renderMultiSelection() {
   return undefined;
 }
 
-/** Deletes entries one by one (recycle bin); → number of failures. */
+/** What went wrong in deleteMany, with the reasons: a person has to know what to do about it (#407). */
+export function deleteFailedText(reasons) {
+  const shown = [...new Set(reasons)];
+  return `${t('{n} Einträge konnten nicht gelöscht werden', { n: reasons.length })}: ${shown.slice(0, 3).join(' ')}${shown.length > 3 ? ' …' : ''}`;
+}
+
+/** Deletes entries one by one (recycle bin); → the reason of each failure. */
 export async function deleteMany(keys) {
-  let failed = 0;
+  const failed = [];
   let done = 0;
   const end = progress.begin('deleteMany', t('Einträge werden gelöscht …'));
   try {
@@ -95,8 +101,8 @@ export async function deleteMany(keys) {
       const [containerId, id] = splitKey(key);
       try {
         await call('delete', containerId, id);
-      } catch {
-        failed++;
+      } catch (e) {
+        failed.push(e.message);
       }
       ui.multi.delete(key);
       if (ui.selected === key) ui.selected = null;
@@ -112,7 +118,7 @@ export async function deleteManyDialog(list) {
   const notices = [...new Set(await Promise.all([...new Set(list.map((i) => i.containerId))].map((id) => deleteNotice(st.containers.find((x) => x.id === id)))))];
   if (!(await confirmDialog(t('Einträge löschen'), `${t('{n} Einträge löschen?', { n: list.length })} ${notices.join(' ')}`, { confirmLabel: t('Löschen'), danger: true }))) return;
   const failed = await deleteMany(list.map((i) => i.key));
-  toast(failed ? t('{n} Einträge konnten nicht gelöscht werden', { n: failed }) : t('{n} Einträge in den Papierkorb verschoben', { n: list.length }), failed ? 'error' : undefined);
+  toast(failed.length ? deleteFailedText(failed) : t('{n} Einträge in den Papierkorb verschoben', { n: list.length }), failed.length ? 'error' : undefined);
   await reloadAll();
 }
 

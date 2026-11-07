@@ -103,7 +103,7 @@ ${components.map((c) => `      <ComponentRef Id="${c}" />`).join('\n')}
     </Feature>
 
     <!-- Device setup as SYSTEM (certificate trust + browser policy). Deferred EXE actions format their command line
-         when the script is written, so [INSTALLFOLDER] resolves. Failures are logged in ProgramDataKeevaultsetup.log
+         when the script is written, so [INSTALLFOLDER] resolves. Failures are logged in Windows\\Logs\\Keevault\\setup.log
          and never abort the installation. -->
     <CustomAction Id="DeviceSetup" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="no" Return="ignore"
       ExeCommand="${ps} -Action Install -Scope Machine ${cert}" />

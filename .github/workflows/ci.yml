@@ -1,5 +1,6 @@
-# Every push: tests and checks, extension packages as artifact. Tags v*: additionally the portable Windows app.
-# Smoke test on Windows on every push. Releases: early-access.yml (Dev → Early Access) and promote-production.yml.
+# Push to main, tags v*, pull requests and by hand: tests and checks, extension packages as artifact, smoke test on Windows.
+# Tags v* and by hand: additionally the portable Windows app. A push to another branch starts nothing (its smoke:
+# smoke-branch.yml). Releases: early-access.yml (Dev → Early Access) and promote-production.yml.
 name: Build
 
 on:
@@ -17,8 +18,8 @@ jobs:
     name: Tests und Erweiterung
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -26,7 +27,7 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run ext:pack
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: extension
           path: dist/*.zip
@@ -36,12 +37,12 @@ jobs:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 10.0.x
       - run: npm ci
@@ -60,15 +61,15 @@ jobs:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run ext:pack
       - run: npx electron-builder --win portable --publish never
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-portable
           path: release/*.exe

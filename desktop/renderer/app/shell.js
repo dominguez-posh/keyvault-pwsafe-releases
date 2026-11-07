@@ -13,23 +13,38 @@ import { loadLogos } from './icons.js';
 import { openItemLink, pendingItemLink } from './item-links.js';
 import { renderList } from './list.js';
 import { applyViewClass } from './main-menu.js';
-import { firstStartWizards } from './personal.js';
+import { firstStartDue, offerFirstStart, remindPendingRecovery, resetRecoveryReminder } from './personal.js';
 import { checkWindowsRequests } from './requests.js';
+import { startExtensionHint } from './ext-hint.js';
 import { renderSidebar } from './sidebar.js';
 import { renderLocked, renderSetup } from './start.js';
 import { checkOtherInstallation, updateDialog } from './updates.js';
+
+// Installed version, always at the bottom right (the detail pane keeps room below its content, see desktop.css).
+// The update channel comes from the effective setting (policy included), never from a stamp in the build: the same
+// pre-release becomes Prod later. Drawn by render (after saving the settings) and by reloadAll (a change that comes
+// from elsewhere: policy, settings synced from another device).
+function drawVersionTag() {
+  let versionTag = document.getElementById('app-version');
+  if (!versionTag) document.body.append(versionTag = h('button', { id: 'app-version', type: 'button', onclick: () => updateDialog() }));
+  const beta = st.settings.updateChannel === 'beta';
+  versionTag.classList.toggle('early-access', beta);
+  versionTag.dataset.channel = beta ? 'beta' : 'stable';
+  const dev = st.build?.developer === true;
+  versionTag.classList.toggle('developer', dev);
+  versionTag.dataset.channel = dev ? 'developer' : versionTag.dataset.channel;
+  versionTag.replaceChildren(`Keevault ${st.version} · `, h('span', { class: 'ver-channel' }, dev ? `Developer${st.build.commit ? ` (${st.build.commit})` : ''}` : beta ? 'Early Access' : 'Stable'));
+  versionTag.title = t('Nach Updates suchen …');
+  startExtensionHint();
+}
 
 export async function render() {
   setSt(await fetchState());
   setLanguage(st.settings.language);
   document.title = 'Keevault';
   document.body.dataset.ready = '1';
-  // Installed version, always at the bottom right (the detail pane keeps room below its content, see desktop.css).
-  let versionTag = document.getElementById('app-version');
-  if (!versionTag) document.body.append(versionTag = h('button', { id: 'app-version', type: 'button', onclick: () => updateDialog() }));
   applyViewClass();
-  versionTag.textContent = `Keevault ${st.version}`;
-  versionTag.title = t('Nach Updates suchen …');
+  drawVersionTag();
   const firstRun = !st.hasFiles && !st.settings.entraUsed && !st.settings.enforced.includes('tenantId') && !st.settings.policyContainers.length;
   if (!st.opened && firstRun && !st.settings.setupOffered && !st.smoke && !st.demo) {
     // First start on this device, nothing set up yet: straight into the app (nothing to unlock), the wizards follow.
@@ -40,7 +55,10 @@ export async function render() {
       return renderSetup();
     }
   }
-  if (!st.opened) return firstRun ? renderSetup() : renderLocked();
+  if (!st.opened) {
+    resetRecoveryReminder();
+    return firstRun ? renderSetup() : renderLocked();
+  }
   await loadItems();
   // Admin mode shows itself in the brand ("Keevault for Admins") and the copper accent – no extra badge.
   const shell = h('div', { class: 'shell' }, panes.sidebar, panes.list, panes.detail, topSearch, topActions);
@@ -54,10 +72,8 @@ export async function render() {
   // First start on this device with nothing set up: the personal vault wizard, then the setup wizard for a team vault
   // (skipped when the personal vault brought the vaults along from another device). Each opens only once.
   // The desktop demo (fresh profile each start) shows the same first start, with example resources and its own PIN.
-  else if ((st.demo ? st.platform !== 'web' : !st.containers.length) && !st.settings.setupOffered && !document.querySelector('dialog[open]') && !st.smoke) {
-    call('updateSettings', { personalOffered: true, setupOffered: true }).catch(() => {});
-    setTimeout(() => firstStartWizards({ always: st.demo }), 400);
-  } else if (!document.querySelector('dialog[open]') && !st.smoke && !st.demo) checkOtherInstallation();
+  else if (firstStartDue()) offerFirstStart();
+  else if (!remindPendingRecovery() && !document.querySelector('dialog[open]') && !st.smoke && !st.demo) checkOtherInstallation();
   await renderDetail();
   if (pendingItemLink) openItemLink(pendingItemLink);
 }
@@ -78,6 +94,7 @@ export async function fetchState() {
 
 export async function reloadAll() {
   setSt(await fetchState());
+  drawVersionTag();
   if (!st.opened) {
     setExpiryReminded(false);
     return render();
@@ -90,6 +107,8 @@ export async function reloadAll() {
   loadLogos();
   await renderDetail();
   if (pendingItemLink) openItemLink(pendingItemLink);
+  // The personal vault may have been unlocked just now (master password without a PIN binding).
+  remindPendingRecovery();
 }
 
 export async function refresh() {

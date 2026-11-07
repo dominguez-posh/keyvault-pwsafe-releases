@@ -116,6 +116,7 @@ async function movePasskeyTo(data, targetKey) {
     await call('movePasskey', { from: { containerId: fromContainer, id: fromId }, to: { containerId, id }, credentialId: data.credentialId });
     toast(t('Passkey verschoben'));
     ui.selected = targetKey;
+    ui.editing = null; // started from the edit form: its copy of the entry is outdated now (#453)
     await reloadAll();
     return true;
   } catch (e) {

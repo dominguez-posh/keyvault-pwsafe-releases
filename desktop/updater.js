@@ -15,6 +15,7 @@ import updaterPkg from 'electron-updater';
 import { verifyManifest, parseManifest } from './update-verify.js';
 import { detectInstallKind } from './install-kind.js';
 import { compareVersions } from './versions.js';
+import { buildKind } from './build-kind.js';
 
 export { compareVersions };
 
@@ -41,6 +42,9 @@ export class Updater {
    * fetch: secureFetch (in memory).
    */
   constructor({ mode, channel = () => 'stable', onState, offer, isIdle, beforeInstall, fetch, selfUpdate, windowCenter, theme }) {
+    // Developer builds (#445) never install by themselves: "auto" counts as "ask", an update comes only on click.
+    const configured = mode;
+    mode = () => (buildKind().developer && configured() === 'auto' ? 'ask' : configured());
     Object.assign(this, { mode, channel, onState, offer, isIdle, beforeInstall, fetch, windowCenter, theme });
     // Policy SelfUpdate=0 ('managed'): IT distributes updates – the app only reports a newer version.
     this.kind = selfUpdate?.() === false ? 'managed' : installKind();
@@ -84,14 +88,22 @@ export class Updater {
     if (this.mode() === 'auto') this.timer = setInterval(() => this.background(), INTERVAL);
   }
 
-  /** latest.yml with latest.yml.sig from the server, verified against the embedded key → { version, sha512, url }. */
+  /**
+   * latest.yml with its signatures from the server, verified against the embedded key list → { version, sha512, url }.
+   * latest.yml.sig (old key, apps before the rotation need it) and latest.yml.sig2 (new key) are both optional files.
+   * Either signature is enough – both only count when they verify against a key in UPDATE_KEYS.
+   */
   async signedManifest() {
-    const [manifest, signature] = await Promise.all(['latest.yml', 'latest.yml.sig'].map(async (name) => {
+    const get = async (name, optional) => {
       const res = await this.fetch(`${feedFor(this.channel())}/${name}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error(`HTTP ${res.status} (${name})`);
+      if (!res.ok) {
+        if (optional) return '';
+        throw new Error(`HTTP ${res.status} (${name})`);
+      }
       return res.text();
-    }));
-    if (!verifyManifest(manifest, signature)) throw new Error('Update-Manifest nicht verifizierbar – Signatur ungültig.');
+    };
+    const [manifest, signature, signature2] = await Promise.all([get('latest.yml'), get('latest.yml.sig', true).catch(() => ''), get('latest.yml.sig2', true).catch(() => '')]);
+    if (!verifyManifest(manifest, signature) && !verifyManifest(manifest, signature2)) throw new Error('Update-Manifest nicht verifizierbar – Signatur ungültig.');
     return parseManifest(manifest);
   }
 

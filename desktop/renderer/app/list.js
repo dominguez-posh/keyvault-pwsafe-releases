@@ -13,6 +13,7 @@ import { dropPasskey, passkeyFits } from './admin-tools.js';
 import { newItem, renderDetail } from './detail.js';
 import { DRAG_PASSKEY, draggedPasskey, endDrag, setDraggedPasskey, startDrag } from './dragdrop.js';
 import { secureUnlockPanel } from './file-vaults.js';
+import { fileRepair, fileSwapDialog } from './file-swap.js';
 import { folderActions, folderRows, newFolderDialog } from './folders.js';
 import { itemAvatar } from './icons.js';
 import { itemActions } from './item-actions.js';
@@ -204,6 +205,10 @@ export function renderList() {
       : container.rbac === false
         ? t('{message}. Dieser Key Vault nutzt Zugriffsrichtlinien statt Azure RBAC: Stelle ihn unter „Zugriffskonfiguration“ auf „Azure RBAC“ um oder lege eine Zugriffsrichtlinie für dein Konto an.', { message: container.error.message })
         : t('{message}. Für Lesezugriff braucht dein Konto die Rolle „Key Vault Secrets User“, zum Bearbeiten „Key Vault Secrets Officer“. Besitzer oder Mitwirkender auf Subscription oder Ressourcengruppe reichen nicht – das sind keine Datenrollen.', { message: container.error.message })) : null,
+    // A changed file was refused (#430): what is shown is the last good state, nothing of the file was taken.
+    container?.warning ? h('div', { id: 'file-warning' }, notice(t('Die geänderte Datei wurde nicht übernommen: {message}', { message: container.warning }), 'warn')) : null,
+    fileRepair(container),
+    container?.swap ? h('button', { class: 'btn', id: 'file-swap-check', onclick: () => fileSwapDialog(container) }, icon('shield', 14), t('Erstellerin und Sicherheitscode prüfen')) : null,
     container?.error?.status === 403 && container.access?.manage !== false && container.rbac !== false ? h('button', { class: 'btn primary', onclick: async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;

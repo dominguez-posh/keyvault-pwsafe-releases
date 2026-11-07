@@ -81,7 +81,7 @@ installiert **pro Benutzer, ohne Administratorrechte** (nach `%LOCALAPPDATA%\Pro
 **Für die IT (Intune):** `Keevault-Geraet-Einrichten.ps1` aus dem Release als Plattformskript (als System, 64-Bit)
 zuweisen – Zertifikat ist eingebettet. Es vertraut dem Zertifikat und setzt `ExtensionInstallForcelist` für Edge und
 Chrome (Quelle: neuestes GitHub-Release, Updates automatisch; wirkt auf verwalteten Geräten). Entfernen:
-`-Action Uninstall`. Protokoll: `%ProgramData%\Keevault\setup.log`. Mit einem gekauften Code-Signing-
+`-Action Uninstall`. Protokoll: `%SystemRoot%\Logs\Keevault\setup.log`. Mit einem gekauften Code-Signing-
 Zertifikat (`windows/build.ps1 -PfxPath`) entfällt der Zertifikatsteil ganz.
 
 Bauen (lokal, der Schlüssel der Erweiterung bleibt auf dem Rechner): `npm run installer`, mit

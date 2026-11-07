@@ -5,7 +5,7 @@ import { t, setLanguage, resolveLanguage } from '../extension/core/i18n.js';
 import { collectKeys } from '../scripts/i18n-keys.mjs';
 
 // Strings picked up by the key scanner that are not UI texts.
-const NOT_TEXT = new Set(['decrypt', 'shift', 'control', 'removed', 'active', 'pending', 'get', 'none', 'typ', 'verify', 'Deutscher Text', 'Deutsch', 'English', 'public-key', 'rk', 'up', 'uv', 'Example', 'example.com', 'win@example.com']);
+const NOT_TEXT = new Set(['decrypt', 'shift', 'control', 'removed', 'active', 'pending', 'get', 'none', 'typ', 'verify', 'Deutscher Text', 'Deutsch', 'English', 'public-key', 'rk', 'up', 'uv', 'Example', 'example.com', 'win@example.com', 'client_redirect']);
 
 test('every German UI text has an English translation with the same placeholders', () => {
   const keys = collectKeys().map((k) => k.replace(/\\n/g, '\n')).filter((k) => !NOT_TEXT.has(k));

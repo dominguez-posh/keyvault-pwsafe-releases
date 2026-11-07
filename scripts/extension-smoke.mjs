@@ -11,7 +11,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyRegistrationResponse, verifyAuthenticationResponse } from '@simplewebauthn/server';
 import { extensionIdFromKey, foreignKeevault, hostResolverRules } from './smoke-browser-guard.mjs';
-import { checkSignInPages } from './extension-smoke-signin.mjs';
+import { checkSignInPages, keysDoNotSign, typeInto } from './extension-smoke-signin.mjs';
+import { checkNoPinInPage } from './extension-smoke-pin.mjs';
+import { checkForeignRedirect, checkJobBoundToTab, checkRememberedAccount, checkStartPage } from './extension-smoke-mstab.mjs';
 
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const browser = arg('browser') || [
@@ -50,6 +52,10 @@ for (const f of ['content/webauthn-main.js', 'content/content.js']) {
   writeFileSync(p, src.replace(http, "!(url.protocol === 'http:' && (localhost || host === 'login.microsoftonline.com' || host === 'login.microsoft.com'))"));
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const BAR_SETTLED = 900; // a sign-in bar takes clicks once the browser has called it visible for 500 ms (#401)
+// The page makes the in-page UI transparent (#401): a real click on it must do nothing.
+const cover = async (sessionId, on) => { await evaluate(sessionId, on ? '(() => { const st = document.createElement("style"); st.id = "cj"; st.textContent = "kvpwsafe-ui { opacity: 0 !important; }"; document.head.append(st); return true; })()' : 'document.getElementById("cj").remove(), true'); if (on) await sleep(BAR_SETTLED + 500); };
+const TAG_SETTLED = 3200; // the passkey tag's drop-in and swing (2.1 s) + 500 ms visible + the browser's report delay (#401)
 const failures = [];
 const check = (ok, message) => {
   if (!ok) failures.push(message);
@@ -135,7 +141,7 @@ const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
 const sophosPage = `<!doctype html><meta charset="utf-8"><title>VPN Portal</title>
 <form onsubmit="return false" method="post"><input name="username" type="text" id="username"><input name="password" type="password" id="password" autocomplete="off">
 <input class="blue_btn" name="loginbutton" value="Login" type="submit"></form>`;
-const server = createServer((req, res) => res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
+const server = createServer((req, res) => req.url.startsWith('/go302?') ? res.writeHead(302, { location: new URL(req.url, 'http://x').searchParams.get('to') }).end() : res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 // A second port with the same pages: not a test origin below, so the copy treats it with the real checks (#367).
@@ -196,10 +202,13 @@ async function assertNoForeignKeevault() {
   const found = foreignKeevault({ profile, targets: targetInfos, realId: realExtensionId });
   if (found) throw new Error(`Abbruch: fremde Keevault-Erweiterung im Test-Browser: ${found}`);
 }
-async function open(url) {
+// Target.createTarget arrives in the extension as transition "start_page" (CDP: auto_toplevel; checked in headless Edge,
+// #426): never the user's typing. { typed: true } opens an empty tab and enters the address like the address bar does.
+async function open(url, { typed = false } = {}) {
   await assertNoForeignKeevault();
-  const { targetId } = await send('Target.createTarget', { url });
+  const { targetId } = await send('Target.createTarget', { url: typed ? 'about:blank' : url });
   const sessionId = await attach(targetId);
+  if (typed) await send('Page.navigate', { url, transitionType: 'typed' }, sessionId);
   for (let i = 0; i < 40; i++) {
     const r = await send('Runtime.evaluate', { expression: 'location.href + "|" + document.readyState', returnByValue: true }, sessionId).catch(() => null);
     const [href, readyState] = String(r?.result?.value || '').split('|');
@@ -310,6 +319,7 @@ try {
   // Developer demo backend instead of the desktop app – set in the service worker itself, before any page asks the
   // app (a real Keevault on this machine must not be involved); restart so that the worker picks it up.
   const workerSession = await attach(worker.targetId);
+  await checkNoPinInPage({ send, evaluate, attach, open, shadowNode, waitFor, findTarget, check, ext, origin, workerSession });
   await evaluate(workerSession, `chrome.storage.local.set({ devDemo: true, settings: { language: 'de' } }).then(() => true)`);
   await evaluate(workerSession, 'setTimeout(() => chrome.runtime.reload(), 50), true');
   await sleep(2500);
@@ -368,6 +378,7 @@ try {
   if (save) {
     await sleep(500);
     await shot(tab.sessionId, 'ext-inline-create');
+    await sleep(TAG_SETTLED);
     await clickNode(tab.sessionId, '.kvtag .primary');
     const r = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).create && evaluate(tab.sessionId, 'results'));
     check(r?.create === 'resolved' && r.isPkc, `create(): ${r?.create}`);
@@ -403,7 +414,14 @@ try {
       const use = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .primary'));
       check(use, 'Passkey-Leiste (get) erschien nicht in der Seite');
       if (use) {
-        await sleep(500); // the bar slides in – click only once it has settled
+        await keysDoNotSign({ send, sleep, check, evaluate, shadowNode, sessionId: tab.sessionId, settle: TAG_SETTLED }); // first: after a click Enter is a real click (#405)
+        // Clickjacking (#401): a real click on the transparent tag must not sign in; it counts once the drop-in and swing (2 s) are over.
+        await cover(tab.sessionId, true);
+        await sleep(TAG_SETTLED);
+        await clickNode(tab.sessionId, '.kvtag .primary');
+        await sleep(1000);
+        check(!(await evaluate(tab.sessionId, 'results')).get && !!(await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .primary')), '#401 Passkey-Schild: Klick auf durchsichtiges Schild meldet an');
+        await cover(tab.sessionId, false); await sleep(TAG_SETTLED); // visible again for 500 ms (#401)
         await shot(tab.sessionId, 'ext-inline-get');
         await clickNode(tab.sessionId, '.kvtag .primary');
         const r2 = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).get && evaluate(tab.sessionId, 'results'));
@@ -518,7 +536,7 @@ try {
     await sleep(1200);
     const menuTree = await send('DOM.getDocument', { depth: -1, pierce: true }, msMenu.sessionId);
     // Only the copy under test may show a menu here: its demo accounts are from contoso.
-    const demoText = (n) => n.nodeType === 3 && /contoso/i.test(n.nodeValue || '');
+    const demoText = (n) => (n.nodeType === 3 && /contoso/i.test(n.nodeValue || '')) || (n.nodeType === 1 && /contoso/i.test(attrsOf(n)['data-t'] || '')); // drawn by CSS from data-t (#383)
     const menus = findAll(menuTree.root, (n) => n.nodeName === 'DIV' && attrsOf(n).class === 'menu');
     if (menus.some((m) => !findNode(m, demoText))) throw new Error('Abbruch: fremdes Menü auf der Testseite (#346)');
     const menuNode = menus[0];
@@ -539,6 +557,17 @@ try {
   const bst = await open(`http://bst-smoke.bastion.azure.com:${server.address().port}${vmPath}`);
   await sleep(1500);
   await evaluate(bst.sessionId, `(() => { const f = document.forms[0]; f.username.value = 'CONTOSO\\\\vmadmin'; f.password.value = 'Vm-Smoke-1'; f.requestSubmit(); return true; })()`);
+  // #383: a submit the page makes itself (requestSubmit) offers nothing to save – a page could test password guesses that way.
+  await sleep(1500);
+  const scripted = Object.values((await evaluate(options.sessionId, 'chrome.storage.session.get(null)')) || {}).find((p) => p?.action === 'bastion');
+  check(!scripted, '#383 Bastion: Speichern-Angebot nach einem von der Seite ausgelösten Submit');
+  // The real one: typed by input events of the browser (a value set by script offers nothing, even if the submit is real), then a click on the button.
+  for (const [field, text] of [['username', 'CONTOSO\\vmadmin'], ['password', 'Vm-Smoke-1']]) {
+    await evaluate(bst.sessionId, `(() => { const f = document.forms[0].${field}; f.focus(); f.select(); return true; })()`);
+    await send('Input.insertText', { text }, bst.sessionId);
+  }
+  const connect = JSON.parse(await evaluate(bst.sessionId, 'JSON.stringify((() => { const r = document.querySelector("button[type=submit]").getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })())'));
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: connect.x, y: connect.y, button: 'left', clickCount: 1 }, bst.sessionId);
   const pendingBastion = await waitFor(async () => {
     const all = await evaluate(options.sessionId, 'chrome.storage.session.get(null)');
     return Object.values(all || {}).find((p) => p?.action === 'bastion');
@@ -555,7 +584,7 @@ try {
     await evaluate(options.sessionId, 'chrome.storage.session.get(null).then((all) => chrome.storage.session.remove(Object.keys(all).filter((k) => all[k]?.action === "bastion")))');
     const portal = await open(`http://portal.azure.com:${server.address().port}/portal#@contoso.com/resource/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/${vm}/bastionHost`);
     await sleep(1500);
-    await evaluate(portal.sessionId, `(() => { document.getElementById('u').value = 'vmadmin@contoso.local'; document.getElementById('p').value = 'Vm-Portal-1'; return true; })()`);
+    await typeInto({ send, evaluate, sessionId: portal.sessionId, fields: [['u', 'vmadmin@contoso.local'], ['p', 'Vm-Portal-1']] });
     const c = await evaluate(portal.sessionId, 'JSON.stringify((({ x, y, width, height }) => ({ x: x + width / 2, y: y + height / 2 }))(document.getElementById("connect").getBoundingClientRect()))');
     const { x, y } = JSON.parse(c);
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, portal.sessionId);
@@ -577,7 +606,15 @@ try {
     const acc = await waitFor(() => barPoint(bp.sessionId, firstAccount), 6000);
     check(!!acc, 'Bastion-Leiste: keine Konten angeboten');
     if (acc) {
+      await cover(bp.sessionId, true);
       for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: acc.x, y: acc.y, button: 'left', clickCount: 1 }, bp.sessionId);
+      await sleep(1500);
+      const covered = await evaluate(bp.sessionId, '({ connected: !!window.connected, pw: !!document.forms[0].password.value })');
+      check(!covered.connected && !covered.pw, `#401 Bastion-Leiste: Klick auf durchsichtige Leiste meldet an (${JSON.stringify(covered)})`);
+      await cover(bp.sessionId, false);
+      await sleep(BAR_SETTLED);
+      const again = (await barPoint(bp.sessionId, firstAccount)) || acc; // the refusal note in the bar moved the account
+      for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: again.x, y: again.y, button: 'left', clickCount: 1 }, bp.sessionId);
       const done = await waitFor(async () => { const r = await evaluate(bp.sessionId, '({ connected: !!window.connected, user: document.forms[0].username.value, pw: !!document.forms[0].password.value })'); return r.connected && r; }, 8000);
       check(done?.pw && done?.user, `Bastion-Leiste: nicht ausgefüllt und verbunden (${JSON.stringify(done)})`);
       // Sent by Keevault itself: no "save this Bastion sign-in?" afterwards (#33).
@@ -599,6 +636,7 @@ try {
     await sleep(2500);
     const keep = await waitFor(() => barPoint(bs.sessionId, (n) => n.nodeName === 'BUTTON' && /save-only/.test(attrsOf(n).class || '')), 6000);
     check(!!keep, 'Bastion-Leiste: kein „Speichern“ neben den Konten');
+    await sleep(BAR_SETTLED);
     if (keep) {
       for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: keep.x, y: keep.y, button: 'left', clickCount: 1 }, bs.sessionId);
       const kept = await waitFor(async () => {
@@ -620,23 +658,34 @@ try {
   const tap = async (sessionId, x, y) => {
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, sessionId);
   };
-  const box = await barPoint(ms2.sessionId, rememberBox);
-  const acc = await barPoint(ms2.sessionId, firstAccount);
+  let box = await barPoint(ms2.sessionId, rememberBox);
+  let acc = await barPoint(ms2.sessionId, firstAccount);
   check(box && acc, 'Merken: Leiste ohne Konto oder Kästchen');
+  check(!(await evaluate(ms2.sessionId, 'window.find("breakglass", false, false, true)')), '#383 Microsoft-Leiste: Kontoname per window.find() der Seite auffindbar');
+  if (acc) {
+    await cover(ms2.sessionId, true);
+    await tap(ms2.sessionId, acc.x, acc.y);
+    await sleep(1500);
+    check(!(await evaluate(ms2.sessionId, 'signedIn')).password, '#401 Microsoft-Leiste: Klick auf durchsichtige Leiste meldet an');
+    await cover(ms2.sessionId, false);
+  }
+  await sleep(BAR_SETTLED);
+  box = await barPoint(ms2.sessionId, rememberBox); acc = await barPoint(ms2.sessionId, firstAccount); // the refusal note moved them
   if (box && acc) {
     await tap(ms2.sessionId, box.x, box.y);
     await tap(ms2.sessionId, acc.x, acc.y);
   }
   check(await waitFor(async () => (await evaluate(ms2.sessionId, 'signedIn')).password), 'Merken: Anmeldung nach Klick fehlt');
-  const ms3 = await open(`http://login.microsoftonline.com:${server.address().port}/ms?3`);
-  const auto = await waitFor(async () => { const r = await evaluate(ms3.sessionId, 'signedIn'); return r.password && r; }, 10000);
-  check(auto?.user === 'breakglass@contoso.onmicrosoft.com', `Merken: keine automatische Anmeldung (${auto?.user})`);
-  pageErrors(ms3.sessionId, 'ms-auto');
+  const mstab = { open, evaluate, check, sleep, waitFor, shadowNode, pageErrors, tap, findTarget, attach, origin, optionsSession: options.sessionId, port: server.address().port };
+  await checkJobBoundToTab(mstab, '/ms?2');
+  await checkRememberedAccount(mstab); // typed address starts it, foreign pages don't (#372)
+  await checkStartPage(mstab); await checkForeignRedirect(mstab); // #426 start_page, #429 redirect through a foreign page
 
   // "Pick an account" with another account only: the chosen account goes through "Use another account" (#13).
   const pick = await open(`http://login.microsoftonline.com:${server.address().port}/mspick`);
   await sleep(2500);
   const pickAcc = await barPoint(pick.sessionId, firstAccount);
+  await sleep(BAR_SETTLED);
   if (pickAcc) await tap(pick.sessionId, pickAcc.x, pickAcc.y);
   const picked = await waitFor(async () => { const r = await evaluate(pick.sessionId, 'signedIn'); return r.password && r; }, 8000);
   check(picked?.user === 'breakglass@contoso.onmicrosoft.com' && !picked?.wrongTile, `Kontoauswahl: falsches Konto (${JSON.stringify(picked)})`);
@@ -647,7 +696,7 @@ try {
   const pkSaved = await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'login', title: 'Microsoft Passkey', username: 'passkey@contoso.onmicrosoft.com', password: '', urls: ['https://login.microsoftonline.com/'] } });
   const remembered = await evaluate(options.sessionId, 'chrome.storage.local.get("msDefault").then((r) => r.msDefault || null)');
   await evaluate(options.sessionId, `chrome.storage.local.set({ msDefault: ${JSON.stringify(`${personal.id}/${pkSaved?.id}`)} }).then(() => true)`);
-  const pkOnly = await open(`http://login.microsoftonline.com:${server.address().port}/mspk`);
+  const pkOnly = await open(`http://login.microsoftonline.com:${server.address().port}/mspk`, { typed: true });
   const pkState = await waitFor(async () => { const r = await evaluate(pkOnly.sessionId, 'signedIn'); return (r.fido || r.emptySubmit) && r; }, 12000);
   check(pkState?.user === 'passkey@contoso.onmicrosoft.com' && pkState?.fido && !pkState?.emptySubmit, `Nur Passkey: kein Wechsel zum Passkey (${JSON.stringify(pkState)})`);
   pageErrors(pkOnly.sessionId, 'ms-passkey');
@@ -661,7 +710,7 @@ try {
   await evaluate(wa.sessionId, 'startCreate(), true');
   const waSave = await waitFor(() => shadowNode(wa.sessionId, 'kvpwsafe-ui', '.kvtag .primary'));
   check(waSave, `Microsoft-Passkey: Leiste zum Speichern fehlt (${await evaluate(wa.sessionId, 'JSON.stringify({ secure: isSecureContext, results })')})`);
-  if (waSave) await clickNode(wa.sessionId, '.kvtag .primary');
+  if (waSave) { await sleep(TAG_SETTLED); await clickNode(wa.sessionId, '.kvtag .primary'); }
   check(await waitFor(async () => (await evaluate(wa.sessionId, 'results')).create === 'resolved', 8000), 'Microsoft-Passkey: nicht angelegt');
   const msPk = await waitFor(async () => (await sw(options.sessionId, 'items')).find((x) => !beforeKeys.has(x.key) && (x.hosts || []).includes('login.microsoftonline.com')), 8000);
   check(msPk, 'Microsoft-Passkey: Eintrag fehlt');
@@ -669,7 +718,7 @@ try {
     const full = await sw(options.sessionId, 'item', { containerId: msPk.containerId, id: msPk.id });
     await sw(options.sessionId, 'save', { containerId: msPk.containerId, item: { ...full, username: 'smoke@example.com', password: 'Pw-not-used' } });
     await evaluate(options.sessionId, `chrome.storage.local.set({ msDefault: ${JSON.stringify(msPk.key)} }).then(() => true)`);
-    const both = await open(`http://login.microsoftonline.com:${msPort}/mspk?2`);
+    const both = await open(`http://login.microsoftonline.com:${msPort}/mspk?2`, { typed: true });
     const bothState = await waitFor(async () => { const r = await evaluate(both.sessionId, 'signedIn'); return r?.staySignedIn && r; }, 15000);
     const bothFinal = bothState || await evaluate(both.sessionId, 'JSON.stringify({ url: location.href, signedIn })');
     check(bothState?.passkey === 'resolved' && bothState?.staySignedIn === 'no', `Passkey und Passwort: Passkey nicht automatisch oder „Angemeldet bleiben?“ nicht mit Nein beantwortet (${JSON.stringify(bothFinal)})`);

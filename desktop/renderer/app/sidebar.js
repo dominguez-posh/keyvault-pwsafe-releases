@@ -13,6 +13,7 @@ import { renderList, visibleItems } from './list.js';
 import { adminFootButton, applyViewClass, mainMenuButton, pimHeadButton } from './main-menu.js';
 import { contextMenu } from './menus.js';
 import { adminMode, deviceMode, modeSwitch } from './modes.js';
+import { askPendingRecovery, pendingRecoveryVault } from './personal.js';
 import { reloadAll } from './shell.js';
 import { containerActions, containerMenu, refreshContainer } from './vault-menu.js';
 
@@ -194,7 +195,7 @@ export function renderSidebar() {
     nav('all', deviceMode() ? t('Alle Assets') : t('Alle Einträge'), 'shield', items.filter((i) => (i.type === 'server') === deviceMode()).length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite && (i.type === 'server') === deviceMode()).length),
     deviceMode() ? null : nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
-    personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow)) : null,
+    personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow), recoveryDue()) : null,
     h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length > 1 ? vaultFinder() : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
@@ -213,6 +214,12 @@ export function renderSidebar() {
       }
     } }, icon('unlock', 14), t('Key-Vault-Tresore anmelden')) : null,
   );
+}
+
+/** The recovery key of the personal vault is not confirmed yet: stays until it is (#399). */
+function recoveryDue() {
+  const c = pendingRecoveryVault();
+  return c ? h('button', { type: 'button', class: 'notice warn recovery-due', onclick: () => askPendingRecovery(c) }, icon('key', 14), t('Wiederherstellungsschlüssel bestätigen')) : null;
 }
 
 /**

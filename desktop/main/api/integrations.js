@@ -5,10 +5,13 @@ import { launchPath } from '../../bridge.js';
 import { MCP_TOOLS, mcpClientConfig } from '../../mcp.js';
 import { providerStatus, registerProvider } from '../../windows-provider.js';
 import { config, mcp, windows } from '../state.js';
-import { mcpScriptPath, mcpTrusted, questions } from '../agents.js';
+import { answerQuestionFromWindow, mcpScriptPath, mcpTrusted } from '../agents.js';
+import { currentExtensionStatus } from '../browser.js';
 import { restoreAfterWindowsRequest } from '../windows-passkeys.js';
 
 export const integrationsApi = {
+  // #454: browser extension status for the hint at the bottom right
+  extensionStatus: () => currentExtensionStatus(),
   // Windows passkey provider
   windowsRequests: () => windows.list(),
   windowsDecision: async (id, decision) => {
@@ -46,18 +49,14 @@ export const integrationsApi = {
   },
   /** Rights of an agent: write yes/no, approval for `days` days (0 = until removed). */
   /** Answer to a question from askInApp (agent approvals). */
-  answerQuestion: (id, value) => {
-    const resolve = questions.get(id);
-    if (!resolve) return false;
-    questions.delete(id);
-    resolve(String(value));
-    return true;
-  },
+  answerQuestion: (id, value, pin) => answerQuestionFromWindow(id, value, pin),
   mcpAgentRule: (agent, { write, days }) => {
     const current = config.get().agentRules?.[agent] || { write: false, until: null };
     const rule = {
       write: typeof write === 'boolean' ? write : current.write,
       until: days === undefined ? current.until : (Number(days) > 0 ? new Date(Date.now() + Number(days) * 86_400_000).toISOString() : null),
+      // #381: the chosen period, so a new approval after it ran out gets the same limit again.
+      days: days === undefined ? current.days || 0 : Math.max(0, Number(days) || 0),
     };
     config.update({ agentRules: { ...config.get().agentRules, [agent]: rule } });
     if (rule.write === false) mcp?.revoke(agent);

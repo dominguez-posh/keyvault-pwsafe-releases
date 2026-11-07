@@ -11,7 +11,7 @@
                      - adds the browser extension to the Edge/Chrome ExtensionInstallForcelist policy
                        (browsers honor that on managed devices: domain-, Entra- or Intune-joined)
     The release build embeds the certificate ($EmbeddedCertificate), so the machine script works stand-alone.
-    Log: %ProgramData%\Keevault\setup.log (machine) or %LOCALAPPDATA%\KeyVault PwSafe\setup.log (user).
+    Log: %SystemRoot%\Logs\Keevault\setup.log (machine) or %LOCALAPPDATA%\KeyVault PwSafe\setup.log (user).
 #>
 param(
     [Parameter(Mandatory)] [ValidateSet('Install', 'Uninstall')] [string] $Action,
@@ -31,7 +31,9 @@ $OldPackageName = 'KvPwSafe.PasskeyProvider'
 $HostName = 'com.kvpwsafe.desktop'
 $Policies = @('HKLM:\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallForcelist', 'HKLM:\SOFTWARE\Policies\Google\Chrome\ExtensionInstallForcelist')
 
-$LogDir = if ($Scope -eq 'Machine') { Join-Path $env:ProgramData 'Keevault' } else { Join-Path $env:LOCALAPPDATA 'KeyVault PwSafe' }
+# Machine scope runs as SYSTEM or admin. Never log below %ProgramData%: a standard user can create a folder there first
+# and plant a link, and the transcript follows it (#418). Standard users cannot create anything in Windows\Logs.
+$LogDir = if ($Scope -eq 'Machine') { Join-Path ([Environment]::GetFolderPath('Windows')) 'Logs\Keevault' } else { Join-Path $env:LOCALAPPDATA 'KeyVault PwSafe' }
 New-Item -ItemType Directory -Force $LogDir | Out-Null
 Start-Transcript -Path (Join-Path $LogDir 'setup.log') -Append | Out-Null
 Write-Output "$(Get-Date -Format s) $Action $Scope"

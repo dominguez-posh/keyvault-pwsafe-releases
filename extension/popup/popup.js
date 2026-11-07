@@ -1,7 +1,7 @@
 import { h, icon, iconButton, setChildren, toast, avatar, confirmDialog } from '../core/dom.js';
 import { itemDetail, itemForm, generatorPanel } from '../core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../core/generator.js';
-import { itemMatchesHost, urlScore } from '../core/match.js';
+import { itemMatchesHost, urlScore, pageOrigin } from '../core/match.js';
 import { faviconToDataUrl } from '../core/image.js';
 import { itemHosts, resolveLogin } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
@@ -198,14 +198,14 @@ function renderList() {
   if (!query) search.focus();
 }
 
-async function fillItem(s, force = false) {
+async function fillItem(s, force = false, origin = '') {
   try {
-    const r = await call('fill', { tabId: tab.id, containerId: s.containerId, id: s.id, force });
+    const r = await call('fill', { tabId: tab.id, containerId: s.containerId, id: s.id, force, origin });
     if (r.totpCopied) toast(t('Einmalcode in die Zwischenablage kopiert'));
     setTimeout(() => window.close(), r.totpCopied ? 900 : 0);
   } catch (e) {
     if (e.name === 'MismatchError' && !force) {
-      if (await confirmDialog(t('Andere Website'), t('{message}. Trotzdem auf {host} ausfüllen?', { message: e.message, host: host || t('dieser Seite') }), { confirmLabel: t('Ausfüllen') })) fillItem(s, true);
+      if (await confirmDialog(t('Andere Website'), t('{message}. Trotzdem auf {host} ausfüllen?', { message: e.message, host: pageOrigin(tab?.url, host || t('dieser Seite')) }), { confirmLabel: t('Ausfüllen') })) fillItem(s, true, pageOrigin(tab?.url));
       return;
     }
     toast(e.message, 'error');

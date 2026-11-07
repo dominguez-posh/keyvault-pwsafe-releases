@@ -1,6 +1,6 @@
 // The settings dialog.
 
-import { h, icon, toast, modal } from '../../../extension/core/dom.js';
+import { h, icon, toast, modal, confirmDialog } from '../../../extension/core/dom.js';
 import { t, LANGUAGES } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { explicitFolders, items, st } from './state.js';
@@ -63,6 +63,8 @@ export function settingsDialog() {
   const mcpPasskeys = h('input', { type: 'checkbox', name: 'mcpPasskeys', checked: !!s.mcpPasskeys });
   const mcpMicrosoft = h('input', { type: 'checkbox', name: 'mcpMicrosoft', checked: !!s.mcpMicrosoft });
   const offlineMirror = h('input', { type: 'checkbox', checked: !!s.offlineMirror && st.pinSet, disabled: enforced('offlineMirror') || !st.pinSet });
+  // #439: the organization's RequirePin makes this fixed on (state.passkeyPinFixed).
+  const passkeyPin = h('input', { type: 'checkbox', name: 'passkeyPin', checked: st.passkeyPinFixed || s.passkeyPin !== false, disabled: st.passkeyPinFixed });
   const mcpBox = h('div', {});
   const mcpMode = h('select', { disabled: enforced('mcpScope') },
     h('option', { value: 'selected', selected: s.mcpScope !== 'all' }, t('Nur freigegebene Tresore und Ordner (empfohlen)')),
@@ -185,6 +187,11 @@ export function settingsDialog() {
           : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
         st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
           : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.'))),
+      section(t('Passkeys'),
+        h('label', { class: 'inline' }, passkeyPin, t('PIN vor jeder Passkey-Nutzung')),
+        h('p', { class: 'muted small' }, st.passkeyPinFixed
+          ? t('Eure Organisation verlangt eine PIN – sie wird auch vor jeder Passkey-Nutzung abgefragt.')
+          : t('Jede Anmeldung mit einem Passkey – über die Browser-Erweiterung, den Windows-Passkey-Anbieter oder einen KI-Agenten – wird mit deiner App-PIN bestätigt, jedes Mal neu. Ohne gesetzte PIN wird kein Passkey verwendet.'))),
       section(t('Offline-Lesemodus'),
         h('label', { class: 'inline' }, offlineMirror, t('Einträge verschlüsselt für unterwegs spiegeln (nur lesen, PIN nötig)')),
         h('p', { class: 'muted small' }, st.pinSet
@@ -252,6 +259,9 @@ export function settingsDialog() {
   ]), [
     { label: t('Abbrechen') },
     { label: t('Speichern'), primary: true, onClick: async () => {
+      if (!passkeyPin.checked && st.settings.passkeyPin !== false && !(await confirmDialog(t('PIN vor Passkeys ausschalten?'),
+        t('Ohne die PIN kann jeder, der deinen entsperrten PC nutzt oder eine freigegebene Anfrage bestätigt, sich mit deinen Passkeys anmelden. Nur ausschalten, wenn du das Risiko kennst.'),
+        { confirmLabel: t('Ausschalten'), danger: true }))) return false;
       const changedTenant = tenant.value.trim() !== s.tenantId || client.value.trim() !== s.clientId;
       await call('updateSettings', {
         language: language.value,
@@ -271,6 +281,7 @@ export function settingsDialog() {
         updateChannel: updateChannel.value === 'beta' ? 'beta' : 'stable',
         mcpEnabled: mcpEnabled.checked,
         offlineMirror: offlineMirror.checked && st.pinSet,
+        passkeyPin: st.passkeyPinFixed || passkeyPin.checked,
         mcpScope: mcpMode.value,
         mcpPasskeys: mcpEnabled.checked && mcpPasskeys.checked,
         mcpMicrosoft: mcpEnabled.checked && mcpMicrosoft.checked,

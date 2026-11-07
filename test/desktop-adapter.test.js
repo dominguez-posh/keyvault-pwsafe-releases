@@ -6,6 +6,7 @@ const sent = [];
 let onMessage = null;
 globalThis.chrome = {
   runtime: {
+    getManifest: () => ({ version: '0.0.0' }),
     connectNative: () => ({
       onMessage: { addListener: (fn) => { onMessage = fn; } },
       onDisconnect: { addListener: () => {} },

@@ -1,11 +1,12 @@
 // Requests that come to the window by themselves: passkey requests from Windows and questions of AI agents.
 
-import { h, icon, toast, modal, passkeySuccess } from '../../../extension/core/dom.js';
+import { h, icon, toast, modal, passkeySuccess, showPinProblem } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { st } from './state.js';
 import { field, notice } from './helpers.js';
 import { FIELD_LABELS } from './file-vaults.js';
+import { pinDialog } from './admin-mode.js';
 import { reloadAll } from './shell.js';
 
 const windowsDialogs = new Map(); // request id → close()
@@ -40,7 +41,8 @@ export const openQuestions = new Map(); // id → close without answer
 // MCP argument names that differ from the item fields (FIELD_LABELS below).
 const AGENT_FIELD_ALIAS = { url: 'urls', generatePassword: 'password' };
 // #368: "Allow" only works this long after the question appeared and after the last key press, so that someone who was
-// typing for another program and keeps typing cannot answer it, not even with Tab and Enter.
+// typing for another program and keeps typing cannot answer it, not even with Tab and Enter. The same when the window
+// comes to the front (#381): the click that activates it must not answer the question, so the delay starts again.
 const CONFIRM_DELAY_MS = 1200;
 // Questions still open: closing one starts the delay of those below it again, they come up under the mouse pointer.
 const waitingQuestions = new Set();
@@ -135,8 +137,31 @@ export function questionDialog(q) {
       h('div', { class: 'q-target-vault' }, icon('vault', 12), q.vault || '')),
     q.fields?.length ? h('div', { class: 'q-fields' }, ...[...new Set(q.fields.map((f) => AGENT_FIELD_ALIAS[f] || f))].map((f) => h('span', { class: 'q-chip' }, FIELD_LABELS[f] ? t(FIELD_LABELS[f]) : f))) : null,
     changes) : null;
-  const allow = h('button', { type: 'button', class: 'btn primary', onclick: () => {
-    if (!delayPassed || choice === null) return;
+  // A mouse press has to start after the delay too, not only the click that ends it (detail 0: keyboard or script).
+  let pressedInTime = false;
+  // #439: a passkey use is answered with the app PIN, typed here – the main process checks it, once, for this answer only.
+  // Enter confirms (same in all three PIN windows), once an answer is chosen; the button still has its time delay.
+  const pinInput = q.pin ? h('input', { type: 'password', class: 'q-pin-input', id: 'q-pin-input', autocomplete: 'off',
+    onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); allow.click(); } } }) : null;
+  const pinError = q.pin ? h('div', { class: 'notice error q-pin-error', role: 'alert', hidden: true }) : null;
+  const allow = h('button', { type: 'button', class: 'btn primary', onpointerdown: () => { pressedInTime = delayPassed; }, onclick: async (e) => {
+    if (!delayPassed || choice === null || (e.detail > 0 && !pressedInTime)) return;
+    if (pinInput) {
+      if (!pinInput.value) { pinInput.focus(); return; }
+      try {
+        await call('answerQuestion', q.id, choice, pinInput.value);
+      } catch (err) {
+        showPinProblem(pinError, err.message);
+        pinInput.value = '';
+        pinInput.focus();
+        startDelay();
+        return;
+      }
+      answered = true;
+      openQuestions.delete(q.id);
+      close();
+      return;
+    }
     answer(choice);
     close();
   } }, q.allow || t('Erlauben'));
@@ -150,6 +175,7 @@ export function questionDialog(q) {
     target,
     filterBar,
     options.length ? h('div', { class: `q-options${filterBar ? ' q-options-scroll' : ''}`, role: 'radiogroup' }, ...options, noHits) : null,
+    q.pin ? h('div', { class: 'field q-pin' }, h('label', { for: 'q-pin-input' }, t('App-PIN eingeben, um diese Anmeldung zu erlauben')), pinInput, pinError) : null,
     q.note ? h('p', { class: 'q-note' }, icon('shield', 13), q.note) : null,
     h('div', { class: 'q-actions' },
       h('button', { type: 'button', class: 'btn', onclick: () => { answer(q.cancel); close(); } }, t('Ablehnen')),
@@ -160,6 +186,8 @@ export function questionDialog(q) {
     answer(q.cancel);
     clearTimeout(delayTimer);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('focus', startDelay);
+    window.removeEventListener('blur', startDelay);
     waitingQuestions.delete(startDelay);
     for (const restart of waitingQuestions) restart();
   });
@@ -167,9 +195,11 @@ export function questionDialog(q) {
   waitingQuestions.add(startDelay);
   startDelay();
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('focus', startDelay);
+  window.addEventListener('blur', startDelay);
   // #368: the focus is on no button, so Enter and space do nothing. With a search the cursor starts there.
   body.tabIndex = -1;
-  (filterBar?.querySelector('.q-search') || body).focus();
+  (filterBar?.querySelector('.q-search') || pinInput || body).focus();
 }
 
 /** Success moment after a passkey request from Windows: centred badge animation, gone after about a second. */
@@ -197,12 +227,35 @@ function windowsDialog(r) {
   let body;
   let buttons;
   if (r.kind === 'get') {
+    // #439: every sign-in is confirmed with the app PIN, typed here (the PIN is checked in the app, for this one use).
+    const needPin = !!r.pin?.required;
+    const noPin = needPin && !r.pin.pinSet;
+    const pinInput = needPin && !noPin ? h('input', { type: 'password', class: 'win-pin-input', autocomplete: 'off',
+      onkeydown: (e) => { if (e.key === 'Enter' && r.candidates.length === 1) { e.preventDefault(); choose(r.candidates[0]); } } }) : null;
+    const pinError = h('div', { class: 'notice error win-pin-error', role: 'alert', hidden: true });
+    const choose = async (c) => {
+      if (pinInput && !pinInput.value) { pinInput.focus(); return; }
+      try {
+        await call('windowsDecision', r.id, { containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId, ...(pinInput ? { pin: pinInput.value } : {}) });
+      } catch (e) {
+        // Wrong PIN, blocked: the request stays open, the dialog stays.
+        showPinProblem(pinError, e.message);
+        if (pinInput) { pinInput.value = ''; pinInput.focus(); }
+        return;
+      }
+      windowsDialogs.delete(r.id);
+      close();
+      flashPasskey(t('Angemeldet'));
+      reloadAll().catch(() => {});
+    };
     body = h('div', {}, head, lockedHint,
+      noPin ? [notice(t('Für Passkeys braucht Keevault eine App-PIN. Lege sie jetzt fest – dann kannst du dich anmelden.'), 'warn'),
+        h('p', {}, h('button', { type: 'button', class: 'btn primary', onclick: () => pinDialog({ passkeys: true, onSaved: () => { windowsDialogs.delete(r.id); close(); checkWindowsRequests(); } }) }, icon('key', 14), t('PIN festlegen')))] : null,
       r.candidates.length
-        ? [h('p', {}, t('Mit welchem Passkey möchtest du dich anmelden?')), ...r.candidates.map((c) => h('button', { type: 'button', class: 'choice', onclick: () => {
-          close();
-          decide({ containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId }).catch((e) => toast(e.message, 'error'));
-        } }, icon('user'), h('span', {}, c.userName || t('(ohne Benutzername)')), h('span', { class: 'muted small' }, `${c.title} · ${c.container}`)))]
+        ? [h('p', {}, t('Mit welchem Passkey möchtest du dich anmelden?')),
+          pinInput ? field(t('App-PIN eingeben, um diese Anmeldung zu erlauben'), pinInput) : null, pinError,
+          ...r.candidates.map((c) => h('button', { type: 'button', class: 'choice', disabled: noPin, onclick: () => choose(c) },
+            icon('user'), h('span', {}, c.userName || t('(ohne Benutzername)')), h('span', { class: 'muted small' }, `${c.title} · ${c.container}`)))]
         : h('p', {}, t('Im Tresor ist kein passender Passkey gespeichert.')));
     buttons = [{ label: t('Abbrechen'), onClick: () => decide({ cancel: true }) }];
   } else {
@@ -235,6 +288,7 @@ function windowsDialog(r) {
     ];
   }
   const { dialog, close } = modal(t('Passkey'), body, buttons);
+  setTimeout(() => dialog.querySelector('.win-pin-input')?.focus(), 0);
   // Closing with Esc or × cancels the request.
   dialog.addEventListener('close', () => {
     if (windowsDialogs.has(r.id)) decide({ cancel: true }).catch(() => {});

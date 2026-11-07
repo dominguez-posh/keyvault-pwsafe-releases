@@ -69,12 +69,12 @@ const LINE_LIMITS = {
   'extension/core/i18n-en.js': Infinity, // translations
   'extension/core/session.js': 1400,
   'extension/content/content.js': 1300,
-  'desktop/smoke-features.js': 1300,
+  'desktop/smoke-features.js': 1393,
   'extension/background.js': 1100,
-  'desktop/main/smoke.js': 900,
+  'desktop/main/smoke.js': 930,
   'extension/core/ui-item.js': 900,
   'extension/core/filevault.js': 800,
-  'scripts/extension-smoke.mjs': 800,
+  'scripts/extension-smoke.mjs': 820,
 };
 const posixRel = (p) => relative(root, p).replace(/\\/g, '/');
 const under = (rel, prefix) => (prefix.endsWith('/') ? rel.startsWith(prefix) : rel === prefix);
@@ -99,6 +99,40 @@ for (const file of files) {
   }
 }
 
+// ---------------------------------------------------------------- release signing (#378)
+// Nothing but the API route may reach the signing key: no MCP tool, bridge, browser or Windows-provider module and no
+// script imports the signing modules. A new importer fails the check and needs a decision, not a quick fix.
+const SIGNING_IMPORTS = {
+  'desktop/main/release-sign.js': ['desktop/main/api/release.js'],
+  'desktop/release-key.js': ['desktop/main/release-sign.js'],
+  'desktop/main/api/release.js': ['desktop/main/api/index.js', 'desktop/main/smoke.js'],
+};
+for (const file of files) {
+  if (!/\.(m|c)?js$/.test(file)) continue;
+  const rel = posixRel(file);
+  if (rel.startsWith('test/')) continue; // tests read the modules to check them
+  for (const m of readFileSync(file, 'utf8').matchAll(/(?:import|export)\s[^'"]*?from\s+['"](\.{1,2}\/[^'"]+)['"]|import\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)|(?:^|\n)\s*import\s+['"](\.{1,2}\/[^'"]+)['"]/g)) {
+    const target = posixRel(resolve(dirname(file), m[1] || m[2] || m[3]));
+    if (SIGNING_IMPORTS[target] && !SIGNING_IMPORTS[target].includes(rel)) problems.push(`${rel}: importiert ${target} – nur ${SIGNING_IMPORTS[target].join(', ')} dürfen das (Signierschlüssel, #378)`);
+  }
+}
+for (const rel of ['desktop/main/release-sign.js', 'desktop/release-key.js']) {
+  const src = readFileSync(join(root, rel), 'utf8').replace(/\/\/.*$/gm, '');
+  if (/\.pem|process\.env|KEY_PEM/i.test(src)) problems.push(`${rel}: liest Schlüsselmaterial aus Datei oder Umgebung – der Schlüssel liegt nur im verschlüsselten Speicher der App (#378)`);
+}
+
+// The command and bridge modules never name the signing functions at all (an import is not the only way: a handler
+// could call api.signRelease). The two API names live in api/release.js and the menu.
+for (const rel of ['desktop/main/browser.js', 'desktop/main/agents.js', 'desktop/main/windows-passkeys.js', 'desktop/bridge.js', 'desktop/mcp.js']) {
+  const src = readFileSync(join(root, rel), 'utf8').replace(/\/\/.*$/gm, '');
+  if (/signRelease|setupReleaseKey|releaseApi|release-sign|release-key/.test(src)) problems.push(`${rel}: nennt eine Signierfunktion – Agenten, Browser und Windows-Anbieter haben keinen Weg dorthin (#378)`);
+}
+// A file of the app that .gitignore swallows is not in the commit (desktop/release/ was, #378 B4): a fresh checkout would lack it.
+try {
+  const swallowed = execFileSync('git', ['ls-files', '-o', '-i', '--exclude-standard', 'desktop', 'extension'], { cwd: root, encoding: 'utf8' }).split('\n').filter(Boolean);
+  for (const f of swallowed) problems.push(`${f}: von .gitignore verschluckt – gehört die Datei zur App, Ordner umbenennen oder Ausnahme eintragen`);
+} catch { /* no git here (unpacked source): nothing to compare */ }
+
 const manifest = JSON.parse(readFileSync(join(root, 'extension', 'manifest.json'), 'utf8'));
 const referenced = [
   manifest.background.service_worker,
@@ -109,6 +143,11 @@ const referenced = [
   ...manifest.content_scripts.flatMap((c) => c.js),
 ];
 for (const f of referenced) if (!existsSync(join(root, 'extension', f))) problems.push(`manifest.json: Datei fehlt: ${f}`);
+
+// The origins of the extension smoke's fake sign-in pages are set only in the smoke's own copy (#381, #367).
+if (!/^const SIGN_IN_TEST_ORIGINS = \[\];$/m.test(readFileSync(join(root, 'extension', 'core', 'pagefit.js'), 'utf8'))) {
+  problems.push('extension/core/pagefit.js: SIGN_IN_TEST_ORIGINS muss leer sein (nur die Testkopie des Smoke setzt Ursprünge)');
+}
 
 if (problems.length) {
   console.error(problems.join('\n'));

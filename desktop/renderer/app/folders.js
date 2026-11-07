@@ -14,7 +14,7 @@ import { dropTarget, endDrag, startDrag } from './dragdrop.js';
 import { renderList } from './list.js';
 import { contextMenu } from './menus.js';
 import { folderList, folderScope, nsFolder } from './modes.js';
-import { clearSelection, deleteMany, selectRow } from './multi.js';
+import { clearSelection, deleteFailedText, deleteMany, selectRow } from './multi.js';
 import { reloadAll } from './shell.js';
 import { syncNewEntryTarget } from './sidebar.js';
 import { deleteNotice } from './trash.js';
@@ -116,7 +116,7 @@ export function folderActions(c, folder, count, open) {
           if (choice === 'delete') {
             if (!(await confirmDialog(t('Wirklich alle Einträge löschen?'), `${t('Achtung: {count} Einträge aus „{folder}“ und allen Unterordnern werden gelöscht.', { folder, count: inside.length })} ${await deleteNotice(c)}`, { confirmLabel: t('Ja, {count} Einträge löschen', { count: inside.length }), danger: true }))) return;
             const failed = await deleteMany(inside.map((i) => i.key));
-            if (failed) toast(t('{n} Einträge konnten nicht gelöscht werden', { n: failed }), 'error');
+            if (failed.length) toast(deleteFailedText(failed), 'error');
           } else {
             const r = await call('renameFolder', c.id, folder, parent, folderScope());
             for (const err of r.errors) toast(err, 'error');

@@ -2,6 +2,7 @@
 
 import { LockedError } from '../auth.js';
 import { PinGuard } from '../pin.js';
+import { PasskeyPinGate } from '../passkey-pin.js';
 import { POLICY_LABELS } from '../../extension/core/session.js';
 import { t } from '../../extension/core/i18n.js';
 import { config, opened, vault } from './state.js';
@@ -25,6 +26,13 @@ export async function requireSubscriptionOwner(containerId) {
 }
 
 export const pinGuard = new PinGuard(); // counter restored from the settings once config exists (app ready)
+
+/** #439: every passkey use asks for the app PIN (see ../passkey-pin.js); shares the counter of unlocking. */
+export const passkeyPin = new PasskeyPinGate({
+  settings: () => config.get(),
+  guard: pinGuard,
+  save: (state) => { if (state || config.get().pinGuard) config.update({ pinGuard: state }); },
+});
 
 /** Unlocking needs a freshly verified PIN once one is set. */
 export function requirePin() {

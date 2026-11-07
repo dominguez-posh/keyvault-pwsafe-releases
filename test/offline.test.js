@@ -63,6 +63,96 @@ test('offline mirror: records GETs, replays them after a PIN unlock, refuses wri
   }
 });
 
+// #413: what the vault says is gone must not stay readable offline. A vault with pages and soft delete, in its URLs as sent.
+const API = '?api-version=7.5';
+const ok = (body) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+const gone = () => new Response('{}', { status: 404 });
+async function goneMirror(t, answers) {
+  const dir = mkdtempSync(join(tmpdir(), 'kv-offline-'));
+  const m = mirror(dir);
+  await m.unlockKey('1234');
+  t.after(async () => { await m.remove(); rmSync(dir, { recursive: true, force: true }); });
+  const fetch = m.record(async (url, init = {}) => answers(String(url), init.method || 'GET'));
+  return { m, fetch, dir };
+}
+const secretA = [`${vault}/secrets/a${API}`, `${vault}/secrets/a/v1${API}`, `${vault}/secrets/a/versions${API}&maxresults=25`];
+const secretB = `${vault}/secrets/b${API}`;
+const unreadable = (m, url) => assert.rejects(m.replay(url), /Offline/, url);
+const readable = async (m, url) => assert.equal((await m.replay(url)).status, 200, url);
+
+test('offline mirror: after a DELETE, or a 404 on a read, no URL of that secret answers; others stay', async (t) => {
+  for (const [method, status] of [['DELETE', 200], ['DELETE', 404], ['GET', 404]]) {
+    let answer = () => ok({ value: 'password' });
+    const { m, fetch } = await goneMirror(t, () => answer());
+    for (const url of [...secretA, secretB]) await fetch(url);
+    answer = () => (status === 404 ? gone() : ok({}));
+    await fetch(`${vault}/secrets/A${API}`, { method });
+    for (const url of secretA) await unreadable(m, url);
+    await readable(m, secretB);
+  }
+});
+
+test('offline mirror: deleted is gone from the file as well, not only from memory', async (t) => {
+  let answer = () => ok({ value: 'very-secret-password' });
+  const { m, fetch, dir } = await goneMirror(t, () => answer());
+  await fetch(secretA[0]);
+  await m.save();
+  answer = () => ok({});
+  await fetch(secretA[0], { method: 'DELETE' });
+  await m.save();
+  const fresh = mirror(dir);
+  await fresh.unlockKey('1234');
+  await fresh.load();
+  await unreadable(fresh, secretA[0]);
+});
+
+test('offline mirror: a failed DELETE or a failed read removes nothing', async (t) => {
+  let answer = () => ok({ value: 'x' });
+  const { m, fetch } = await goneMirror(t, () => answer());
+  await fetch(secretA[0]);
+  for (const status of [403, 500]) {
+    answer = () => new Response('{}', { status });
+    await fetch(secretA[0], { method: 'DELETE' });
+    await fetch(secretA[0]);
+    await readable(m, secretA[0]);
+  }
+});
+
+const LIST = `${vault}/secrets${API}&maxresults=25`;
+const PAGE2 = `${vault}:443/secrets${API}&$skiptoken=two`;
+const listed = (...names) => names.map((n) => ({ id: `${vault}/secrets/${n}` }));
+
+test('offline mirror: only a list read to its end removes what it does not name', async (t) => {
+  const pages = { [LIST]: { value: listed('A'), nextLink: PAGE2 }, [PAGE2]: { value: listed('c'), nextLink: null } };
+  const { m, fetch } = await goneMirror(t, (url) => ok(pages[url] || { value: 'x' }));
+  for (const url of [secretA[0], secretB, `${vault}/secrets/c${API}`]) await fetch(url);
+  await fetch(LIST);
+  await readable(m, secretB);
+  await fetch(PAGE2);
+  await unreadable(m, secretB);
+  await readable(m, secretA[0]);
+  await readable(m, `${vault}/secrets/c${API}`);
+  await readable(m, LIST);
+  await readable(m, PAGE2);
+});
+
+test('offline mirror: a list out of turn, of another vault or without a list in it concludes nothing', async (t) => {
+  const other = 'https://kv-other.vault.azure.net';
+  const pages = {
+    [LIST]: { value: listed('a'), nextLink: PAGE2 }, [PAGE2]: { value: [], nextLink: null },
+    [`${other}/secrets${API}`]: { value: [], nextLink: null },
+  };
+  const { m, fetch } = await goneMirror(t, (url) => ok(pages[url] || { value: 'x' }));
+  await fetch(secretB);
+  await fetch(PAGE2); // a last page with no first
+  await readable(m, secretB);
+  await fetch(`${other}/secrets${API}`);
+  await readable(m, secretB);
+  pages[LIST] = { value: 'not a list' };
+  await fetch(LIST);
+  await readable(m, secretB);
+});
+
 test('network errors are told apart from refused sign-ins', () => {
   assert.ok(isNetworkError(new Error('getaddrinfo ENOTFOUND login.microsoftonline.com')));
   assert.ok(isNetworkError({ errorCode: 'network_error', message: 'Network request failed' }));
