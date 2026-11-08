@@ -96,7 +96,7 @@ export const MCP_TOOLS = [
   {
     name: 'sign_in_with_passkey',
     title: 'Mit Passkey anmelden',
-    description: 'Signs one WebAuthn sign-in (navigator.credentials.get) with the passkey stored in an entry and returns the PublicKeyCredential as JSON – for an agent that drives a browser itself. The private key never leaves Keevault. Only for the passkey\'s own site (https origin of its rpId), only sign-ins (no registration). Off by default (Keevault settings → AI agents) and the user confirms every single use in the app.',
+    description: 'Signs one WebAuthn sign-in (navigator.credentials.get) with the passkey stored in an entry and returns the PublicKeyCredential as JSON – for an agent that drives a browser itself. The private key never leaves Keevault. Only for the passkey\'s own site (https origin of its rpId), only sign-ins (no registration). Off by default (Keevault settings → AI agents) and the user confirms every single use in the app and, unless switched off there, types the app PIN for it (the agent never does and cannot).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -109,7 +109,8 @@ export const MCP_TOOLS = [
       },
       required: ['vaultId', 'entryId', 'origin', 'challenge'],
     },
-    annotations: { readOnlyHint: true },
+    // Signs for the user and may store the passkey's counter: a client must not treat it as harmless reading.
+    annotations: { readOnlyHint: false, destructiveHint: false },
   },
   {
     name: 'request_microsoft_login',
@@ -122,7 +123,8 @@ export const MCP_TOOLS = [
         tenant: { type: 'string', description: 'Accounts of this domain are offered first, e.g. contoso.com (optional). The user may still pick an account of another domain – check the returned user name.' },
       },
     },
-    annotations: { readOnlyHint: true },
+    // Hands out a sign-in for use elsewhere: not a harmless read either.
+    annotations: { readOnlyHint: false, destructiveHint: false },
   },
   {
     name: 'generate_password',
@@ -137,12 +139,21 @@ const fail = (message) => Object.assign(new Error(message), { name: 'McpError' }
 
 // #370: what an agent sends is shown in the confirmation. Invisible and direction characters could make a value look
 // like another one, and very long values could push the buttons away.
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
+// #381: also the other space characters (Zs: no-break, em, ideographic space …); only the plain space stays.
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]|(?! )\p{Zs}/gu;
 const SHOWN_LENGTH = 200;
-const shown = (value) => {
+export const shown = (value) => {
   const text = String(value ?? '').replace(INVISIBLE, '�');
   return text.length > SHOWN_LENGTH ? `${text.slice(0, SHOWN_LENGTH)}…` : text;
 };
+/**
+ * #381: the rule of a new approval. One that follows a time-limited approval keeps its limit (days, from the
+ * settings) instead of becoming unlimited; an older rule without days gets the shortest one (1 day).
+ */
+export function renewedAgentRule(previous, write, now = Date.now()) {
+  const days = Number(previous?.days) > 0 ? Number(previous.days) : (previous?.until ? 1 : 0);
+  return { write, days, until: days ? new Date(now + days * 86_400_000).toISOString() : null };
+}
 const fieldValue = (item, field) => (field === 'url' ? (item?.urls || []).join(', ') : item?.[field] ?? '');
 
 const MAX_HOST_LENGTH = 253; // longest name DNS allows
@@ -206,7 +217,8 @@ export class McpService {
   constructor({ vault, confirmRead, confirmWrite, audit, admitted = () => false, scope = () => ({ all: true }), policy = () => ({ write: false }), trusted = () => false, trust = () => {}, waitUnlock = async () => false,
     features = () => ({}), confirmPasskey = async () => false, chooseMicrosoft = async () => null }) {
     // features(): { passkeys, microsoft } – both off unless turned on in the settings (#308, #315).
-    // confirmPasskey({ agent, title, username, vault, rpId, origin }) → boolean, asked for every single use.
+    // confirmPasskey({ agent, title, username, vault, rpId, origin }) → boolean, asked for every single use. The app (#439) also
+    // asks for the PIN there and throws instead (no PIN set): true means confirmed with the PIN, nothing is signed otherwise.
     // chooseMicrosoft({ agent, purpose, accounts: [{ key, title, username, vault }] }) → key of the chosen account or null.
     Object.assign(this, { vault, confirmRead, confirmWrite, audit, admitted, scope, policy, trusted, trust, waitUnlock, features, confirmPasskey, chooseMicrosoft });
     this.clients = new Set();
@@ -252,6 +264,11 @@ export class McpService {
     return c;
   }
 
+  /** Locked while the user was being asked: what was read before stays here, whatever the answer was (#374). */
+  stillOpen() {
+    if (!this.vault()) throw fail(t('Keevault ist gesperrt – bitte in der App entsperren und erneut versuchen.'));
+  }
+
   requireScope(vaultId, folder) {
     if (!scopeAllows(this.scope(), vaultId, folder)) throw fail(t('Dieser Ordner ist für KI-Agenten nicht freigegeben.'));
   }
@@ -266,6 +283,7 @@ export class McpService {
     if ((this.grants.get(client)?.until || 0) > now || (this.timed.get(client.agent) || 0) > now) return;
     if (this.trusted(client.agent, container.id, item.id)) return;
     const answer = await this.confirmRead({ agent: client.agent, title: item.title, vault: container.name });
+    this.stillOpen();
     const minutes = /^minutes:(\d+)$/.exec(String(answer))?.[1];
     if (answer === 'always') this.trust({ agent: client.agent, vaultId: container.id, entryId: item.id, title: item.title });
     else if (answer === 'session') this.grants.set(client, { until: now + SESSION_MS });
@@ -276,8 +294,12 @@ export class McpService {
   async call(client, tool, args = {}) {
     const entry = { agent: client.agent, tool, vault: args.vaultId || '', entry: args.entryId || args.title || '' };
     try {
-      if (!this.admitted(client.agent)) throw fail(t('Dieser Agent ist nicht mehr zugelassen. Starte ihn neu und erlaube ihn in Keevault.'));
-      const result = await this.run(client, tool, args || {});
+      if (!this.admitted(client.agent)) {
+        // #381: an approval that ran out (or was withdrawn) also ends its read grants; a new approval starts without them.
+        this.revoke(client.agent);
+        throw fail(t('Dieser Agent ist nicht mehr zugelassen. Starte ihn neu und erlaube ihn in Keevault.'));
+      }
+      const result = await this.run(client, tool, args || {}, entry);
       this.audit?.({ ...entry, result: 'ok' });
       return result;
     } catch (e) {
@@ -286,7 +308,8 @@ export class McpService {
     }
   }
 
-  async run(client, tool, a) {
+  /** entry: the line of the audit log; what only shows up on the way goes into it (origin, chosen account). */
+  async run(client, tool, a, entry = {}) {
     switch (tool) {
       case 'list_vaults': {
         const scope = this.scope();
@@ -330,11 +353,12 @@ export class McpService {
           const { code, remaining } = await totpCode(item.totp);
           return { code, validForSeconds: remaining };
         }
-        // Never private key material: passkeys and certificate files stay in the vault.
+        // Never private key material: passkeys and certificate files stay in the vault. #469: no TOTP secret either
+        // (only whether one is set) – get_totp gives the current code.
         return {
           vaultId: c.id, entryId: item.id, type: item.type, title: item.title, username: item.username, password: item.password,
           urls: item.urls, notes: item.notes, folder: item.folder, hasTotp: !!item.totp,
-          fields: item.fields.map((f) => ({ name: f.name, value: f.value })),
+          fields: item.fields.map((f) => (f.type === 'totp' ? { name: f.name, type: 'totp', hasTotp: !!f.value } : { name: f.name, value: f.value })),
           ...(item.type === 'card' ? { card: item.card } : {}),
           ...(item.type === 'certificate' ? { certificate: { subject: item.cert?.subject, notAfter: item.cert?.notAfter, note: 'certificate file not exported' } } : {}),
           passkeys: item.passkeys.length,
@@ -372,6 +396,7 @@ export class McpService {
           fields: changed.map((k) => (k === 'password' && a.generatePassword ? 'password (neu erzeugt)' : k)),
           changes: visibleChanges(before, patch),
         });
+        this.stillOpen();
         if (!ok) throw fail(t('Vom Benutzer abgelehnt'));
         const item = normalizeItem({ ...(before || { type: 'login' }), ...patch });
         const saved = await v.saveItem(c.id, item, before ? { expectedVersion: before.version } : {});
@@ -387,6 +412,7 @@ export class McpService {
         this.requireScope(c.id, item.folder);
         let origin;
         try { origin = new URL(String(a.origin || '')); } catch { throw fail(t('Ungültige Herkunft (origin)')); }
+        entry.origin = origin.origin;
         const rpId = String(a.rpId || '').toLowerCase();
         const want = String(a.credentialId || '');
         const passkey = (item.passkeys || []).find((p) => (!rpId || p.rpId === rpId) && (!want || p.credentialId === want));
@@ -400,6 +426,7 @@ export class McpService {
         if (!/^[A-Za-z0-9_-]{22,4096}={0,2}$/.test(challenge)) throw fail(t('Ungültige Challenge (base64url, mindestens 16 Byte)'));
         // The account the sign-in is for (#331): the passkey's own user name, else the entry's.
         const ok = await this.confirmPasskey({ agent: client.agent, title: item.title, username: passkey.userName || item.username || '', vault: c.name, rpId: passkey.rpId, origin: origin.origin });
+        this.stillOpen();
         if (!ok) throw fail(t('Vom Benutzer abgelehnt'));
         const { response, signCount } = await getAssertion({ origin: origin.origin, rpId: passkey.rpId, challenge, passkey });
         // A counting passkey keeps counting (synced ones stay at 0).
@@ -424,10 +451,12 @@ export class McpService {
           .sort((x, y) => Number(y.match) - Number(x.match) || Number(!!y.s.msAdmin) - Number(!!x.s.msAdmin) || x.s.title.localeCompare(y.s.title))
           .map(({ s, match }) => ({ key: `${s.containerId}/${s.id}`, title: s.title, username: s.username, vault: names.get(s.containerId) || '', ...(match ? {} : { otherTenant: true }) }));
         if (!accounts.length) throw fail(t('Kein Microsoft-Login in den für Agenten freigegebenen Tresoren'));
-        const key = await this.chooseMicrosoft({ agent: client.agent, purpose: String(a.purpose || '').slice(0, 200), accounts });
+        const key = await this.chooseMicrosoft({ agent: client.agent, purpose: shown(a.purpose), accounts });
+        this.stillOpen();
         const chosen = accounts.find((x) => x.key === key);
         if (!chosen) throw fail(t('Vom Benutzer abgelehnt'));
         const [vaultId, entryId] = [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)];
+        Object.assign(entry, { vault: vaultId, entry: entryId, account: chosen.username });
         const item = await v.getItem(vaultId, entryId, { fresh: true });
         const otp = item.totp ? await totpCode(item.totp) : null;
         return { vaultId, entryId, title: item.title, username: item.username, password: item.password,

@@ -5,10 +5,17 @@ import { spawn, spawnSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import electron from 'electron';
+import { onlyProblem } from '../desktop/smoke-areas.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const args = process.argv.slice(2);
+
+const problem = onlyProblem(args);
+if (problem) {
+  console.error(`SMOKE FAIL: ${problem}`);
+  process.exit(1);
+}
+const { default: electron } = await import('electron');
 
 if (args.includes('--smoke-test')) {
   // desktop with its subfolders (main/, main/api/, passkey/) – without the window's own code (renderer/), which

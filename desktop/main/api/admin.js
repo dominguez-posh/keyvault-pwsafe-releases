@@ -12,17 +12,17 @@ import { ADMIN_CENTER_HOSTS, MS_LOGIN_HOSTS, addSignInJob, adminCenterUrl, lastA
 export const adminApi = {
   /**
    * Website of a login linked to a Microsoft login (external portal with "Sign in with Microsoft"): opened in the browser
-   * with a one-click sign-in for exactly that Microsoft account (like the admin tiles, see signInFor).
+   * without a one-click job: the foreign portal sends the tab on to Microsoft, which never counts as trusted, so the job
+   * would wait two minutes for the next trusted tab (a mail link, #425). The Microsoft bar offers the accounts there.
    */
   async openWithMicrosoft({ containerId, id, url }) {
     requireOpen();
     if (!/^https?:\/\//i.test(url || '')) throw new Error(t('Keine gültige Adresse'));
     const item = await usableItem(containerId, id);
     if (!item.linked?.microsoft) throw new Error(t('Der Eintrag ist mit keinem Microsoft-Login verknüpft'));
-    addSignInJob(MS_LOGIN_HOSTS, item.linked.key, 'microsoft');
     setLastAdminUrl(url);
     if (!smokeTest) await shell.openExternal(url);
-    return { signIn: !!bridge?.clients?.size };
+    return { signIn: false };
   },
   /** Admin center in the browser; with an account the extension signs in with it (one-click, see signInFor). */
   async openAdminCenter({ url, key }) {

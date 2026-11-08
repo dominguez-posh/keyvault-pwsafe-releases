@@ -10,6 +10,7 @@ import { renderList } from './list.js';
 import { stepZoom } from './main-menu.js';
 import { deviceMode } from './modes.js';
 import { clearSelection, deleteManyDialog, multiItems, selectionSize } from './multi.js';
+import { clearCut, cutCount, cutItems, pasteInto, pasteTarget } from './cut-paste.js';
 
 /**
  * Strg+Umschalt+U / P / O: types user name, password or current one-time code of the selected entry into the
@@ -24,6 +25,12 @@ async function typeSelected(what) {
     return toast(e.message, 'error');
   }
 }
+
+/** Typing in a field, or text selected on the page: Ctrl+X / Ctrl+V keep their normal meaning there. */
+const typing = () => {
+  const a = document.activeElement;
+  return ['INPUT', 'TEXTAREA', 'SELECT'].includes(a?.tagName) || !!a?.isContentEditable || !!window.getSelection()?.toString();
+};
 
 // Zoom: Ctrl + / Ctrl − / Ctrl 0 (also Ctrl with the number pad keys), everywhere in the window.
 document.addEventListener('keydown', (e) => {
@@ -50,6 +57,15 @@ document.addEventListener('keydown', (e) => {
   } else if (e.ctrlKey && e.shiftKey && ['u', 'p', 'o'].includes(e.key.toLowerCase())) {
     e.preventDefault();
     typeSelected(e.key.toLowerCase());
+  } else if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key.toLowerCase() === 'x' || e.key.toLowerCase() === 'v') && !typing() && !ui.editing) {
+    // #467: in input fields Ctrl+X / Ctrl+V stay cutting and pasting text; here they mark and move entries.
+    e.preventDefault();
+    if (e.key.toLowerCase() === 'x') cutItems(null);
+    else if (!cutCount()) toast(t('Nichts zum Einfügen vorgemerkt'), 'error');
+    else if (pasteTarget()) pasteInto(pasteTarget());
+    else toast(t('Zuerst einen Tresor öffnen, in den eingefügt wird'), 'error');
+  } else if (e.key === 'Escape' && cutCount() && !ui.editing) {
+    clearCut();
   } else if (e.key === 'Escape' && ui.editing) {
     ui.editing = null;
     renderDetail();

@@ -3,20 +3,23 @@
 // (newest change wins, deletions are kept as tombstones), keyring entries are merged as a union.
 //
 // Format 1: keyring with password / passkey / recovery key / invitations (core/protect.js).
+// Format 3 = format 1 after a key change (#402): older apps refuse it as "newer" instead of writing with the old key.
 // Format 2 ("secured"): passkey-only members with roles (core/members.js). Every item version, deletion and
 // log entry is signed by its author; changes without a valid signature of a member with write access at
 // that time are ignored. The change log keeps every change (who, when, what) for good.
 
-import { createKeyring, ContainerKey, mergeKeyrings } from './protect.js';
+import { createKeyring, ContainerKey, mergeKeyrings, keyVersionOf, keyMatches, UnlockError } from './protect.js';
 import {
-  createSecureKeyring, unlockSecure, verifyRoster, applySecureOp, rekeyMembers, mergeSecureKeyrings, describeSecure, requestAccess,
+  createSecureKeyring, unlockSecure, verifyRoster, applyRejections, applySecureOp, rekeyMembers, mergeSecureKeyrings, describeSecure, requestAccess,
   signObject, verifyObject, unwrapKey, fileIdFor, canWrite, secureCredentials,
 } from './members.js';
+import { recryptDoc, rekeyFile, stamp } from './filevault-rekey.js';
 import { normalizeItem, newItemId, summaryFromItem, normalizeFolder } from './model.js';
 
 export { normalizeFolder };
 import { t } from './i18n.js';
 import { isImageDataUrl } from './image.js';
+import { belowFloor, floorOf, mergeFloors } from './rollback.js';
 
 export const FILE_FORMAT = 'kvpwsafe-file';
 export const FILE_EXTENSION = 'kvpws';
@@ -24,6 +27,9 @@ const HISTORY = 10;
 const SECURE_HISTORY = 50;
 const TOMBSTONE_DAYS = 120;
 const TRACKED_FIELDS = ['type', 'title', 'username', 'password', 'urls', 'notes', 'totp', 'folder', 'favorite', 'fields', 'passkeys', 'tags'];
+
+// ID of a secured file: derived from the creator's signing key (members.js fileIdFor), never that of an old-format file.
+const SECURED_ID = /^file-[A-Za-z0-9_-]{22}$/;
 
 export class FileFormatError extends Error {
   constructor(message = t('Die Datei ist kein Keevault-Tresor')) {
@@ -70,13 +76,12 @@ export function parseFile(text) {
     if (!doc) throw new FileFormatError();
   }
   if (doc?.format !== FILE_FORMAT || !doc.keyring || typeof doc.items !== 'object') throw new FileFormatError();
-  if (doc.version > 2) throw new FileFormatError(t('Die Datei stammt aus einer neueren Version von Keevault'));
+  if (doc.version > 3) throw new FileFormatError(t('Die Datei stammt aus einer neueren Version von Keevault'));
   return doc;
 }
 
 const rev = () => crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 // A change is always newer than the version it is based on, even within the same millisecond.
-const stamp = (previous) => Math.max(Date.now(), (previous?.updated || 0) + 1);
 const nowIso = () => new Date().toISOString();
 
 function mergeByUpdated(disk = {}, ours = {}) {
@@ -91,6 +96,8 @@ function mergeByUpdated(disk = {}, ours = {}) {
 /** Merges a stored document (disk) with a modified one (ours): newest entry wins per item. */
 export function mergeDocs(disk, ours) {
   if (!disk) return ours;
+  // A new key generation (#402): the disk's entries are encrypted with the old key and must not mix with ours.
+  if (ours.version !== 2 && keyVersionOf(ours.keyring) > keyVersionOf(disk.keyring)) return { ...ours, updated: Math.max(disk.updated || 0, ours.updated || 0) };
   const items = mergeByUpdated(disk.items, ours.items);
   const cutoff = Date.now() - TOMBSTONE_DAYS * 86_400_000;
   for (const [id, entry] of Object.entries(items)) if (entry.purged && entry.updated < cutoff) delete items[id];
@@ -98,6 +105,9 @@ export function mergeDocs(disk, ours) {
   const log = secure ? [...new Map([...(disk.log || []), ...(ours.log || [])].map((e) => [e.id, e])).values()] : undefined;
   return {
     ...disk,
+    // Ours, never the disk's (#430): persist() refuses a disk with another ID or an older format before merging.
+    id: ours.id,
+    version: ours.version,
     name: (ours.updated || 0) >= (disk.updated || 0) ? ours.name : disk.name,
     keyring: secure ? mergeSecureKeyrings(ours.keyring, disk.keyring) : mergeKeyrings(ours.keyring, disk.keyring),
     items,
@@ -180,15 +190,28 @@ export class FileVault {
 
   async load() {
     const text = await this.io.read();
+    this.loadedText = text; // (key change: has the file changed since?)
     if (text == null) throw new Error(t('Datei nicht gefunden'));
     const doc = parseFile(text);
     if (doc.version === 2 && doc.id !== (await fileIdFor(doc.keyring.root))) {
       throw new FileFormatError(t('Die Datei wurde manipuliert: Ihre Kennung passt nicht zum Schlüssel des Erstellers'));
     }
+    // No way back from the secured format (#430): the old one has no signed roles, so any member – also a reader –
+    // holding the container key could write it and become a writer. Its IDs are random (file-<uuid>); one derived from
+    // a creator's key belongs to a secured file, and a vault that read a secured file never takes an old one.
+    if (doc.version !== 2 && (SECURED_ID.test(String(doc.id)) || this.doc?.version === 2)) {
+      throw new FileFormatError(t('Die Datei wurde manipuliert: ein abgesicherter Tresor im alten Format'));
+    }
+    if (doc.version === 2) doc.keyring = await applyRejections(doc.keyring, this.known = mergeFloors(this.floor, floorOf(this.doc, this.roster))); // #432, #433, #440
+    const roster = doc.version === 2 ? await verifyRoster(doc.keyring, this.known) : null; // a changed known grant: refused (#444)
+    if (belowFloor(doc, this.known, roster) || roster?.tampered) throw new FileFormatError(roster?.tampered ? t('Die Datei wurde manipuliert: ein bekannter Eintrag der Benutzerliste wurde verändert – nicht übernommen.') : t('Die Datei ist ein älterer Stand, als hier schon gesehen wurde – nicht übernommen.'));
     this.doc = doc;
     if (this.secure) {
-      this.roster = await verifyRoster(doc.keyring);
+      this.roster = roster;
       if (this.ck) await this.followKeyChange();
+    } else if (this.ck && !(await keyMatches(doc.keyring, this.ck))) {
+      // Another device changed the key (#402): ours opens nothing here any more.
+      this.lock();
     }
     if (this.ck) await this.decryptAll();
     return this;
@@ -207,14 +230,18 @@ export class FileVault {
   }
 
   async unlock(ck) {
-    this.ck = ck instanceof ContainerKey ? ck : await ContainerKey.fromRaw(ck);
+    const key = ck instanceof ContainerKey ? ck : await ContainerKey.fromRaw(ck);
+    // A key from before a key change (PIN binding of this device, an old session) is refused clearly (#402).
+    if (!this.secure && !(await keyMatches(this.doc.keyring, key))) throw new UnlockError(t('Der Schlüssel dieses Tresors wurde gewechselt – bitte mit Masterpasswort oder neuem Wiederherstellungsschlüssel entsperren'));
+    this.ck = key;
+    if (!this.secure) this.ck.kv = keyVersionOf(this.doc.keyring);
     await this.decryptAll();
   }
 
   /** Secured files: unlock with a member passkey. Returns { pending, safetyCode } while access is not granted yet. */
   async unlockWithPasskey(credentialId, prfOutput) {
     await this.load();
-    const r = await unlockSecure(this.doc.keyring, credentialId, prfOutput);
+    const r = await unlockSecure(this.doc.keyring, credentialId, prfOutput, this.known);
     if (r.pending) return r;
     r.ck.kv = this.doc.keyring.keyVersion;
     Object.assign(this, { ck: r.ck, identity: r.identity, memberId: r.memberId, roster: r.roster });
@@ -372,15 +399,28 @@ export class FileVault {
   async persist() {
     const text = await this.io.read();
     const disk = text == null ? null : parseFile(text);
+    // Format and ID never come from the disk (#430): another vault or an older format there is refused, not merged –
+    // otherwise a member could drop an old-format file under this ID and the next change would save it as such.
+    const upgrade = this.doc.version === 3 /* format 1 becomes 3 by a key change (#402) */ && (disk?.version || 1) === 1;
+    if (disk && (disk.id !== this.doc.id || ((disk.version || 1) < (this.doc.version || 1) && !upgrade))) {
+      throw new FileFormatError(t('Die Datei wurde manipuliert: Format oder Kennung haben sich geändert – nichts gespeichert.'));
+    }
+    if (!this.secure && disk && keyVersionOf(disk.keyring) > keyVersionOf(this.doc.keyring)) {
+        await this.load();
+      this.lock();
+      throw new Error(t('Der Schlüssel dieses Tresors wurde auf einem anderen Gerät gewechselt. Bitte neu entsperren und die Änderung wiederholen.'));
+    }
     if (this.secure && disk?.version === 2 && disk.keyring.keyVersion > this.doc.keyring.keyVersion) {
       // An admin changed the container key meanwhile: our change is encrypted with the old key.
       await this.load();
       throw new Error(t('Die Datei wurde gerade neu verschlüsselt (Benutzer entfernt). Bitte die Änderung wiederholen.'));
     }
-    this.doc = mergeDocs(disk, this.doc);
+    [this.known, this.doc] = [this.secure ? mergeFloors(this.floor, floorOf(this.doc, this.roster)) : null, mergeDocs(disk, this.doc)];
+    if (this.secure) this.doc.keyring = await applyRejections(this.doc.keyring, this.known); // what we held counted, the disk's is new (#440)
     await this.io.write(JSON.stringify(this.doc, null, 1));
-    if (this.secure) this.roster = await verifyRoster(this.doc.keyring);
+    if (this.secure) this.roster = await verifyRoster(this.doc.keyring, this.known);
     if (this.ck) await this.decryptAll();
+    this.onPersisted?.(this); // the app remembers the state just written (desktop: rollback floor, #432)
   }
 
   // ---------------------------------------------------------------- change log (format 2)
@@ -631,6 +671,12 @@ export class FileVault {
     await this.persist();
   }
 
+  /**
+   * Real key change of a format-1 file (#402): new key, everything re-encrypted, new master password and recovery key.
+   * One write of the whole file: stopped before it, the old state stays whole. Returns { recoveryKey, dropped }.
+   */
+  rekey(password, actor = '') { return rekeyFile(this, password, actor); }
+
   /** License key of this vault (signed, bound to the file ID – stored as is). */
   license() {
     return this.doc.license || null;
@@ -664,7 +710,7 @@ export class FileVault {
   /** Access request by a new user; the file stays locked for them until an admin approves. */
   async requestAccess({ email, passkey }) {
     await this.load();
-    const roster = await verifyRoster(this.doc.keyring);
+    const roster = await verifyRoster(this.doc.keyring, this.known);
     const sharing = await describeSecure(this.doc.keyring, roster, null, passkey.rpId);
     if (!sharing.sharing) throw new Error(t('Die Freigabe ist für diese Datei nicht aktiviert – bitte einen Admin der Datei fragen'));
     const r = await requestAccess(this.doc.keyring, { email, passkey });
@@ -677,11 +723,11 @@ export class FileVault {
   /** Member management (see applySecureOp); removing a member changes the container key. */
   async memberOp(op) {
     this.requireUnlocked();
-    const ctx = { ck: this.ck, identity: this.identity, memberId: this.memberId };
+    const ctx = { ck: this.ck, identity: this.identity, memberId: this.memberId, known: this.known };
     const target = op.memberId && this.memberEmail(op.memberId);
     const r = await applySecureOp(this.doc.keyring, ctx, op);
     this.doc.keyring = r.keyring;
-    this.roster = await verifyRoster(this.doc.keyring);
+    this.roster = await verifyRoster(this.doc.keyring, this.known);
     const log = {
       approve: { action: 'member-approve', target, role: op.role },
       setRole: { action: 'member-role', target, role: op.role },
@@ -701,32 +747,8 @@ export class FileVault {
   async rotateKey() {
     const old = this.ck;
     const next = await ContainerKey.generate();
-    const recrypt = async (sealed, aad) => {
-      try {
-        return await next.encrypt(await old.decrypt(sealed, aad), aad);
-      } catch {
-        return sealed;
-      }
-    };
-    // Newer timestamps, so that the re-encrypted entries win the merge with the file on disk.
-    for (const [id, entry] of Object.entries(this.doc.items)) {
-      if (!entry.data) continue;
-      entry.data = await recrypt(entry.data, this.aad(id));
-      for (const h of entry.history || []) h.data = await recrypt(h.data, this.aad(id));
-      entry.updated = stamp(entry);
-    }
-    for (const e of this.doc.log || []) e.data = await recrypt(e.data, this.aad(`log/${e.id}`));
-    for (const [fid, f] of Object.entries(this.doc.folders || {})) {
-      if (f.data) f.data = await recrypt(f.data, this.aad(`folder/${fid}`));
-      f.updated = stamp(f);
-    }
-    if (this.doc.logo?.data) this.doc.logo = { data: await recrypt(this.doc.logo.data, this.aad('logo')), updated: stamp(this.doc.logo) };
-    if (this.doc.appSettings?.data) this.doc.appSettings = { data: await recrypt(this.doc.appSettings.data, this.aad('app-settings')), updated: stamp(this.doc.appSettings) };
-    for (const [fid, f] of Object.entries(this.doc.folderIcons || {})) {
-      if (f.data) f.data = await recrypt(f.data, this.aad(`folder-icon/${fid}`));
-      f.updated = stamp(f);
-    }
-    this.doc.keyring = await rekeyMembers(this.doc.keyring, next);
+    await recryptDoc(this.doc, old, next, (id) => this.aad(id));
+    this.doc.keyring = await rekeyMembers(this.doc.keyring, next, this.known);
     next.kv = this.doc.keyring.keyVersion;
     this.ck = next;
     await this.addLog({ action: 'key-rotate', keyVersion: next.kv });

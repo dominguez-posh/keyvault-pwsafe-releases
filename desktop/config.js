@@ -6,6 +6,7 @@ import { app } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { readPolicy } from './policy.js';
+import { readJson, readOrgFile } from './org-file.js';
 
 const DEFAULTS = {
   tenantId: '',
@@ -25,6 +26,7 @@ const DEFAULTS = {
   appPin: null,
   pinGuard: null, // wrong PIN attempts { failures, blockedUntil } – survives a restart
   requirePin: false,
+  passkeyPin: true, // #439: every passkey use asks for the app PIN (on by default; the policy RequirePin makes it fixed)
   trayHintShown: false,
   autoTypeKeys: 'CommandOrControl+Shift',
   // Start with Windows (tray only): the browser extension and AI agents find the app without starting it.
@@ -33,6 +35,7 @@ const DEFAULTS = {
   machineSetupHint: '',
   entraUsed: false,
   fileIds: {},
+  fileIdNotes: {}, // per path: name, creator and safety code of the vault seen there (#404)
   fileEmail: '',
   approvedBrowsers: [],
   extensionIds: ['pbkjijhihclckeeefbepoedgdmajioip'],
@@ -76,6 +79,8 @@ const DEFAULTS = {
   adminOffered: false,
   // View: admin tools top right – PIM, Microsoft 365 admin centers, servers (replaces the single PIM button).
   adminTools: false,
+  // #476: in admin mode, Verwalter see other people's "Nur für mich" entries – off by default, off again with admin mode.
+  showOthersPrivate: false,
   // Break-glass accounts per tenant ({ [tenantId]: [{ id, type, displayName, detail }] }): preset when creating a vault.
   breakGlass: {},
   // Second installation found (path|version) the user chose not to be told about again.
@@ -86,6 +91,10 @@ const DEFAULTS = {
   // Order of the vaults in the sidebar (container ids, by drag and drop); vaults not listed follow in their own order.
   containerOrder: [],
   personalDeviceKeys: {},
+  // Personal vaults whose recovery key was not confirmed yet: vault id → id of its recovery entry, never a key (#399). Device only.
+  personalRecoveryPending: {},
+  // Of those, the ones whose key was renewed in the app and shown once: vault id → same entry id. "I have stored it" is no answer there.
+  personalRecoveryRenewed: {},
   personalOffered: false, // the wizard opened once by itself
   setupOffered: false, // the setup wizard for a team vault opened once by itself (first start on this device)
   // Connect every Key Vault marked as a Keevault vault after signing in (off: only vaults added by hand or policy).
@@ -103,14 +112,6 @@ export const SYNC_KEYS = ['containers', 'hiddenContainers', 'containerOrder', 'd
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'updateChannel', 'mcpEnabled', 'offlineMirror',
   'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];
 
-function readJson(file) {
-  try {
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
 export class Config {
   constructor() {
     this.file = path.join(app.getPath('userData'), 'settings.json');
@@ -124,14 +125,7 @@ export class Config {
     delete this.user.personalDeviceKey;
     // Up to 0.9.18 every marked Key Vault was connected by itself: installations that signed in keep that.
     if (this.user.entraUsed && !Object.hasOwn(this.user, 'autoDiscover')) this.user.autoDiscover = true;
-    const candidates = [
-      path.join(path.dirname(process.execPath), 'kvpwsafe.config.json'),
-      process.env.ProgramData && path.join(process.env.ProgramData, 'Keevault', 'kvpwsafe.config.json'),
-      // Folder of the old product name (KeyVault PwSafe), still honored for existing deployments.
-      process.env.ProgramData && path.join(process.env.ProgramData, 'KeyVault PwSafe', 'kvpwsafe.config.json'),
-      path.join(app.getAppPath(), 'kvpwsafe.config.json'),
-    ].filter(Boolean);
-    this.org = candidates.map(readJson).find(Boolean) || {};
+    this.org = readOrgFile({ execPath: process.execPath, programData: process.env.ProgramData, appPath: app.getAppPath() });
     // Group Policy / Intune (registry) over the file; vaults from both.
     const policy = readPolicy();
     this.org = { ...this.org, ...policy.settings, containers: [...(Array.isArray(this.org.containers) ? this.org.containers : []), ...policy.containers] };

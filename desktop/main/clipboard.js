@@ -5,6 +5,7 @@ import { app, clipboard } from 'electron';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { copySecret } from '../autotype.js';
+import { clearAfterSeconds, copyInTime } from '../copy-in-time.js';
 import { t } from '../../extension/core/i18n.js';
 import { demo, smokeTest } from './boot.js';
 import { config } from './state.js';
@@ -35,7 +36,7 @@ export const copyViaHelperExe = (text) => runHelperExe('--clipboard', text).then
  * Copies a value. On Windows with the markers that keep it out of the clipboard history (Win+V) and the
  * cloud clipboard – a copied password must not end up in a history or on other devices.
  */
-export async function copyToClipboard(text) {
+export async function copyToClipboard(text, { atLeastSeconds = 0 } = {}) {
   // Windows: Keevault-Update.exe --clipboard (windows/Setup/Clip.cs) writes with the history/cloud markers and reads
   // the text back itself. Electron's clipboard.readText() returns nothing on some machines (2026-11-01: every copy
   // reported "clipboard not available" although it had worked) – so it decides nothing here any more.
@@ -47,8 +48,7 @@ export async function copyToClipboard(text) {
     verified = code === 0;
     if (!verified) {
       diag(`COPY Keevault-Update.exe ${code === null ? 'unavailable' : `exit ${code}`} – fallback`);
-      const ps = !smokeTest && !demo && !psClipboardBlocked
-        && await Promise.race([copySecret(text).then(() => true, () => false), new Promise((r) => setTimeout(() => r(false), 1500))]);
+      const ps = !smokeTest && !demo && !psClipboardBlocked && await copyInTime(() => copySecret(text), 1500, () => clearCopied(text));
       // Neither helper could copy: an error, never a plain copy – that one would land in Windows' clipboard history
       // and the cloud clipboard (#337).
       if (!ps) {
@@ -66,12 +66,14 @@ export async function copyToClipboard(text) {
     if (typeof back === 'string' && back && back !== text) throw new Error(t('Die Zwischenablage ist nicht verfügbar.'));
   }
   clearTimeout(clipboardTimer);
-  const seconds = Number(config.get().clipboardSeconds) || 0;
+  const seconds = clearAfterSeconds(config.get().clipboardSeconds, atLeastSeconds);
   if (seconds > 0) {
-    // Cleared only if it still holds this text (something copied since stays) – compared by the helper on Windows.
-    clipboardTimer = setTimeout(async () => {
-      const code = process.platform === 'win32' ? await runHelperExe('--clipboard-clear', text) : null;
-      if (code === null && clipboard.readText() === text) clipboard.clear();
-    }, seconds * 1000);
+    clipboardTimer = setTimeout(() => clearCopied(text), seconds * 1000);
   }
+}
+
+/** Cleared only if it still holds this text (something copied since stays) – compared by the helper on Windows. */
+async function clearCopied(text) {
+  const code = process.platform === 'win32' ? await runHelperExe('--clipboard-clear', text) : null;
+  if (code === null && clipboard.readText() === text) clipboard.clear();
 }

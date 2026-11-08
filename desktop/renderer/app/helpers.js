@@ -2,6 +2,7 @@
 
 import { h, icon, toast } from '../../../extension/core/dom.js';
 import { t, locale } from '../../../extension/core/i18n.js';
+import { sharedNames, vaultChoiceLabel } from '../../../extension/core/session-meta.js';
 import { call } from './ipc.js';
 import { st } from './state.js';
 
@@ -14,7 +15,13 @@ export const copy = (text, label = t('Wert')) => Promise.resolve(text).then((val
   .catch((e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error'));
 export const openUrl = (url) => call('openExternal', url);
 export const formatDate = (iso) => new Date(iso).toLocaleDateString(locale(), { day: '2-digit', month: '2-digit', year: 'numeric' });
-export const field = (label, input, hint) => h('div', { class: 'field' }, h('label', {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
+let fieldSeq = 0;
+// The label belongs to its control (screen readers, click on the label); a control that has no id gets one.
+export const field = (label, input, hint) => {
+  const control = input instanceof Element && /^(INPUT|SELECT|TEXTAREA)$/.test(input.tagName) ? input : null;
+  if (control && !control.id) control.id = `fld-${++fieldSeq}`;
+  return h('div', { class: 'field' }, h('label', control ? { for: control.id } : {}, label), input, hint ? h('div', { class: 'muted small' }, hint) : null);
+};
 
 /** Tab bar + panels for a dialog; the active tab per key survives closing (e.g. reopening the settings after Save). */
 const activeTabs = {};
@@ -32,4 +39,6 @@ export function tabbed(key, pages) {
 }
 export const notice = (text, kind = 'error') => h('div', { class: `notice ${kind}` }, text);
 export const writable = (c) => c.access?.write !== false && !c.error && !c.locked;
-export const writableContainers = () => st.containers.filter(writable).map((c) => ({ id: c.id, name: c.name, personal: !!c.personal }));
+/** Name of a vault in a select (save, move, new, import): with its host when the name comes from the vault or is taken twice (#479). */
+export const choiceName = (c) => vaultChoiceLabel(c, sharedNames(st.containers));
+export const writableContainers = () => st.containers.filter(writable).map((c) => ({ id: c.id, name: choiceName(c), personal: !!c.personal }));

@@ -125,3 +125,19 @@ export function rankCandidates(list, pageUrl, preferUser = '') {
   const isWanted = (c) => !!wanted && [c.passkey?.userName, c.username].some((u) => String(u || '').trim().toLowerCase() === wanted);
   return list.map((c, i) => ({ c, i, score: (isWanted(c) ? 1000 : 0) + (pageUrl ? urlScore(c.urls, pageUrl) : 0) })).sort((a, b) => b.score - a.score || a.i - b.i).map((x) => x.c);
 }
+
+/** A fill the person confirmed for another site goes only to the origin named in that confirmation: the tab may have moved on (#412). */
+export function confirmedOriginFits(pageUrl, confirmed) {
+  const origin = pageOrigin(pageUrl);
+  return !!origin && origin === confirmed;
+}
+
+/** The page as the user must read it in a confirmation: scheme, host and a non-standard port (the host alone hides http and other ports). */
+export function pageOrigin(url, fallback = '') {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : fallback;
+  } catch {
+    return fallback;
+  }
+}

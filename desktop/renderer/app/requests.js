@@ -1,14 +1,31 @@
 // Requests that come to the window by themselves: passkey requests from Windows and questions of AI agents.
 
-import { h, icon, toast, modal, passkeySuccess } from '../../../extension/core/dom.js';
+import { h, icon, toast, modal, passkeySuccess, showPinProblem } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { st } from './state.js';
-import { field, notice } from './helpers.js';
+import { choiceName, field, notice } from './helpers.js';
 import { FIELD_LABELS } from './file-vaults.js';
+import { pinDialog } from './admin-mode.js';
+import { openRequests, pinTyping } from './pin-typed.js';
+import { focusField } from './focus.js';
 import { reloadAll } from './shell.js';
 
 const windowsDialogs = new Map(); // request id → close()
+// #472 (review): every request dialog open in the window; Enter in a PIN field confirms only while it is the only one.
+const pinRequests = openRequests();
+// Shown under the PIN field while more than one request is open: then only a click confirms.
+const multiHint = (cls) => h('p', { class: `muted small ${cls}`, hidden: true }, t('Mehrere Anfragen offen – bestätige diese mit einem Klick.'));
+
+/** Entries a request names (the browser move): own list, the titles as written (not translated), passkey entries marked, shortened with the total kept. */
+function entriesList(entries) {
+  if (!entries?.rows?.length) return null;
+  const more = entries.total - entries.rows.length;
+  return h('div', { class: 'q-entries' },
+    h('div', { class: 'q-entries-count' }, t('{n} Einträge', { n: entries.total })),
+    h('ul', { class: 'q-entries-list' }, ...entries.rows.map((e) => h('li', { class: 'q-entry', 'data-passkey': e.passkey ? '1' : '0' }, e.title, e.passkey ? h('span', { class: 'q-chip' }, t('Passkey')) : null))),
+    more > 0 ? h('div', { class: 'q-entries-more' }, t('… und {n} weitere', { n: more })) : null);
+}
 
 export async function checkWindowsRequests() {
   let requests;
@@ -40,7 +57,8 @@ export const openQuestions = new Map(); // id → close without answer
 // MCP argument names that differ from the item fields (FIELD_LABELS below).
 const AGENT_FIELD_ALIAS = { url: 'urls', generatePassword: 'password' };
 // #368: "Allow" only works this long after the question appeared and after the last key press, so that someone who was
-// typing for another program and keeps typing cannot answer it, not even with Tab and Enter.
+// typing for another program and keeps typing cannot answer it, not even with Tab and Enter. The same when the window
+// comes to the front (#381): the click that activates it must not answer the question, so the delay starts again.
 const CONFIRM_DELAY_MS = 1200;
 // Questions still open: closing one starts the delay of those below it again, they come up under the mouse pointer.
 const waitingQuestions = new Set();
@@ -135,8 +153,50 @@ export function questionDialog(q) {
       h('div', { class: 'q-target-vault' }, icon('vault', 12), q.vault || '')),
     q.fields?.length ? h('div', { class: 'q-fields' }, ...[...new Set(q.fields.map((f) => AGENT_FIELD_ALIAS[f] || f))].map((f) => h('span', { class: 'q-chip' }, FIELD_LABELS[f] ? t(FIELD_LABELS[f]) : f))) : null,
     changes) : null;
-  const allow = h('button', { type: 'button', class: 'btn primary', onclick: () => {
-    if (!delayPassed || choice === null) return;
+  // A mouse press has to start after the delay too, not only the click that ends it (detail 0: keyboard or script).
+  let pressedInTime = false;
+  // #439: a passkey use is answered with the app PIN, typed here – the main process checks it, once, for this answer only.
+  // #472: Enter in the field confirms when the whole PIN was typed there after the dialog appeared (pinTyping); it does
+  // not wait for the button's delay, the typed PIN is the deliberate answer. Pasted, prefilled or too short: nothing.
+  const typing = q.pin ? pinTyping() : null;
+  const reqKey = `q:${q.id}`;
+  const pinMulti = q.pin ? multiHint('q-pin-multi') : null;
+  const pinInput = q.pin ? h('input', { type: 'password', class: 'q-pin-input', id: 'q-pin-input', autocomplete: 'off',
+    onbeforeinput: () => typing.before(pinInput.value),
+    oninput: (e) => typing.input(e, pinInput.value),
+    onkeydown: (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (choice !== null && pinRequests.single(reqKey) && typing.ready(pinInput.value)) submitPin();
+    } }) : null;
+  const pinError = q.pin ? h('div', { class: 'notice error q-pin-error', role: 'alert', hidden: true }) : null;
+  let submitting = false;
+  const submitPin = async () => {
+    if (!pinInput.value) { pinInput.focus(); return; }
+    if (submitting) return;
+    submitting = true;
+    try {
+      await call('answerQuestion', q.id, choice, pinInput.value);
+    } catch (err) {
+      showPinProblem(pinError, err.message);
+      pinInput.value = '';
+      typing.reset();
+      pinInput.focus();
+      startDelay();
+      return;
+    } finally {
+      submitting = false;
+    }
+    answered = true;
+    openQuestions.delete(q.id);
+    close();
+  };
+  const allow = h('button', { type: 'button', class: 'btn primary', onpointerdown: () => { pressedInTime = delayPassed; }, onclick: async (e) => {
+    if (!delayPassed || choice === null || (e.detail > 0 && !pressedInTime)) return;
+    if (pinInput) {
+      await submitPin();
+      return;
+    }
     answer(choice);
     close();
   } }, q.allow || t('Erlauben'));
@@ -148,8 +208,10 @@ export function questionDialog(q) {
         h('div', { class: 'q-title' }, q.title))),
     q.lead ? h('p', { class: 'q-lead' }, q.lead) : null,
     target,
+    entriesList(q.entries),
     filterBar,
     options.length ? h('div', { class: `q-options${filterBar ? ' q-options-scroll' : ''}`, role: 'radiogroup' }, ...options, noHits) : null,
+    q.pin ? h('div', { class: 'field q-pin' }, h('label', { for: 'q-pin-input' }, t('App-PIN eingeben, um diese Anmeldung zu erlauben')), pinInput, pinMulti, pinError) : null,
     q.note ? h('p', { class: 'q-note' }, icon('shield', 13), q.note) : null,
     h('div', { class: 'q-actions' },
       h('button', { type: 'button', class: 'btn', onclick: () => { answer(q.cancel); close(); } }, t('Ablehnen')),
@@ -160,16 +222,23 @@ export function questionDialog(q) {
     answer(q.cancel);
     clearTimeout(delayTimer);
     document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('focus', startDelay);
+    window.removeEventListener('blur', startDelay);
     waitingQuestions.delete(startDelay);
+    pinRequests.remove(reqKey);
     for (const restart of waitingQuestions) restart();
   });
   openQuestions.set(q.id, () => { answered = true; close(); });
+  pinRequests.add(reqKey, typing, (single) => { if (pinMulti) pinMulti.hidden = single; });
   waitingQuestions.add(startDelay);
   startDelay();
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('focus', startDelay);
+  window.addEventListener('blur', startDelay);
   // #368: the focus is on no button, so Enter and space do nothing. With a search the cursor starts there.
   body.tabIndex = -1;
-  (filterBar?.querySelector('.q-search') || body).focus();
+  if (pinInput && !filterBar?.querySelector('.q-search')) focusField(pinInput);
+  else (filterBar?.querySelector('.q-search') || body).focus();
 }
 
 /** Success moment after a passkey request from Windows: centred badge animation, gone after about a second. */
@@ -196,17 +265,52 @@ function windowsDialog(r) {
     ? notice(t('Gesperrt: {names} – entsperre den Tresor, wenn der Passkey dort liegt.', { names: r.lockedContainers.join(', ') }), 'info') : null;
   let body;
   let buttons;
+  const reqKey = `w:${r.id}`;
+  let typing = null;
+  let pinMulti = null;
   if (r.kind === 'get') {
+    // #439: every sign-in is confirmed with the app PIN, typed here (the PIN is checked in the app, for this one use).
+    const needPin = !!r.pin?.required;
+    const noPin = needPin && !r.pin.pinSet;
+    // #472: Enter confirms only a PIN typed in full after the dialog appeared, as in the agent request.
+    typing = pinTyping();
+    pinMulti = multiHint('win-pin-multi');
+    const pinInput = needPin && !noPin ? h('input', { type: 'password', class: 'win-pin-input', autocomplete: 'off',
+      onbeforeinput: () => typing.before(pinInput.value),
+      oninput: (e) => typing.input(e, pinInput.value),
+      onkeydown: (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        if (r.candidates.length === 1 && pinRequests.single(reqKey) && typing.ready(pinInput.value)) choose(r.candidates[0]);
+      } }) : null;
+    const pinError = h('div', { class: 'notice error win-pin-error', role: 'alert', hidden: true });
+    const choose = async (c) => {
+      if (pinInput && !pinInput.value) { pinInput.focus(); return; }
+      try {
+        await call('windowsDecision', r.id, { containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId, ...(pinInput ? { pin: pinInput.value } : {}) });
+      } catch (e) {
+        // Wrong PIN, blocked: the request stays open, the dialog stays.
+        showPinProblem(pinError, e.message);
+        if (pinInput) { pinInput.value = ''; typing.reset(); pinInput.focus(); }
+        return;
+      }
+      windowsDialogs.delete(r.id);
+      close();
+      flashPasskey(t('Angemeldet'));
+      reloadAll().catch(() => {});
+    };
     body = h('div', {}, head, lockedHint,
+      noPin ? [notice(t('Für Passkeys braucht Keevault eine App-PIN. Lege sie jetzt fest – dann kannst du dich anmelden.'), 'warn'),
+        h('p', {}, h('button', { type: 'button', class: 'btn primary', onclick: () => pinDialog({ passkeys: true, onSaved: () => { windowsDialogs.delete(r.id); close(); checkWindowsRequests(); } }) }, icon('key', 14), t('PIN festlegen')))] : null,
       r.candidates.length
-        ? [h('p', {}, t('Mit welchem Passkey möchtest du dich anmelden?')), ...r.candidates.map((c) => h('button', { type: 'button', class: 'choice', onclick: () => {
-          close();
-          decide({ containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId }).catch((e) => toast(e.message, 'error'));
-        } }, icon('user'), h('span', {}, c.userName || t('(ohne Benutzername)')), h('span', { class: 'muted small' }, `${c.title} · ${c.container}`)))]
+        ? [h('p', {}, t('Mit welchem Passkey möchtest du dich anmelden?')),
+          pinInput ? field(t('App-PIN eingeben, um diese Anmeldung zu erlauben'), pinInput) : null, pinInput ? pinMulti : null, pinError,
+          ...r.candidates.map((c) => h('button', { type: 'button', class: 'choice', disabled: noPin, onclick: () => choose(c) },
+            icon('user'), h('span', {}, c.userName || t('(ohne Benutzername)')), h('span', { class: 'muted small' }, `${c.title} · ${c.container}`)))]
         : h('p', {}, t('Im Tresor ist kein passender Passkey gespeichert.')));
     buttons = [{ label: t('Abbrechen'), onClick: () => decide({ cancel: true }) }];
   } else {
-    const container = h('select', {}, ...r.containers.map((c) => h('option', { value: c.id, selected: c.id === st.settings.defaultContainer }, c.name)));
+    const container = h('select', {}, ...r.containers.map((c) => h('option', { value: c.id, selected: c.id === st.settings.defaultContainer }, choiceName(st.containers.find((x) => x.id === c.id) || c))));
     const title = h('input', { value: r.rpName || r.rpId });
     const existing = h('select', {}, h('option', { value: '' }, t('Neuer Eintrag')),
       ...r.logins.map((l, i) => h('option', { value: `${l.containerId}|${l.id}`, selected: i === 0 && l.sameUser }, `${l.title}${l.username ? ` – ${l.username}` : ''} (${l.container})`)));
@@ -235,8 +339,11 @@ function windowsDialog(r) {
     ];
   }
   const { dialog, close } = modal(t('Passkey'), body, buttons);
+  focusField(dialog.querySelector('.win-pin-input'));
   // Closing with Esc or × cancels the request.
+  pinRequests.add(reqKey, typing, (single) => { if (pinMulti) pinMulti.hidden = single; });
   dialog.addEventListener('close', () => {
+    pinRequests.remove(reqKey);
     if (windowsDialogs.has(r.id)) decide({ cancel: true }).catch(() => {});
   });
   return close;

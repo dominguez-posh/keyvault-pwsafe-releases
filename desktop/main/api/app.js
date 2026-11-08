@@ -1,10 +1,10 @@
 // API: state of the app, settings, PIN and admin mode, unlocking, signing in and out, updates, log.
 
-import { app, shell, net } from 'electron';
+import { app, dialog, shell, net } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { entraSettings } from '../../auth.js';
-import { hashPin, verifyPin, MIN_PIN_LENGTH } from '../../pin.js';
+import { hashPin, verifyPin, inPinQueue, isShortPin, markShort, MIN_PIN_LENGTH, pinOnlyKeys } from '../../pin.js';
 import { warmUpAutoType } from '../../autotype.js';
 import { UPDATE_MODES } from '../../updater.js';
 import { vaultHost } from '../../../extension/core/keyvault.js';
@@ -15,10 +15,13 @@ import { demo, smokeTest } from '../boot.js';
 import { auth, config, files, mcp, opened, setOpened, updater, vault, win } from '../state.js';
 import { api } from './index.js';
 import { applyBrowserIntegration } from '../browser.js';
+import { applyExtensionChannel } from '../extension-channel.js';
 import { diag } from '../diag.js';
+import { windowLogLine } from '../../../extension/core/log-mask.js';
+import { appSigningRefusal } from '../release-gate.js';
 import { pinGuard, requireOpen, requirePin } from '../guards.js';
 import { otherInstallation } from '../install.js';
-import { bindPersonalKeys, personalPaths, recentPin, setRecentPin, unlockPersonalWithPin } from '../personal.js';
+import { bindPersonalKeys, pendingRecoveryIds, personalPaths, recentPin, renewedRecoveryIds, setRecentPin, unlockPersonalWithPin } from '../personal.js';
 import {
   applyLanguage, changed, forcedLanguage, keptAccount, keptVault, lockNow, mirrorWanted, newSession, offline, offlineMirror, offlineMode, refreshAll,
   setKeptVault, setOfflineMode, signedIn,
@@ -26,6 +29,7 @@ import {
 import { syncSettings } from '../settings-sync.js';
 import { applyShortcuts } from '../typing.js';
 import { applyStartWithWindows, applyView, setTitleBarDimmed, titleBarColors, titleBarDimmed } from '../window.js';
+import { buildKind } from '../../build-kind.js';
 import { setupWindowsProvider } from '../windows-passkeys.js';
 
 export const appApi = {
@@ -47,17 +51,24 @@ export const appApi = {
       opened,
       hasFiles: settings.fileContainers.length > 0,
       pinSet: !!settings.appPin,
+      pinShort: !!settings.appPin?.short, // #475: set before the 6-character rule; known once it was entered
       offline: offlineMode,
       offlineAt: offlineMode ? offline?.at || null : null,
       signInMode: auth.useBroker?.() ? 'windows' : 'browser',
       requirePin: !!settings.requirePin,
-      account: auth.account ? { name: auth.account.name, username: auth.account.username, tenantId: auth.account.tenantId } : null,
+      passkeyPinFixed: !!settings.requirePin,
+      account: auth.account ? { name: auth.account.name, username: auth.account.username, tenantId: auth.account.tenantId, id: auth.account.localAccountId || '' } : null,
       containers: out,
+      recoveryPending: pendingRecoveryIds(),
+      recoveryRenewed: renewedRecoveryIds(),
       settings: forcedLanguage() ? { ...settings, language: forcedLanguage() } : settings,
       version: app.getVersion(),
+      build: buildKind(),
+      autoUpdates: updater ? updater.mode() === 'auto' : false,
       updateKind: updater?.kind || 'dev',
       passkeyAvailable: process.platform === 'win32' || !!demo,
       smoke: !!smokeTest, // tests: no dialogs that open by themselves
+      releaseSigning: !appSigningRefusal(app, { demo, smoke: smokeTest }), // menu entries "Release signieren"
       platform: process.platform,
     };
   },
@@ -65,11 +76,15 @@ export const appApi = {
     const before = config.get();
     // Admin mode is switched on only through activateAdminMode (with the app PIN) – never through a settings patch.
     if (patch?.adminTools === true && before.adminTools !== true) throw new Error(t('Den Admin-Modus aktiviert nur „Admin-Modus aktivieren“ mit deiner PIN.'));
+    // #472 (review): the app PIN, its wrong-attempt counter and the personal device keys change only through the PIN functions.
+    if (pinOnlyKeys(patch).length) throw new Error(t('Die App-PIN änderst du nur unter „PIN festlegen“ – nicht über die Einstellungen.'));
     const s = config.update(patch);
     applyLanguage();
     if (before.autoTypeKeys !== s.autoTypeKeys) applyShortcuts();
     if (before.startWithWindows !== s.startWithWindows) applyStartWithWindows();
     if (before.zoom !== s.zoom || before.transparency !== s.transparency || before.theme !== s.theme) applyView();
+    // #455: the browser extension follows the channel (asks first, UAC; never changes a company policy).
+    if (before.updateChannel !== s.updateChannel) applyExtensionChannel({ reason: 'channel' }).catch((e) => dialog.showErrorBox(t('Umstellung fehlgeschlagen'), e.message));
     if (before.updateMode !== s.updateMode || before.updateChannel !== s.updateChannel) {
       if (!UPDATE_MODES.includes(s.updateMode)) config.update({ updateMode: 'off' });
       updater?.applyMode();
@@ -96,13 +111,17 @@ export const appApi = {
     return config.get();
   },
   /** entra: also sign in to Microsoft Entra ID (Key Vault containers). */
-  async verifyPin(pin) {
+  // #439: one after the other – parallel guesses must not slip past the attempt lock.
+  verifyPin: (pin) => inPinQueue(async () => {
     const record = config.get().appPin;
     if (!record) return true;
     const wait = pinGuard.waitSeconds();
     if (wait) throw new Error(t('Zu viele falsche Versuche – bitte {seconds} Sekunden warten', { seconds: wait }));
     if (await verifyPin(pin, record)) {
       pinGuard.success();
+      // #475: an old PIN shorter than the minimum still unlocks; remember it so settings and unlock ask to change it.
+      const marked = markShort(record, pin);
+      if (marked) config.update({ appPin: marked });
       setRecentPin({ pin: String(pin), at: Date.now() });
       // The same PIN opens the personal vault on this device (one PIN for app and vault).
       await unlockPersonalWithPin(String(pin)).catch((e) => diag(`PERSONAL pin unlock failed: ${e.message}`));
@@ -113,24 +132,24 @@ export const appApi = {
     pinGuard.failure();
     config.update({ pinGuard: pinGuard.toJSON() });
     throw new Error(pinGuard.waitSeconds() ? t('Falsche PIN – bitte {seconds} Sekunden warten', { seconds: pinGuard.waitSeconds() }) : t('Falsche PIN'));
-  },
+  }),
   /** Admin mode on: only with the app PIN (no PIN set → not possible). Returns the settings. */
   async activateAdminMode(pin) {
     requireOpen();
     // Demo (#309): admin mode to try out without a PIN – there is nothing real to protect. The smoke test keeps the PIN.
     if (demo && !smokeTest) {
-      config.update({ adminTools: true, pimButton: false });
+      config.update({ adminTools: true, pimButton: false, showOthersPrivate: false });
       return config.get();
     }
     if (!config.get().appPin) throw new Error(t('Für den Admin-Modus brauchst du eine App-PIN – lege sie unter Einstellungen fest.'));
     await api.verifyPin(String(pin || ''));
-    config.update({ adminTools: true, pimButton: false });
+    config.update({ adminTools: true, pimButton: false, showOthersPrivate: false });
     diag('ADMIN mode on');
     return config.get();
   },
   /** Admin mode off: no PIN needed. */
   deactivateAdminMode: async () => {
-    config.update({ adminTools: false, pimButton: false });
+    config.update({ adminTools: false, pimButton: false, showOthersPrivate: false });
     diag('ADMIN mode off');
     return config.get();
   },
@@ -140,6 +159,8 @@ export const appApi = {
     const s = config.get();
     if (s.appPin) await api.verifyPin(current);
     pinGuard.consume();
+    // #475: checked before the offline mirror is re-keyed, so a refused PIN changes nothing.
+    if (next != null && isShortPin(next)) throw new Error(t('Die PIN braucht mindestens {n} Zeichen', { n: MIN_PIN_LENGTH }));
     // A mirror that cannot be re-keyed would stay readable with the old PIN: better none at all.
     if (s.offlineMirror && next) await offlineMirror().rekey(current, next).catch(() => offlineMirror().remove().catch(() => {}));
     if (!next) await offlineMirror().remove().catch(() => {});
@@ -149,7 +170,6 @@ export const appApi = {
       config.update({ appPin: null });
       return api.state();
     }
-    if (String(next).length < MIN_PIN_LENGTH) throw new Error(t('Die PIN braucht mindestens {n} Zeichen', { n: MIN_PIN_LENGTH }));
     config.update({ appPin: await hashPin(next) });
     // The personal vault key on this device is bound to the PIN: re-bind it to the new one (or drop it while locked –
     // then the master password is asked once).
@@ -231,6 +251,16 @@ export const appApi = {
   /** Settings ↔ personal vault right now (the first-start wizard waits for the settings of another device). */
   syncSettings: () => syncSettings(),
 
+  /**
+   * True for exactly one caller: the first start's wizards open once. Checked and set without waiting in between,
+   * because the window may draw twice at the same moment (#399).
+   */
+  claimFirstStart() {
+    if (config.get().setupOffered) return false;
+    config.update({ personalOffered: true, setupOffered: true });
+    return true;
+  },
+
   /** Renderer: a dialog opened or closed – the window buttons follow the veil behind it. */
   titleBarDim(dim) {
     setTitleBarDimmed(!!dim);
@@ -241,7 +271,10 @@ export const appApi = {
   /** Windows "Installed apps" (to remove a second Keevault installation). */
   openAppsSettings: () => shell.openExternal('ms-settings:appsfeatures'),
   openExternal: (url) => {
-    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    if (!/^https?:\/\//i.test(url)) return;
+    // Smoke runs open no browser; they count the calls (#443: one click opens once).
+    if (smokeTest) globalThis.kvSmokeOpened = (globalThis.kvSmokeOpened || 0) + 1;
+    else shell.openExternal(url);
   },
   updateState: () => updater?.state || null,
   checkForUpdates: () => updater.check(),
@@ -251,8 +284,7 @@ export const appApi = {
     const file = path.join(app.getPath('userData'), 'keevault.log');
     try {
       if ((await fs.stat(file).catch(() => null))?.size > 1_000_000) await fs.rename(file, `${file}.1`);
-      await fs.appendFile(file, `${new Date().toISOString()} ${level} ${String(message).slice(0, 500)}${detail ? ` | ${String(detail).slice(0, 1500)}` : ''}
-`);
+      await fs.appendFile(file, windowLogLine({ level, message, detail })); // masked: IDs and UPNs never reach the file
     } catch {
       // Logging must never fail the app.
     }

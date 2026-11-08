@@ -4,6 +4,66 @@ Ein Abschnitt pro Version, Deutsch zuerst, die englische Liste unter `### Englis
 Abschnitt der aktuellen Version als `releaseNotes` an `release/latest.yml` (wird mitsigniert) und nutzt ihn als Text des
 GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Version bricht das Release ab.
 
+## Unveröffentlicht
+
+## 0.9.30 – 2026-11-08
+- Sicherheit: Ein OTP-Secret lässt sich nach dem Setzen nicht mehr anzeigen, nur noch erneuern oder entfernen – auch nicht über KI-Agenten (MCP) oder die Erweiterung (#469).
+- Sicherheit: Vor jedem Klartext-Export fragt die App nach der App-PIN. Der persönliche Tresor lässt sich jetzt ebenfalls exportieren, mit denselben Hinweisen (#470, #473).
+- Sicherheit: Die App-PIN braucht mindestens 6 Zeichen, auch in der Mobile-App. Ältere kürzere PINs funktionieren weiter und zeigen einen Hinweis zum Ändern. PIN, Fehlversuchszähler und Geräteschlüssel lassen sich nur noch über die PIN-Funktion ändern (#475, #472).
+- Sicherheit: Interne Verwaltungsdaten eines Tresors (z. B. der Schlüsselbund) sind für Fenster, Erweiterung und KI-Agenten gesperrt; das Diagnoseprotokoll maskiert Subscription-IDs, Objekt-IDs und E-Mail-Adressen (#484).
+- Sicherheit: Verschieben aus der Erweiterung zeigt in der Bestätigung die betroffenen Einträge und ist fest an den bestätigten Plan gebunden (#464). Die Erweiterung öffnet Links aus Einträgen nur noch mit http/https.
+- Tresor umbenennen: Der Name wird im Tresor gespeichert und gilt für alle Mitglieder; umbenennen dürfen nur Verwalter. Unsichtbare Zeichen werden entfernt, bei abweichenden oder gleichen Namen steht die Tresoradresse dabei. Rohe Azure-Fehler erscheinen nicht mehr in der Oberfläche (#479).
+- Neu: „Nur für mich“ – im Admin-Modus lassen sich eigene Einträge in einem geteilten Tresor für die anderen Mitglieder ausblenden. Verwalter können sie mit „Auch private Einträge anderer Benutzer anzeigen“ sehen und zurückstellen. Hinweis: nur ausgeblendet, nicht zusätzlich verschlüsselt (#476).
+- Neu: Einträge per Strg+X/Strg+V oder Rechtsklick „Ausschneiden“/„Einfügen“ verschieben (#467).
+- Neu: Feldkarten – ein Klick irgendwo auf die Karte kopiert sicher, „Kopieren“ erscheint beim Darüberfahren; gilt für alle Feldarten, TOTP zeigt Code und Countdown (#458).
+- Neu: Die Browser-Erweiterung hat dieselben Funktionen und dasselbe Design wie die App; die PIN-Abfrage erscheint direkt in der Keevault-Leiste auf der Webseite (#464, #465).
+- Neu: Fehlt oder passt die Browser-Erweiterung nicht, behebt „Jetzt beheben“ das mit einer Administrator-Abfrage. Von der IT gesetzte Richtlinien werden erkannt und nie verändert (#455, #395).
+- Bedienung: Das PIN-Feld hat sofort den Fokus; Enter bestätigt, wenn die PIN vollständig eingetippt wurde und nur eine Anfrage offen ist (#468, #472). „Neuer Ordner“ steht in den Menüs oben (#481). Überschriften in der Seitenleiste lassen sich nicht mehr markieren (#471).
+- Design: Bestätigungen erscheinen als sichere Karte im App-Design statt als Windows-Dialog (#459); einheitliche Knöpfe und Eingabefelder (#362, #364).
+- Erweiterung: Die Kontoauswahl „Mit Keevault anmelden“ sucht auch nach dem Tresornamen (#460). Early Access: Die Update-Datei der Erweiterung verweist auf das Paket der Vorabversion selbst (#455).
+
+### English
+- Security: once set, an OTP secret can no longer be displayed, only replaced or removed – not through AI agents (MCP) or the extension either (#469).
+- Security: every plaintext export asks for the app PIN. The personal vault can now be exported too, with the same notices (#470, #473).
+- Security: the app PIN needs at least 6 characters, also in the mobile app. Older shorter PINs keep working and show a hint to change them. PIN, failed-attempt counter and device keys can only be changed through the PIN functions (#475, #472).
+- Security: a vault's internal management data (e.g. the keyring) is blocked for the window, the extension and AI agents; the diagnostics log masks subscription IDs, object IDs and email addresses (#484).
+- Security: moving entries from the extension lists the affected entries in the confirmation and is bound to the confirmed plan (#464). The extension only opens links from entries with http/https.
+- Renaming a vault: the name is stored in the vault and applies to all members; only managers can rename. Invisible characters are removed, and the vault address is shown for differing or equal names. Raw Azure errors no longer appear in the UI (#479).
+- New: "Only for me" – in admin mode, your own entries in a shared vault can be hidden from the other members. Managers can see them with "Also show other users' private entries" and set them back. Note: hidden only, not additionally encrypted (#476).
+- New: move entries with Ctrl+X/Ctrl+V or right-click "Cut"/"Paste" (#467).
+- New: field cards – a click anywhere on the card copies securely, "Copy" appears on hover; applies to all field types, TOTP shows code and countdown (#458).
+- New: the browser extension has the same functions and design as the app; the PIN prompt appears right in the Keevault bar on the web page (#464, #465).
+- New: if the browser extension is missing or outdated, "Fix now" repairs it with an administrator prompt. Policies set by IT are detected and never changed (#455, #395).
+- Usability: the PIN field gets focus right away; Enter confirms when the PIN was typed completely and only one request is open (#468, #472). "New folder" is at the top of the menus (#481). Sidebar headings can no longer be selected (#471).
+- Design: confirmations appear as a secure card in the app design instead of a Windows dialog (#459); consistent buttons and input fields (#362, #364).
+- Extension: the account list for "Sign in with Keevault" also searches the vault name (#460). Early Access: the extension's update file points to the pre-release's own package (#455).
+
+## 0.9.29 – 2026-11-07
+- Jede Passkey-Nutzung verlangt die App-PIN: bei der Anmeldung über die Browser-Erweiterung, über den Windows-Passkey-Anbieter und bei KI-Agenten. Die PIN gilt für genau eine Nutzung und wird in der App oder im Fenster der Erweiterung eingegeben, nie auf einer Webseite. Ohne gesetzte PIN wird kein Passkey verwendet. Neue Einstellung „PIN vor jeder Passkey-Nutzung“ (Sicherheit): standardmäßig an, abschaltbar mit Warnung; die Richtlinie RequirePin hält sie fest an. Die Browser-Erweiterung muss auf 0.9.29 aktualisiert werden, ältere können mit der App nicht mehr signieren (#439).
+- Versionsanzeige unten rechts nennt den Update-Kanal, zum Beispiel „Keevault 0.9.29 · Early Access“ oder „· Stable“. Maßgeblich ist die wirksame Einstellung samt Richtlinie; ein Wechsel in den Einstellungen wirkt sofort ohne Neustart (#389).
+- Eintragsansicht: Ein Klick auf Benutzername oder Passwort kopiert den Wert. Ein Klick auf die Adresse öffnet sie und füllt die Anmeldung aus. Beim Überfahren mit der Maus steht daneben, was der Klick tut („Öffnen und ausfüllen“) (#443).
+- Versionsanzeige: Selbst gebaute Entwicklerversionen zeigen „Developer (Commit)“ statt Early Access oder Stable. Sie installieren keine Updates von selbst; ein Update kommt nur auf Klick (#445).
+- Datei-Tresore: Mehrere Sicherheitsverbesserungen bei geteilten Datei-Tresoren. Was sie schützen und was nicht, steht in der Wissensdatenbank unter „Datei-Tresore teilen“.
+- Datei-Tresore: Ist ein geteilter Datei-Tresor abgelehnt, bietet die App den Knopf „Aus bekanntem Stand reparieren“ an. Hast du die Datei nicht selbst geändert, sag deiner IT Bescheid (#446).
+- Sicherheitsverbesserungen bei der Microsoft-Anmeldung und in der Browser-Erweiterung.
+- Remotedesktop unter Credential Guard: Das kopierte Passwort bleibt mindestens 120 Sekunden in der Zwischenablage, damit du es rechtzeitig einfügen kannst (#349).
+- Beim Update beendet Keevault die Verbindungen zur Browser-Erweiterung und zu KI-Agenten sofort, statt darauf zu warten (#351).
+- Gelöschte Einträge bleiben gelöscht, auch wenn im selben Moment eine Aktualisierung läuft (#408). Nennt die App den Grund, warum ein Löschen nicht geht, steht er jetzt im Kontextmenü und bei Mehrfachauswahl (#407).
+- Systemdialoge der App nennen sie jetzt „Keevault“ (#74).
+
+### English
+- Every passkey use asks for the app PIN: sign-in through the browser extension, the Windows passkey provider and AI agents. The PIN counts for exactly one use and is typed in the app or in the extension's window, never on a web page. Without a PIN set no passkey is used. New setting "PIN before every passkey use" (Security): on by default, can be switched off with a warning; the RequirePin policy keeps it on. The browser extension must be updated to 0.9.29, older ones can no longer sign with the app (#439).
+- Entry view: a click on the user name or the password copies the value. A click on the address opens it and fills in the sign-in. Hovering shows a hint next to it on what the click does ("Open and fill") (#443).
+- Version label: self-built developer versions show "Developer (Commit)" instead of Early Access or Stable. They do not install updates by themselves; an update comes only on click (#445).
+- File vaults: several security improvements for shared file vaults. The knowledge base article "Sharing file vaults" explains what they protect and what they do not.
+- File vaults: when a shared file vault has been refused, the app offers the button "Repair from known state". If you did not change the file yourself, tell your IT department (#446).
+- Security improvements in the Microsoft sign-in and in the browser extension.
+- Remote desktop under Credential Guard: the copied password stays on the clipboard for at least 120 seconds, so you can paste it in time (#349).
+- On an update, Keevault now ends the connections to the browser extension and to AI agents at once instead of waiting (#351).
+- Deleted entries stay deleted, even if an update runs at the same moment (#408). Where the app gives a reason why a delete is not possible, it now shows it in the context menu and for multi-selection (#407).
+- Native dialogs of the app now call it "Keevault" (#74).
+- The version label at the bottom right names the update channel, for example "Keevault 0.9.29 · Early Access" or "· Stable". The effective setting counts, policy included; a change in the settings shows right away without a restart (#389).
+
 ## 0.9.28 – 2026-11-05
 - Mehrfachauswahl: „Auswahl aufheben“ wirkt wieder, in der Detailspalte und im Kontextmenü. Bisher blieb die Markierung stehen (#330).
 - KI-Agenten: Anfragen bestätigst du jetzt bewusst. Die Schaltfläche wird nach gut einer Sekunde aktiv, und in der Microsoft-Kontoauswahl wählst du das Konto selbst aus der Liste. Enter im Suchfeld meldet nicht mehr an (#368).

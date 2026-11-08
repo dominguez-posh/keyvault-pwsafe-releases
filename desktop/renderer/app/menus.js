@@ -1,6 +1,7 @@
 // The context menu itself (positioning, submenus, keyboard).
 
-import { h, icon } from '../../../extension/core/dom.js';
+import { h, icon, toast } from '../../../extension/core/dom.js';
+import { call } from './ipc.js';
 
 /** Context menu at the mouse position; closes on click elsewhere, Escape, scrolling or resizing. */
 export function contextMenu(event, actions) {
@@ -27,10 +28,16 @@ export function contextMenu(event, actions) {
       return wrap;
     }
     return h('button', {
-      type: 'button', role: 'menuitem', class: a.danger ? 'danger' : '', disabled: a.disabled, dataset: { action: a.action || '' },
-      onclick: () => {
+      type: 'button', role: 'menuitem', class: a.danger ? 'danger' : '', disabled: a.disabled, title: a.title || undefined, dataset: { action: a.action || '' },
+      onclick: async () => {
         close();
-        a.onClick();
+        try {
+          await a.onClick();
+        } catch (e) {
+          // A refused action must say why (#407), otherwise nothing seems to happen; the log keeps it as before.
+          toast(e.message, 'error');
+          call('log', { level: 'error', message: e.message, detail: `menu: ${a.action || a.label}` }).catch(() => {});
+        }
       },
     }, icon(a.icon, 15), h('span', {}, a.label));
   };

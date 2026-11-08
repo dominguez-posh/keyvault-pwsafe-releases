@@ -70,10 +70,6 @@ async function packageVersion(name) {
 
 const removePackage = (name) => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-AppxPackage -Name ${name} | Remove-AppxPackage`], { windowsHide: true }).catch(() => {});
 
-const bundledCertificate = () => path.join(process.resourcesPath || '', 'provider', 'KvPwSafe-Test.cer');
-const setupScript = () => path.join(process.resourcesPath || '', 'setup.ps1');
-const EXTENSION_ID = 'pbkjijhihclckeeefbepoedgdmajioip';
-const UPDATE_URL = 'https://github.com/dominguez-posh/keyvault-pwsafe-releases/releases/latest/download/update.xml';
 /** "0.4.0.0" newer than "0.3.1.0"? */
 export function isNewerVersion(a, b) {
   const x = String(a).trim().split('.').map(Number);
@@ -136,44 +132,8 @@ export async function removeProvider() {
   await removePackage(OLD_PACKAGE);
 }
 
-export async function machineSetupStatus() {
-  if (process.platform !== 'win32') return { supported: false };
-  let certTrusted = true;
-  if (fs.existsSync(bundledCertificate())) {
-    const thumb = new crypto.X509Certificate(fs.readFileSync(bundledCertificate())).fingerprint.replace(/:/g, '');
-    try {
-      const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-        `[bool](Get-ChildItem Cert:\\LocalMachine\\TrustedPeople, Cert:\\LocalMachine\\Root | Where-Object Thumbprint -eq '${thumb}')`], { windowsHide: true });
-      certTrusted = /true/i.test(stdout);
-    } catch {
-      certTrusted = false;
-    }
-  }
-  const policy = async (key) => {
-    try {
-      const { stdout } = await run('reg', ['query', key], { windowsHide: true });
-      // Present and pointing to the current source (an old URL counts as missing – the setup replaces it).
-      return stdout.includes(`${EXTENSION_ID};${UPDATE_URL}`);
-    } catch {
-      return false;
-    }
-  };
-  return {
-    supported: true,
-    certTrusted,
-    edgePolicy: await policy('HKLM\\SOFTWARE\\Policies\\Microsoft\\Edge\\ExtensionInstallForcelist'),
-    chromePolicy: await policy('HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\ExtensionInstallForcelist'),
-    canRunSetup: fs.existsSync(setupScript()),
-  };
-}
-
-/** Runs the machine part of the setup elevated (UAC prompt, started by the user). Resolves with the exit code. */
-export async function runMachineSetup() {
-  const args = `-NoProfile -ExecutionPolicy Bypass -File ${JSON.stringify(setupScript())} -Action Install -Scope Machine -CertificatePath ${JSON.stringify(bundledCertificate())}`;
-  const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    `$p = Start-Process powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ${psQuote(args)}; $p.ExitCode`], { windowsHide: true });
-  return Number(String(stdout).trim()) || 0;
-}
+// Device-wide setup (certificate trust, browser policy) lives in machine-setup.js: only fixed system programs run elevated.
+export { machineSetupStatus, runMachineSetup } from './machine-setup.js';
 
 /** The provider starts the desktop app with this command line when it is not running. */
 export async function rememberDesktopCommand(executable, args) {
@@ -191,8 +151,13 @@ class ProviderError extends Error {
 }
 
 export class WindowsProvider {
-  /** vault(): VaultSession, isOpen(): bool, actor(): string, show(): bring the app to the front, notify(): UI update */
-  constructor({ vault, isOpen, actor, show, notify }) {
+  /**
+   * vault(): VaultSession, isOpen(): bool, actor(): string, show(): bring the app to the front, notify(): UI update,
+   * pin: { state() → { required, pinSet }, check(pin) } – the app PIN that every passkey use needs (#439)
+   */
+  constructor({ vault, isOpen, actor, show, notify, pin }) {
+    if (!pin) throw new Error('WindowsProvider needs the passkey PIN check');
+    this.pin = pin;
     this.vault = vault;
     this.isOpen = isOpen;
     this.actor = actor;
@@ -243,6 +208,7 @@ export class WindowsProvider {
         id: p.id, kind: p.kind, rpId: p.rpId, rpName: p.parsed.rp?.name || p.rpId,
         user: p.kind === 'create' ? { name: p.parsed.user.name, displayName: p.parsed.user.displayName } : null,
         locked: !this.isOpen(),
+        pin: this.pin.state(),
       };
       if (this.isOpen()) {
         const vault = this.vault();
@@ -303,6 +269,8 @@ export class WindowsProvider {
       this.scheduleSync();
       return;
     }
+    // #439: the PIN for this one use – wrong, missing or none set: nothing is signed and the request stays open.
+    await this.pin.check(decision.pin);
     const candidate = (await vault.passkeyCandidates(p.rpId, p.parsed.allowList))
       .find((c) => c.containerId === decision.containerId && c.itemId === decision.itemId && c.passkey.credentialId === decision.credentialId);
     if (!candidate) throw new Error(t('Passkey nicht gefunden'));

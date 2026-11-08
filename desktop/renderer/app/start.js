@@ -11,6 +11,7 @@ import { createFileDialog } from './file-vaults.js';
 import { checkWindowsRequests } from './requests.js';
 import { settingsDialog } from './settings.js';
 import { render } from './shell.js';
+import { focusField } from './focus.js';
 
 function languageSelect() {
   return h('select', { class: 'lang-select', title: t('Sprache'), onchange: async (e) => {
@@ -76,6 +77,8 @@ export function renderLocked(error) {
       if (pin) await call('verifyPin', pin.value);
       const r = await call('unlock', { entra: withEntra });
       if (r.discoverError) toast(t('Tresor-Suche: {message}', { message: r.discoverError }), 'error');
+      // #475: an old short PIN is known once entered – say so right away, not only on the next lock screen.
+      if (r.pinShort) toast(t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern'), 'warn');
       if (r.offline) toast(t('Kein Netzwerk – Offline-Stand vom {date}, nur lesen', { date: formatDateTime(r.offlineAt) }), 'warn');
       const firstLockedFile = r.containers.find((c) => c.kind === 'file' && c.locked);
       if (!withEntra && firstLockedFile) {
@@ -95,6 +98,7 @@ export function renderLocked(error) {
     error ? notice(error) : null,
     h('div', { id: 'windows-waiting', class: 'notice info', hidden: true }, t('Windows wartet auf einen Passkey – entsperre Keevault, um fortzufahren.')),
     pin ? field(t('PIN'), pin) : null,
+    pin && st.pinShort ? h('div', { class: 'notice warn pin-short' }, t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern')) : null,
     st.pinSet ? null : h('p', { class: 'muted small' }, t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')),
     entra,
     st.hasFiles ? local : null,
@@ -108,6 +112,6 @@ export function renderLocked(error) {
         toast(t('Abgemeldet – beim nächsten Entsperren Konto wählen'));
       } }, t('Anderes Konto'))),
   );
-  setTimeout(() => (pin || entra).focus(), 0);
+  if (pin) focusField(pin); else setTimeout(() => entra.focus(), 0);
   checkWindowsRequests();
 }

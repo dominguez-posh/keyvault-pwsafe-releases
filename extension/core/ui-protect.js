@@ -92,22 +92,30 @@ export function setClipboardWriter(fn) {
   clipboardWrite = fn;
 }
 
+/** The code with its copy button and the box to confirm; onChange(checked) follows the box. Two nodes for a dialog or a wizard step. */
+export function codeConfirm(code, confirmText, onChange) {
+  const confirm = h('input', { type: 'checkbox' });
+  confirm.addEventListener('change', () => onChange(confirm.checked));
+  return [
+    h('div', { class: 'code-box' }, h('code', {}, code), iconButton('copy', t('Kopieren'), () => Promise.resolve().then(() => clipboardWrite(code))
+      .then(() => toast(t('In die Zwischenablage kopiert')), (e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error')))),
+    h('label', { class: 'inline', style: { marginTop: '12px' } }, confirm, confirmText),
+  ];
+}
+
 export function showCode(title, code, text, confirmText) {
   return new Promise((resolve) => {
-    const confirm = h('input', { type: 'checkbox' });
     const done = h('button', { type: 'button', class: 'btn primary', disabled: true }, t('Fertig'));
-    confirm.addEventListener('change', () => { done.disabled = !confirm.checked; });
     const { dialog, close } = modal(title, h('div', {},
       h('p', {}, text),
-      h('div', { class: 'code-box' }, h('code', {}, code), iconButton('copy', t('Kopieren'), () => Promise.resolve().then(() => clipboardWrite(code))
-        .then(() => toast(t('In die Zwischenablage kopiert')), (e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error')))),
-      h('label', { class: 'inline', style: { marginTop: '12px' } }, confirm, confirmText)), []);
+      ...codeConfirm(code, confirmText, (checked) => { done.disabled = !checked; })), []);
+    // True only through the confirmed button: just closing the dialog says nothing about the code (#399).
     done.addEventListener('click', () => {
+      resolve(true);
       close();
-      resolve();
     });
     dialog.querySelector('.modal-footer').append(done);
-    dialog.addEventListener('close', () => resolve());
+    dialog.addEventListener('close', () => resolve(false));
   });
 }
 
@@ -125,7 +133,8 @@ async function completeInvite(container, ctx, entryId) {
       { label: t('Speichern'), primary: true, onClick: async () => {
         const m = form.read();
         if (m.passkeyLabel) await ctx.addPasskey(container.id, m.passkeyLabel);
-        if (m.password) await ctx.update(container.id, { type: 'setPassword', password: m.password });
+        // The invited person adds their own password; those of the others stay (#441).
+        if (m.password) await ctx.update(container.id, { type: 'setPassword', password: m.password, add: true });
         await ctx.update(container.id, { type: 'removeEntry', entryId });
         toast(t('Entsperrmethode gespeichert'));
         resolve();
@@ -203,6 +212,34 @@ export function enableDialog(container, ctx, onDone) {
   ]);
 }
 
+/**
+ * Key change (#402): new master password and new recovery key, the container is encrypted again with a new key.
+ * Passkeys and open invitations end – the dialog names them first. Resolves when done or cancelled.
+ */
+export async function rekeyDialog(container, ctx, methods, refresh) {
+  const pw1 = h('input', { type: 'password', autocomplete: 'new-password', 'data-rekey': 'password' });
+  const pw2 = h('input', { type: 'password', autocomplete: 'new-password', 'data-rekey': 'repeat' });
+  const lost = [...methods.passkeys.map((p) => p.label || t('Passkey')), ...methods.invites.map((i) => i.label || t('Einladung'))];
+  modal(t('Neuer Schlüssel für den Tresor'), h('div', { 'data-rekey': 'dialog' },
+    h('p', {}, t('Der Tresor wird mit einem neuen Schlüssel neu verschlüsselt. Danach öffnen das alte Masterpasswort und der alte Wiederherstellungsschlüssel ihn auch zusammen mit einer alten Dateiversion nicht mehr. Du legst jetzt ein neues Masterpasswort fest und bekommst einen neuen Wiederherstellungsschlüssel.')),
+    h('p', {}, lost.length
+      ? t('Diese Zugänge entfallen und müssen danach neu angelegt werden: {list}.', { list: lost.join(', ') })
+      : t('Es entfallen keine Passkeys oder Einladungen.')),
+    h('p', { class: 'muted small' }, t('Auf anderen Geräten muss der Tresor danach neu entsperrt werden. Ältere Versionen von Einträgen sind dann nicht mehr lesbar.')),
+    h('div', { class: 'field' }, h('label', {}, t('Neues Masterpasswort')), pw1, strengthMeter(pw1)),
+    h('div', { class: 'field' }, h('label', {}, t('Wiederholen')), pw2)), [
+    { label: t('Abbrechen') },
+    { label: t('Schlüssel wechseln'), primary: true, onClick: async () => {
+      if (pw1.value !== pw2.value) throw new Error(t('Die Passwörter stimmen nicht überein'));
+      const r = await ctx.update(container.id, { type: 'rekey', password: pw1.value });
+      toast(t('Tresor neu verschlüsselt'));
+      if (r?.failed?.length) modal(t('Nicht neu verschlüsselt'), h('pre', { class: 'errors' }, r.failed.join(', ')));
+      if (r?.recoveryKey) await showRecoveryKey(r.recoveryKey);
+      refresh();
+    } },
+  ]);
+}
+
 /** Management of methods and users of a protected, unlocked container. */
 export async function manageDialog(container, ctx, onChange) {
   const body = h('div', {});
@@ -250,6 +287,7 @@ export async function manageDialog(container, ctx, onChange) {
     });
     const password = h('button', { type: 'button', class: 'btn' }, icon('lock'), m.password ? t('Masterpasswort ändern') : t('Masterpasswort festlegen'));
     password.addEventListener('click', () => {
+      if (m.keyChange && (m.password || m.passwordRetired)) return rekeyDialog(container, ctx, m, refresh); // key change switched on (protect.js KEY_CHANGE)
       const pw1 = h('input', { type: 'password', autocomplete: 'new-password' });
       const pw2 = h('input', { type: 'password', autocomplete: 'new-password' });
       modal(m.password ? t('Masterpasswort ändern') : t('Masterpasswort festlegen'), h('div', {},
@@ -265,7 +303,19 @@ export async function manageDialog(container, ctx, onChange) {
       ]);
     });
     // The personal vault keeps its master password (it opens it on new devices); others may drop it for passkeys.
-    const removePassword = !container.personal && m.password && (m.passkeys.length || m.recovery) ? h('button', { type: 'button', class: 'btn', onclick: async () => {
+    // Several master passwords (one per invited person, #441): each listed and removable on its own.
+    const passwords = m.passwords || [];
+    const passwordRows = passwords.length > 1 && !container.personal ?passwords.map((p) => h('div', { class: 'member' }, icon('lock'),
+      h('div', { class: 'row-text' },
+        h('div', { class: 'row-title' }, t('Masterpasswort')),
+        h('div', { class: 'row-sub' }, [p.createdBy, formatDateTime(p.created)].filter(Boolean).join(' · '))),
+      iconButton('trash', t('Masterpasswort entfernen'), async () => {
+        const label = [t('Masterpasswort'), p.createdBy].filter(Boolean).join(' · ');
+        if (!(await confirmDialog(t('Masterpasswort entfernen'), t('„{label}“ kann den Tresor danach nicht mehr entsperren.', { label }), { confirmLabel: t('Entfernen'), danger: true }))) return;
+        await ctx.update(container.id, { type: 'removeEntry', entryId: p.id }).catch((e) => toast(e.message, 'error'));
+        refresh();
+      }))) : [];
+    const removePassword = !container.personal && passwords.length <= 1 && m.password && (m.passkeys.length || m.recovery) ? h('button', { type: 'button', class: 'btn', onclick: async () => {
       const entry = (await ctx.info(container.id)).methods;
       if (!(await confirmDialog(t('Masterpasswort entfernen'), t('Danach entsperren nur noch Passkeys und der Wiederherstellungsschlüssel.'), { confirmLabel: t('Entfernen'), danger: true }))) return;
       await ctx.update(container.id, { type: 'removeEntry', entryId: entry.passwordId }).catch((e) => toast(e.message, 'error'));
@@ -273,6 +323,10 @@ export async function manageDialog(container, ctx, onChange) {
     } }, t('Masterpasswort entfernen')) : null;
     const recovery = h('button', { type: 'button', class: 'btn' }, icon('refresh'), t('Neuer Wiederherstellungsschlüssel'));
     recovery.addEventListener('click', async () => {
+      if (m.keyChange) {
+        rekeyDialog(container, ctx, m, refresh);
+        return;
+      }
       if (!(await confirmDialog(t('Neuer Wiederherstellungsschlüssel'), t('Der bisherige Wiederherstellungsschlüssel wird dabei ungültig.'), { confirmLabel: t('Erzeugen') }))) return;
       const r = await ctx.update(container.id, { type: 'newRecovery' }).catch((e) => toast(e.message, 'error'));
       if (r?.recoveryKey) await showRecoveryKey(r.recoveryKey);
@@ -285,6 +339,7 @@ export async function manageDialog(container, ctx, onChange) {
       h('div', { class: 'actions' }, addPasskey, container.personal ? null : invite),
       inviteRows.length ? [h('h3', {}, t('Offene Einladungen')), inviteRows] : null,
       h('h3', {}, t('Weitere Methoden')),
+      passwordRows.length ? passwordRows : null,
       h('p', { class: 'muted small' }, [m.password ? t('Masterpasswort eingerichtet') : t('Kein Masterpasswort'), m.recovery ? t('Wiederherstellungsschlüssel vorhanden') : t('Kein Wiederherstellungsschlüssel')].join(' · ')),
       h('div', { class: 'actions' }, password, removePassword, recovery),
       container.kind === 'keyvault' ? h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn danger', onclick: async () => {

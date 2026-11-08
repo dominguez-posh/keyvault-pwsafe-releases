@@ -8,15 +8,17 @@ import { mapLimit } from '../../../extension/core/util.js';
 import { t } from '../../../extension/core/i18n.js';
 import { CERT_MAX_BYTES, limitFolderDepth } from '../../../extension/core/model.js';
 import { itemsToCsv } from '../../../extension/core/export.js';
+import { movePasskeyBetween, moveWithAssets, planMoveWithAssets } from '../../../extension/core/move-assets.js';
 import { smokeTest } from '../boot.js';
 import { config, files, vault, win } from '../state.js';
 import { api } from './index.js';
 import { refreshStaleForBrowser } from '../browser.js';
 import { copyToClipboard } from '../clipboard.js';
 import { checkDeviceLinks } from '../devices.js';
-import { requireFeature, requireOpen } from '../guards.js';
+import { exportPin, requireFeature, requireOpen } from '../guards.js';
 import { changed, refreshAll, send } from '../session.js';
 import { autoTypeCalls, autoTypeText, autoTypeValue, selectedKey, setSelectedKey } from '../typing.js';
+import { othersView, setPrivacy } from '../private.js';
 
 // Import: entries per block (progress and, in a file vault, one write each).
 const IMPORT_BLOCK = 50;
@@ -30,9 +32,17 @@ export const itemsApi = {
   async items() {
     requireOpen();
     refreshStaleForBrowser().catch(() => {});
-    return vault.summaries({ maxAgeMs: Infinity });
+    // #476: other people's "Nur für mich" entries only for a Verwalter who switched them on in admin mode.
+    return vault.summaries({ maxAgeMs: Infinity, others: await othersView() });
   },
-  item: (containerId, id, fresh) => vault.getItem(containerId, id, { fresh }),
+  item: async (containerId, id, fresh) => vault.getItem(containerId, id, { fresh, others: await othersView() }),
+  /** #476: "Nur für mich" on or off (admin mode; checks in ../private.js). */
+  async setPrivate(containerId, id, on) {
+    requireOpen();
+    const saved = await setPrivacy(containerId, id, !!on);
+    changed();
+    return saved;
+  },
   save: async (containerId, item, expectedVersion) => {
     if (item?.type === 'server' && item.server) checkDeviceLinks(containerId, item.server);
     const saved = await vault.saveItem(containerId, item, { expectedVersion });
@@ -43,41 +53,48 @@ export const itemsApi = {
   /** Entries (assets, linked logins) that use this login – "Show linked assets" in admin mode (#307). */
   linkedEntries: (containerId, id) => vault.linkedEntries(containerId, id),
   move: (fromId, toId, id, opts) => vault.moveItem(fromId, toId, id, opts),
+  /** #452: what moving this entry would take along (linked assets), without changing anything. */
+  planMove: async (fromId, toId, id) => {
+    const { items, order, ...plan } = await planMoveWithAssets(vault, fromId, toId, id);
+    return plan;
+  },
+  /** #452: the entry with its linked assets, all or nothing (see core/move-assets.js). */
+  moveWithAssets: async (fromId, toId, id, opts) => {
+    const { saved, moved, dropped } = await moveWithAssets(vault, fromId, toId, id, opts);
+    return { saved, moved, dropped };
+  },
   /**
    * Moves a passkey to another login (saved in the wrong entry). Added to the target first, removed from the source
    * after that – if the second step fails the passkey is in both entries, never in none.
    */
-  async movePasskey({ from, to, credentialId }) {
+  async movePasskey(args) {
     requireOpen();
-    if (from.containerId === to.containerId && from.id === to.id) return false;
-    const source = await vault.getItem(from.containerId, from.id, { fresh: true });
-    const passkey = source.passkeys.find((p) => p.credentialId === credentialId);
-    if (!passkey) throw new Error(t('Der Passkey ist nicht mehr in diesem Eintrag'));
-    const target = await vault.getItem(to.containerId, to.id, { fresh: true });
-    if (target.type !== 'login') throw new Error(t('Passkeys lassen sich nur in Login-Einträge verschieben'));
-    if (!target.passkeys.some((p) => p.credentialId === credentialId)) {
-      await vault.saveItem(to.containerId, {
-        ...target, passkeys: [...target.passkeys, passkey], username: target.username || passkey.userName || '',
-      }, { expectedVersion: target.version });
-    }
-    await vault.saveItem(from.containerId, { ...source, passkeys: source.passkeys.filter((p) => p.credentialId !== credentialId) }, { expectedVersion: source.version });
-    return true;
+    return movePasskeyBetween(vault, args); // (#464: the same function serves the extension's popup)
   },
   history: (containerId, id) => vault.history(containerId, id),
-  version: (containerId, id, version) => vault.getVersion(containerId, id, version),
+  version: async (containerId, id, version) => vault.getVersion(containerId, id, version, { others: await othersView() }),
   restoreVersion: (containerId, id, version) => vault.restoreVersion(containerId, id, version),
-  trash: (containerId) => vault.trash(containerId),
+  trash: async (containerId) => vault.trash(containerId, { others: await othersView() }),
   restore: (containerId, id) => vault.restore(containerId, id),
   async purge(containerId, id) {
     await requireFeature(containerId, 'purge');
     return vault.purge(containerId, id);
   },
 
-  /** CSV export of a vault's entries – only when an admin enabled it in the vault settings. */
-  async exportItems(containerId) {
+  /**
+   * CSV export of a vault's entries – for Key Vaults only when an admin enabled it in the vault settings; of the file
+   * vaults only the personal one (#470), and only unlocked (the PIN or master password opened it). #473: with an app PIN
+   * set, only with the fresh confirmation from confirmExportPin (one export, short time; see ../../export-pin.js).
+   */
+  confirmExportPin: (containerId, pin) => exportPin.confirm(containerId, pin),
+  async exportItems(containerId, pinToken) {
     requireOpen();
+    exportPin.consume(containerId, pinToken);
     const c = await requireFeature(containerId, 'export');
-    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+    if (c.kind === 'file' && !c.personal) throw new Error(t('Diese Funktion gibt es für diesen Tresor nicht.'));
+    if (c.locked) throw new Error(t('Zuerst entsperren'));
+    // Smoke test: no save dialog, the target comes from the environment.
+    const { canceled, filePath } = smokeTest && process.env.KVPWSAFE_TEST_EXPORT ? { filePath: process.env.KVPWSAFE_TEST_EXPORT } : await dialog.showSaveDialog(win, {
       title: t('Einträge exportieren'),
       defaultPath: `${String(c.name || 'Tresor').replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.csv`,
       filters: [{ name: 'CSV', extensions: ['csv'] }],

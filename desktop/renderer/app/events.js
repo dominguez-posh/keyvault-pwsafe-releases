@@ -13,8 +13,11 @@ import { reportCtx } from './health.js';
 import { generatorDialog } from './item-actions.js';
 import { openItemLink } from './item-links.js';
 import { clearSelection } from './multi.js';
+import { remindPendingRecovery } from './personal.js';
+import { refreshExtensionHint } from './ext-hint.js';
 import { checkWindowsRequests, flashPasskey, openQuestions, questionDialog } from './requests.js';
 import { reloadAll, render } from './shell.js';
+import { pinDialog } from './admin-mode.js';
 import { updateDialog, updateListeners } from './updates.js';
 import { addContainerDialog } from './vault-wizard.js';
 
@@ -26,6 +29,9 @@ window.pwsafe.onEvent((ev) => {
     clearSelection();
     busyContainers.clear();
     setItems([]);
+    // Dialogs hang on the body, the lock screen is drawn behind them: a recovery key or an entry would stay readable
+    // (#399). Closing counts as "no" where it means something: an AI agent's question or a Windows request is refused.
+    for (const d of document.querySelectorAll('dialog[open]')) if (!d.dataset.keepOnLock) d.dispatchEvent(new Event('cancel', { cancelable: true }));
     render();
   } else if (ev.type === 'changed' && st?.opened) {
     clearTimeout(reloadTimer);
@@ -64,13 +70,23 @@ window.pwsafe.onEvent((ev) => {
     openQuestions.get(ev.id)?.();
   } else if (ev.type === 'mcpTrusted') {
     loadAgentTrust();
+  } else if (ev.type === 'passkeyPinNeeded') {
+    // #439: a passkey was asked for while no PIN is set – nothing is signed, the PIN is set first.
+    if (st?.opened && !st.pinSet && !document.querySelector('dialog[open]')) pinDialog({ passkeys: true });
   } else if (ev.type === 'passkeyFlash') {
     flashPasskey(ev.text);
   } else if (ev.type === 'checkUpdates') {
     updateDialog();
   } else if (ev.type === 'updateOffer') {
     updateDialog(ev.state);
+  } else if (ev.type === 'extensionChanged') {
+    refreshExtensionHint();
+  } else if (ev.type === 'extensionOutdated') {
+    // An old extension cannot say this itself; only a hint, nothing else depends on it (#347).
+    toast(t('Erweiterung aktualisieren: Die Browser-Erweiterung ist veraltet oder meldet ihre Version nicht (nötig ab 0.9.29). Alte Versionen können keine Passkeys verwenden und kopieren über die Zwischenablage des Browsers, nicht geschützt.'), 'error');
   }
 });
 
 window.addEventListener('kvpwsafe-refresh', () => reloadAll());
+// Unlocked while the window was hidden (browser extension, tray): the question waits until someone can see it.
+window.addEventListener('focus', () => { if (st?.opened) remindPendingRecovery(); });

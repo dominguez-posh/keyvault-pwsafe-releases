@@ -4,6 +4,7 @@
 import { h, icon, setChildren } from '../../extension/core/dom.js';
 import { evaluatePrf, registerPrf } from '../../extension/core/prf.js';
 import { setLanguage, t } from '../../extension/core/i18n.js';
+import { assertApproval, registerApprover } from './approval.js';
 
 const main = document.getElementById('main');
 const id = new URLSearchParams(location.search).get('id');
@@ -15,7 +16,11 @@ const finish = (result) => window.passkeyBridge.done(id, result);
 async function run() {
   setChildren(main, head(), h('p', {}, h('span', { class: 'spinner' }), ' ', t('Bestätige den Passkey im Windows-Dialog …')));
   try {
-    const result = request.mode === 'register'
+    const result = request.mode === 'approver-register'
+      ? await registerApprover({ label: request.userName, timeout: request.timeoutMs })
+      : request.mode === 'approve'
+        ? await assertApproval({ challenge: request.challenge, credentials: request.credentials, timeout: request.timeoutMs })
+        : request.mode === 'register'
       ? await registerPrf('localhost', { userName: request.userName, displayName: request.displayName, excludeCredentialIds: request.exclude || [], timeout: request.timeoutMs, attachment: request.attachment })
       : await evaluatePrf('localhost', request.passkeys, { timeout: request.timeoutMs });
     finish({ ok: true, result });
@@ -26,7 +31,7 @@ async function run() {
 
 function head() {
   return h('div', { class: 'head' }, icon('key', 32), h('div', {},
-    h('h3', {}, request.mode === 'register' ? t('Passkey registrieren') : t('Mit Passkey entsperren')),
+    h('h3', {}, request.mode === 'approve' ? 'Release freigeben' : request.mode === 'approver-register' ? 'Sicherheitsschlüssel für Releases' : request.mode === 'register' ? t('Passkey registrieren') : t('Mit Passkey entsperren')),
     h('div', { class: 'muted small' }, request.containerName)));
 }
 

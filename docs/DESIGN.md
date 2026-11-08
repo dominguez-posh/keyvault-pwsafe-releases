@@ -108,6 +108,7 @@ Eine feste Abstandsskala gibt es nicht. Üblich sind:
 | Filter `.pill` | Höhe 28 px, aktiv invertiert (`--text` als Fläche) |
 | Dialog `.modal` | Breite bis 560 px, Radius 10 px, Schatten `--shadow` |
 | Menü (App) | Radius 14 px, Milchglas, Zeilen 34 px, Hover neutral, Symbol wird Akzent, Rot nur bei Löschen |
+| Sichere Karte (#459) | Fenster der App oder Erweiterung für PIN und Bestätigungen: Radius 16 px, Fläche `--surface`, Schatten, oben mittig über dem Browser- bzw. App-Fenster, Breite 400 bis 460 px, Höhe nach Inhalt. App: rahmenlos und transparent; Erweiterung: Browserfenster vom Typ `popup` behält die Titelleiste (Grenze des Browsers). Enter bestätigt (Freigabe der Release-Signatur nie per Enter, nur Mausklick nach Wartezeit), Esc bricht ab, Schließen zählt als Abbruch |
 | Meldung `.toast` | unten mittig, Fläche `#23262d`, Fehler `--danger` |
 | Symbole | Linien-Icons im Lucide-Stil, 24 × 24 (`extension/core/dom.js`) |
 

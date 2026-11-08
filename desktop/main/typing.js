@@ -73,14 +73,13 @@ export const SECURE_DIALOG = 'SECURE_DIALOG';
 export async function autoTypeText(text, what = 'p') {
   try {
     if (process.platform === 'win32' && await typeViaHelperExe(text)) return;
+    diag('AUTOTYPE no Keevault-Update.exe – PowerShell helper');
+    await typeText(text);
   } catch (e) {
     if (e.code !== SECURE_DIALOG) throw e;
     await copyToClipboard(text);
     showHint({ kind: 'secure', what });
-    return;
   }
-  diag('AUTOTYPE no Keevault-Update.exe – PowerShell helper');
-  await typeText(text);
 }
 
 export const autoTypeCalls = [];

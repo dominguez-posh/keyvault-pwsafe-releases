@@ -4,14 +4,20 @@ import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { hashPin } from '../pin.js';
+import { pinLengthCheck } from '../smoke-pin-length.js';
 import { featureChecks } from '../smoke-features.js';
+import { smokeRelease } from './api/release.js';
+import { areaSelection } from '../smoke-areas.js';
+import { plantedOrgFileTaken } from '../org-file.js';
+import { downgradeCheck, fileSwapCheck, rejectedCheck, rollbackCheck } from '../smoke-file-swap.js';
 import { t } from '../../extension/core/i18n.js';
-import { appRoot, demo, missingFiles, screenshot } from './boot.js';
+import { appRoot, demo, missingFiles, screenshot, smokeGuard } from './boot.js';
 import { config, files, mcp, opened, updater, vault, win, windows } from './state.js';
 import { hintContent, hintsShown } from './hint-window.js';
-import { askInApp, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, nativeQuestion, trustAgentEntry, waitForUnlock } from './agents.js';
+import { askInApp, chooseAgentMicrosoft, questions, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, nativeQuestion, trustAgentEntry, waitForUnlock } from './agents.js';
 import { api } from './api/index.js';
-import { browserHandlers } from './browser.js';
+import { browserHandlers, confirmBrowserMove, noteExtension, simulateExtensionClients } from './browser.js';
+import { simulateExtensionPolicy } from './extension-channel.js';
 import { copyViaHelperExe } from './clipboard.js';
 import { pinGuard } from './guards.js';
 import { createPersonal, refreshFileLocations, usePersonal } from './personal.js';
@@ -20,6 +26,7 @@ import { syncSettings } from './settings-sync.js';
 import { adminCenterUrl, lastAdminUrl, setSignInJobs, signInFor, signInJobs } from './signin.js';
 import { autoTypeCalls, globalAutoType, runHelperExe, typeViaHelperExe } from './typing.js';
 import { startInNormalMode } from './window.js';
+import { screenshotProblem, windowViolations } from './smoke-windows.js';
 
 async function virtualAuthenticator(contents) {
   const dbg = contents.debugger;
@@ -32,6 +39,7 @@ async function virtualAuthenticator(contents) {
 
 export function runSmokeTest() {
   const errors = [];
+  smokeGuard.collect(() => [...errors, ...missingFiles.map((f) => `missing file: ${f}`), ...windowViolations]);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   win.webContents.on('console-message', (e) => {
     if (e.level === 'error') errors.push(e.message);
@@ -75,7 +83,11 @@ export function runSmokeTest() {
       if (e.level === 'error') errors.push(`passkey window: ${e.message}`);
     });
   });
-  win.webContents.once('did-finish-load', () => setTimeout(async () => {
+  win.webContents.once('did-finish-load', () => setTimeout(() => smokeGuard.run(async () => {
+    smokeGuard.note('checks');
+    // --only (#397): the areas that are left out, full run: all of them.
+    const areas = areaSelection();
+    if (areas.partial && !demo) errors.push('--only needs --demo');
     const js = (code) => win.webContents.executeJavaScript(code).catch((e) => errors.push(String(e)));
     const ready = await js('document.body.dataset.ready || ""');
     if (ready !== '1') errors.push('renderer did not signal ready');
@@ -89,27 +101,29 @@ export function runSmokeTest() {
       await sleep(900);
       if (!(await js('document.querySelectorAll(".row-item").length') > 0)) errors.push('demo: no items rendered');
       // Shortcuts through Chromium's real input path (not synthetic DOM events).
-      await js('document.querySelector(".row-item:not(.folder-row)")?.click(); window.__keys = []; document.addEventListener("keydown", (e) => window.__keys.push([e.key, e.code, e.ctrlKey, e.shiftKey].join("/")), true)');
-      await sleep(400);
-      win.focus();
-      for (const keyCode of ['U', 'P']) {
-        win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers: ['control', 'shift'] });
-        win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers: ['control', 'shift'] });
-        await sleep(500);
-      }
-      const selected = await js('document.querySelector(".row-item.active") ? "yes" : "no"');
-      if (selected === 'yes') {
-        await globalAutoType('o').catch(() => {});
-        await globalAutoType('u');
-        if (!autoTypeCalls.includes('global:u')) errors.push('global auto-type: no call');
-        autoTypeCalls.splice(autoTypeCalls.indexOf('global:u'), 1);
-      }
-      if (autoTypeCalls.join() !== 'u,p') {
-        errors.push(`auto-type shortcuts: ${autoTypeCalls.join() || 'no call'} (keys seen: ${await js('JSON.stringify(window.__keys)')}, selected: ${await js('document.querySelector(".row-item.active") ? "yes" : "no"')})`);
+      if (areas.runs('shortcuts')) {
+        await js('document.querySelector(".row-item:not(.folder-row)")?.click(); window.__keys = []; document.addEventListener("keydown", (e) => window.__keys.push([e.key, e.code, e.ctrlKey, e.shiftKey].join("/")), true)');
+        await sleep(400);
+        win.focus();
+        for (const keyCode of ['U', 'P']) {
+          win.webContents.sendInputEvent({ type: 'keyDown', keyCode, modifiers: ['control', 'shift'] });
+          win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers: ['control', 'shift'] });
+          await sleep(500);
+        }
+        const selected = await js('document.querySelector(".row-item.active") ? "yes" : "no"');
+        if (selected === 'yes') {
+          await globalAutoType('o').catch(() => {});
+          await globalAutoType('u');
+          if (!autoTypeCalls.includes('global:u')) errors.push('global auto-type: no call');
+          autoTypeCalls.splice(autoTypeCalls.indexOf('global:u'), 1);
+        }
+        if (autoTypeCalls.join() !== 'u,p') {
+          errors.push(`auto-type shortcuts: ${autoTypeCalls.join() || 'no call'} (keys seen: ${await js('JSON.stringify(window.__keys)')}, selected: ${await js('document.querySelector(".row-item.active") ? "yes" : "no"')})`);
+        }
       }
       // File container protected by a passkey (virtual authenticator) and a master password.
       const file = path.join(app.getPath('userData'), 'demo.kvpws');
-      try {
+      if (areas.runs('protection')) try {
         const created = await api.createFile({ path: file, name: 'Demo-Datei', password: 'demo-passwort', passkeyLabel: 'Smoke' });
         if (!/^RK-/.test(created.recoveryKey)) errors.push('file: no recovery key');
         await api.save(created.id, { title: 'Datei-Eintrag', username: 'u', password: 'p', urls: ['https://example.com'] });
@@ -133,19 +147,19 @@ export function runSmokeTest() {
         await api.unlockContainerPasskey(created.id);
         if ((await files.summaries(created.id)).length !== 261) errors.push('file: entries missing after passkey unlock');
         await api.lockContainer(created.id);
-        await api.unlockContainer(created.id, { password: 'demo-passwort' });
-        const kvId = (await vault.containers()).find((c) => c.kind === 'keyvault')?.id;
-        const r = await api.enableProtection(kvId, { password: 'kv-passwort-1' });
+        await api.unlockContainer(created.id, { password: 'demo-passwort' }); await (await import('../smoke-password.js')).passwordCheck({ api, files, errors, id: created.id });
+        const kvId = (await vault.containers()).find((c) => c.kind === 'keyvault')?.id; const { KV_PROTECTION_PASSWORD: kvPassword } = await import('../smoke-second-vault.js'); // stays locked; the move checks open it
+        const r = await api.enableProtection(kvId, { password: kvPassword });
         if (!r.recoveryKey || r.failed.length) errors.push(`kv protection: ${r.failed.join(', ')}`);
         await api.lockContainer(kvId);
         await api.unlockContainerPasskey(kvId).then(() => errors.push('kv: unexpected passkey unlock'), () => {});
-        await api.unlockContainer(kvId, { password: 'kv-passwort-1' });
+        await api.unlockContainer(kvId, { password: kvPassword });
         await api.lockContainer(kvId);
       } catch (e) {
         errors.push(`protection flow: ${e.message}`);
       }
       // Browser extension through the desktop app: every container (Key Vault too), entries readable.
-      try {
+      if (areas.runs('bridge')) try {
         const hello = await browserHandlers.hello();
         if (!hello.opened || !hello.containers.some((c) => c.source === 'keyvault')) errors.push('bridge: key vault containers missing');
         const list = await browserHandlers.summaries();
@@ -156,7 +170,7 @@ export function runSmokeTest() {
         errors.push(`bridge flow: ${e.message}`);
       }
       // Vault settings: a non-admin may only use what an admin enabled; folders at most three levels.
-      try {
+      if (areas.runs('vaultsettings')) try {
         const kvc = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error);
         const stored = await vault.store.get('containers');
         const entry = stored.find((c) => c.id === kvc.id);
@@ -181,7 +195,7 @@ export function runSmokeTest() {
         errors.push(`vault settings: ${e.message}`);
       }
       // Licensing: request code per vault, free limit shown.
-      try {
+      if (areas.runs('license')) try {
         const kvc = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error);
         const ls = await api.licenseState(kvc.id);
         if (!/^KVP-/.test(ls.code) || ls.limit !== 10 || ls.licensed) errors.push('license: unexpected state');
@@ -189,7 +203,7 @@ export function runSmokeTest() {
         errors.push(`license flow: ${e.message}`);
       }
       // Rename: Key Vault container (locally if the vault tag cannot be written).
-      try {
+      if (areas.runs('rename')) try {
         const kv = (await vault.containers()).find((c) => c.kind === 'keyvault' && !c.error);
         await api.renameContainer(kv.id, 'Team Umbenannt');
         if ((await vault.container(kv.id)).name !== 'Team Umbenannt') errors.push('rename: key vault name unchanged');
@@ -199,21 +213,25 @@ export function runSmokeTest() {
         errors.push(`rename flow: ${e.message}`);
       }
       // App PIN: unlocking needs it once set; wrong PIN is refused.
-      try {
-        await api.setPin({ next: '2580' });
+      if (areas.runs('pin')) try {
+        await api.setPin({ next: '258013' });
         await lockNow();
         await api.unlock({ entra: true }).then(() => errors.push('pin: unlock without PIN'), () => {});
         await api.verifyPin('0000').then(() => errors.push('pin: wrong PIN accepted'), () => {});
-        await api.verifyPin('2580');
+        await api.verifyPin('258013');
         await api.unlock({ entra: true });
         if (!opened) errors.push('pin: unlock with PIN failed');
-        await api.setPin({ current: '2580', next: null });
+        if ((await api.state()).pinShort) errors.push('pin: a 6-character PIN marked as short');
+        await api.setPin({ current: '258013', next: null });
+        await pinLengthCheck({ api, config, hashPin, lockNow, sleep, js, isOpened: () => opened, errors }); // #475
         if (config.get().appPin) errors.push('pin: not removed');
       } catch (e) {
         errors.push(`pin flow: ${e.message}`);
       }
       // Secured file (passkey only): admin creates, folders, change log, access request + approval.
-      try {
+      if (areas.runs('secured')) try {
+        // #423: an organization file in a ProgramData folder that a user created (here: this unelevated run) is skipped.
+        if (process.platform === 'win32' && await plantedOrgFileTaken(path.join(app.getPath('temp'), `kv-orgfile-${process.pid}`))) errors.push('orgfile: a user-made ProgramData file was taken (#423)');
         const secured = path.join(app.getPath('userData'), 'team.kvpws');
         // The demo profile is named after the process ID – a reused ID finds the file of an earlier run.
         await fs.rm(secured, { force: true });
@@ -248,11 +266,12 @@ export function runSmokeTest() {
         if (movedItem?.folder !== 'Partner/Contoso' || !(await api.folders(id)).includes('Partner/Contoso')) errors.push('folders: rename did not move entries/subfolders');
         await api.renameFolder(id, 'Partner', '');
         if ((await files.summaries(id)).find((s) => s.title === 'Contoso VPN')?.folder !== 'Contoso') errors.push('folders: delete did not move content up');
+        await fileSwapCheck({ files, js, sleep, errors, dir: app.getPath('userData'), changed }); await downgradeCheck({ files, errors, file: secured, id }); await rollbackCheck({ files, errors, file: secured, id }); await rejectedCheck({ files, errors, file: secured, id }); // #404, #430, #432, #433
       } catch (e) {
         errors.push(`secured flow: ${e.message}`);
       }
       // Windows passkey provider: simulated CTAP requests as the packaged provider would relay them.
-      try {
+      if (areas.runs('windows')) try {
         const { encode, decode } = await import('../../extension/core/cbor.js');
         const { sha256, utf8 } = await import('../../extension/core/util.js');
         const createReq = encode(new Map([
@@ -281,7 +300,13 @@ export function runSmokeTest() {
         const c = pending.find((p) => p.id === 'smoke-get')?.candidates[0];
         if (!c) errors.push('windows: passkey not offered');
         else {
-          await api.windowsDecision('smoke-get', c);
+          // #439: no PIN set → nothing is signed; with the PIN the request goes through (more in the feature checks).
+          const pinBefore = config.get().appPin;
+          if (!pinBefore && (await api.windowsDecision('smoke-get', c).then(() => 'signed', (e) => e.name)) !== 'PinNotSet') errors.push('windows: signed although no PIN is set');
+          config.update({ appPin: await hashPin('246813'), pinGuard: null });
+          pinGuard.restore(null);
+          await api.windowsDecision('smoke-get', { ...c, pin: '246813' });
+          config.update({ appPin: pinBefore });
           const assertion = decode(Buffer.from((await got).response, 'base64'));
           if (!assertion.get(3) || assertion.get(4).get('name') !== 'win@example.com') errors.push('windows: bad getAssertion response');
         }
@@ -596,7 +621,7 @@ export function runSmokeTest() {
         const r = await js('JSON.stringify({ folder: document.querySelector(".editor [name=folder]")?.value, title: document.querySelector(".editor input[name=title]")?.value })');
         if (!/"folder":"Monitoring"/.test(r) || !/"title":"Neuer Test"/.test(r)) errors.push(`newfolder: form did not take the folder over (${r})`);
       }
-      if (!view || view === 'personal') {
+      if ((!view || view === 'personal') && areas.runs('personal')) {
         // The personal vault end to end (every smoke run): local folders refused, create (master password + PIN), free,
         // named "Persönlich" in the app's language, PIN unlock after lock, not shareable, nothing moved in from a
         // shared vault, folders inside it, and only one personal vault (no second one, created or added).
@@ -605,20 +630,22 @@ export function runSmokeTest() {
           await fs.rm(dir, { recursive: true, force: true });
           await fs.mkdir(dir, { recursive: true });
           process.env.KVPWSAFE_TEST_REMOTE = dir;
-          config.update({ appPin: await hashPin('2468'), pinGuard: null, personalVaults: [], personalDeviceKeys: {} });
+          config.update({ appPin: await hashPin('246813'), pinGuard: null, personalVaults: [], personalDeviceKeys: {} });
           pinGuard.restore(null);
           const local = path.join(app.getPath('temp'), `kv-local-${process.pid}`);
           await fs.mkdir(local, { recursive: true });
-          if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
-          const r = await createPersonal({ folder: dir, password: 'Persoenlich-Test-123!', pin: '2468' });
+          if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '246813' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
+          const r = await createPersonal({ folder: dir, password: 'Persoenlich-Test-123!', pin: '246813' });
           if (!r.recoveryKey) errors.push('personal: no recovery key');
+          if (!config.get().personalRecoveryPending?.[r.id]) errors.push('personal: recovery key counts as confirmed right after creating');
+          await api.confirmPersonalRecovery(r.id);
           const c = await vault.container(r.id);
           if (!c.personal) errors.push('personal: container not marked personal');
           if (!(await vault.licenseState(r.id)).licensed) errors.push('personal: not free');
           await vault.saveItem(r.id, { title: 'Privat', username: 'me', password: 'x' });
           files.get(r.id).lock();
           if (!Object.keys(config.get().personalDeviceKeys || {}).length) errors.push('personal: key not bound to the device');
-          await api.verifyPin('2468');
+          await api.verifyPin('246813');
           if (files.get(r.id).locked) errors.push('personal: PIN did not unlock the vault');
           if (await files.updateKeyring(r.id, { type: 'createInvite' }, 'x').then(() => true, () => false)) errors.push('personal: invitation was allowed');
           const pwEntry = files.get(r.id).keyring?.entries?.find((e) => e.type === 'password');
@@ -630,9 +657,28 @@ export function runSmokeTest() {
           // More structure through folders inside it.
           await vault.saveItem(r.id, { title: 'Steuer', username: 'me', password: 'x', folder: 'Geschäft' });
           if (!(await vault.summaries()).some((x) => x.containerId === r.id && x.folder === 'Geschäft')) errors.push('personal: entry in a folder not saved');
+          // #470: export of the personal vault – file holds the entries, locked refused, menu entry with the same warning.
+          {
+            const exportFile = process.env.KVPWSAFE_TEST_EXPORT = path.join(dir, 'export-470.csv');
+            const exp = await api.exportItems(r.id, await api.confirmExportPin(r.id, '246813')).catch((e) => ({ error: e.message })).finally(() => delete process.env.KVPWSAFE_TEST_EXPORT);
+            const csv = await fs.readFile(exportFile, 'utf8').catch(() => '');
+            if (exp?.count !== 2 || !csv.includes('Steuer') || !csv.includes('Privat') || !csv.includes('Geschäft')) errors.push(`personal export: file lacks the entries (${exp?.error || exp?.count})`);
+            files.get(r.id).lock();
+            if (await api.exportItems(r.id, await api.confirmExportPin(r.id, '246813')).then(() => true, () => false)) errors.push('personal export: locked vault exported');
+            await api.verifyPin('246813');
+            changed(); await sleep(1500);
+            // #473: menu entry, warning, app PIN (missing, wrong, reused refused; the right one exports) – ../smoke-export-pin.js
+            await (await import('../smoke-export-pin.js')).exportPinCheck({ api, js, sleep, errors, id: r.id, dir });
+          }
           // Only one personal vault: a second one is refused, created or added.
-          if (await createPersonal({ folder: dir, password: 'Zweiter-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: a second personal vault was created');
-          if (await usePersonal({ folder: dir }).then(() => true, () => false)) errors.push('personal: a second personal vault was added');
+          if (await createPersonal({ folder: dir, password: 'Zweiter-Test-123!', pin: '246813' }).then(() => true, () => false)) errors.push('personal: a second personal vault was created');
+          if (await usePersonal({ folder: local }).then(() => true, () => false)) errors.push('personal: a second personal vault was added');
+          // #400: the same vault again (wizard retry after a wrong master password) is no second one; the right password unlocks.
+          files.get(r.id).lock();
+          const again = await usePersonal({ folder: dir }).catch((e) => ({ error: e.message }));
+          if (again.id !== r.id) errors.push(`personal: using the listed vault again refused (${again.error || again.id})`);
+          if (await api.unlockContainer(r.id, { password: 'Falsch-Test-123!' }).then(() => true, () => false)) errors.push('personal: wrong master password unlocked');
+          if (await api.unlockContainer(r.id, { password: 'Persoenlich-Test-123!' }).then(() => false, () => true)) errors.push('personal: right master password after a wrong one did not unlock');
           if (config.get().personalVaults.length !== 1) errors.push(`personal: ${config.get().personalVaults.length} personal vaults listed`);
           // Settings travel in the personal vault: a change here is written there, a newer state there (another device)
           // is taken over here; the PIN and device keys never go along; switched off, nothing moves.
@@ -723,6 +769,11 @@ export function runSmokeTest() {
           const ms = await signInFor('login.microsoftonline.com');
           if (ms?.username !== full.username || ms?.mode !== 'microsoft') errors.push('admin: Microsoft sign-in job not handed out');
           if (await signInFor('evil.example.com')) errors.push('admin: sign-in handed to another host');
+          // #372: the job belongs to the first tab that asks; another tab (e.g. opened by a foreign page) gets nothing.
+          if (!(await signInFor('login.microsoftonline.com', 'smoke:1'))) errors.push('admin: first tab did not get the sign-in job');
+          if (await signInFor('login.microsoftonline.com', 'smoke:2')) errors.push('admin: sign-in job handed to a second tab');
+          if (!(await signInFor('login.microsoftonline.com', 'smoke:1'))) errors.push('admin: the claiming tab lost its sign-in job');
+          if (await signInFor('login.microsoftonline.com')) errors.push('admin: claimed sign-in job handed out without a tab key (#424)');
           if (await api.openAdminCenter({ url: 'https://evil.example.com', key: login.key }).then(() => true, () => false)) errors.push('admin: unknown admin center accepted');
           const r = await api.connectServer({ containerId: kvc.id, id: saved.id, method: 'bastion' });
           if (r.method !== 'bastion' || (await signInFor('x.bastion.azure.com'))?.password !== full.password) errors.push('admin: Bastion VM sign-in missing');
@@ -817,6 +868,8 @@ export function runSmokeTest() {
       if (!view) {
         await featureChecks({
           js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe,
+          areas,
+          note: smokeGuard.note,
           clipboardHas: async (text) => (await runHelperExe('--clipboard-clear', text)) === 0,
           clearSignIns: () => { setSignInJobs([]); },
           adminCenterUrl,
@@ -824,26 +877,40 @@ export function runSmokeTest() {
           confirmAgentRead,
           confirmAgentPasskey,
           confirmAgentWrite,
+          confirmBrowserMove,
           nativeQuestion,
           mcpService: mcp,
           chooseAgentMicrosoft,
           hintsShown,
           hintContent,
           browserCopy: (text) => browserHandlers.copy({ text }),
+          browserHello: (client) => browserHandlers.hello({}, client),
+          browserSnapshot: () => browserHandlers.snapshot(),
+          browserPasskeySign: (msg) => browserHandlers.passkeySign(msg),
+          browserItem: (msg) => browserHandlers.item(msg),
+          browserSave: (msg) => browserHandlers.save(msg),
+          browserPasskeyCandidates: (msg) => browserHandlers.passkeyCandidates(msg),
+          noteExtension,
+          simulateExtensionClients,
+          simulateExtensionPolicy,
           waitForUnlock,
+          release: smokeRelease,
           lockIfWindowsLocked,
           signInDone: (host) => browserHandlers.signInDone({ host }),
-          // The feature checks use PIN 2468 (the personal vault check sets the same one).
+          // The feature checks use PIN 246813 (the personal vault check sets the same one; 6 characters for Enter, #472/#475).
           ensurePin: async () => {
-            if (!config.get().appPin) config.update({ appPin: await hashPin('2468'), pinGuard: null });
+            if (!config.get().appPin) config.update({ appPin: await hashPin('246813'), pinGuard: null });
             pinGuard.restore(null);
-            return '2468';
+            return '246813';
           },
           resetPinGuard: () => { pinGuard.restore(null); config.update({ pinGuard: null }); },
+          openQuestionIds: () => [...questions.keys()],
+          windows,
           startInNormalMode,
           trustAgentEntry,
           updaterArgs: () => updater.helperArgs('Keevault-Setup.exe', false),
         }).catch((err) => errors.push(`features: ${err.stack || err.message}`));
+        errors.push(...areas.missing());
       }
       if (view) await sleep(1200);
       // Layout check (development): KVPWSAFE_MEASURE="<selector>[,<selector>…]" prints each match's box.
@@ -852,13 +919,15 @@ export function runSmokeTest() {
         console.log(await js(`JSON.stringify(${sel}.split(',').flatMap((q) => [...document.querySelectorAll(q)].slice(0, 6).map((e) => { const r = e.getBoundingClientRect(); return [q, (e.textContent || '').trim().slice(0, 18), Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)]; })))`));
       }
     }
-    for (const f of missingFiles) errors.push(`missing file: ${f}`);
     if (screenshot) {
+      smokeGuard.note('screenshot');
       if (!process.argv.includes('--view=small')) win.setSize(1200, 780);
+      // Transitions do not run in a never-shown window: the picture must show their end, not their start.
+      await js('document.getAnimations().forEach((a) => { try { a.finish(); } catch {} })');
       const image = await win.webContents.capturePage();
+      const problem = screenshotProblem(image);
+      if (problem) errors.push(problem);
       await fs.writeFile(screenshot, image.toPNG());
     }
-    console.log(errors.length ? `SMOKE FAIL\n${errors.join('\n')}` : 'SMOKE OK');
-    app.exit(errors.length ? 1 : 0);
-  }, 1500));
+  }), 1500));
 }

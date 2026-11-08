@@ -13,8 +13,9 @@ import { renderDetail } from './detail.js';
 import { dropTarget, endDrag, startDrag } from './dragdrop.js';
 import { renderList } from './list.js';
 import { contextMenu } from './menus.js';
+import { pasteAction } from './cut-paste.js';
 import { folderList, folderScope, nsFolder } from './modes.js';
-import { clearSelection, deleteMany, selectRow } from './multi.js';
+import { clearSelection, deleteFailedText, deleteMany, selectRow } from './multi.js';
 import { reloadAll } from './shell.js';
 import { syncNewEntryTarget } from './sidebar.js';
 import { deleteNotice } from './trash.js';
@@ -37,6 +38,9 @@ export function folderRows(container, list, row, rerender) {
     syncNewEntryTarget();
   };
   const out = [];
+  // #476: "Nur für mich" entries (root only) stand at the very top of the vault, above the folders.
+  const top = cur ? [] : list.filter((i) => i.privateOwner && !i.folder);
+  out.push(...top.map((i) => () => row(i)));
   if (cur) {
     const parent = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
     out.push(h('li', { class: 'folder-crumb', ...dropTarget(parent, container) },
@@ -76,7 +80,7 @@ export function folderRows(container, list, row, rerender) {
         }
       } }, icon('trash', 14)) : null));
   }
-  out.push(...list.filter((i) => (i.folder || '') === cur).map((i) => () => row(i)));
+  out.push(...list.filter((i) => (i.folder || '') === cur && !top.includes(i)).map((i) => () => row(i)));
   if (out.length === (cur ? 1 : 0)) out.push(h('li', { class: 'empty' }, icon('folder', 32), t('Ordner ist leer')));
   return out;
 }
@@ -96,6 +100,7 @@ export function folderActions(c, folder, count, open) {
     folder.split('/').length < MAX_FOLDER_DEPTH
       ? { action: 'subfolder', icon: 'folder-plus', label: t('Neuer Unterordner'), disabled: !canWrite, onClick: () => newFolderDialog(c, `${folder}/`) } : null,
     { action: 'rename-folder', icon: 'edit', label: t('Umbenennen'), disabled: !canWrite, onClick: () => renameFolderDialog(c, folder) },
+    pasteAction({ containerId: c.id, folder }),
     mcpScopeAction(c.id, folder),
     '-',
     { action: 'delete-folder', icon: 'trash', label: t('Löschen'), danger: true, disabled: !canWrite, onClick: async () => {
@@ -116,7 +121,7 @@ export function folderActions(c, folder, count, open) {
           if (choice === 'delete') {
             if (!(await confirmDialog(t('Wirklich alle Einträge löschen?'), `${t('Achtung: {count} Einträge aus „{folder}“ und allen Unterordnern werden gelöscht.', { folder, count: inside.length })} ${await deleteNotice(c)}`, { confirmLabel: t('Ja, {count} Einträge löschen', { count: inside.length }), danger: true }))) return;
             const failed = await deleteMany(inside.map((i) => i.key));
-            if (failed) toast(t('{n} Einträge konnten nicht gelöscht werden', { n: failed }), 'error');
+            if (failed.length) toast(deleteFailedText(failed), 'error');
           } else {
             const r = await call('renameFolder', c.id, folder, parent, folderScope());
             for (const err of r.errors) toast(err, 'error');

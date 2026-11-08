@@ -25,9 +25,10 @@ import {
 } from './main/agents.js';
 import { applyBrowserIntegration } from './main/browser.js';
 import { excludeFromErrorReporting } from './main/clipboard.js';
-import { pinGuard } from './main/guards.js';
+import { passkeyPin, pinGuard } from './main/guards.js';
 import { serve } from './main/passkey-window.js';
-import { fileLocations, personalPaths, refreshFileLocations } from './main/personal.js';
+import { bringToFront } from './main/focus.js';
+import { fileLocations, personalPaths, rebindPersonalKey, refreshFileLocations } from './main/personal.js';
 import { DemoAuth, actor, applyLanguage, changed, lockIfWindowsLocked, lockNow, newSession, offlineMode, send } from './main/session.js';
 import { scheduleSettingsSync } from './main/settings-sync.js';
 import { runSmokeTest } from './main/smoke.js';
@@ -90,7 +91,10 @@ app.whenReady().then(async () => {
     }),
     pins: () => config.get().fileIds,
     setPins: (fileIds) => config.update({ fileIds }),
+    pinNotes: () => config.get().fileIdNotes,
+    setPinNotes: (fileIdNotes) => config.update({ fileIdNotes }),
     onChange: () => changed(),
+    onRekey: (entry) => rebindPersonalKey(entry),
   }));
   await files.load();
   refreshFileLocations().catch(() => {});
@@ -100,6 +104,7 @@ app.whenReady().then(async () => {
     vault: () => vault,
     isOpen: () => opened,
     actor,
+    pin: passkeyPin, // #439: every passkey use asks for the app PIN
     show: () => {
       if (!win) return;
       // Remember how the window was before the passkey request, to restore that afterwards.
@@ -107,7 +112,7 @@ app.whenReady().then(async () => {
       if (win.isMinimized()) win.restore();
       win.show();
       win.setAlwaysOnTop(true);
-      win.focus();
+      bringToFront(win);
     },
     notify: () => {
       send({ type: 'windows-request' });

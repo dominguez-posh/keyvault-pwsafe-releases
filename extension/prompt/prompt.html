@@ -5,25 +5,31 @@
   <title>Keevault</title>
   <link rel="stylesheet" href="../styles/app.css">
   <style>
-    body { min-height: 100vh; display: flex; flex-direction: column; }
-    header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--border); font-weight: 600; }
+    /* #459: the window is a compact card (the browser keeps its title bar for extension windows – no frameless popup exists). */
+    body { margin: 0; padding: 10px; min-height: 0; }
+    .card { display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
+    header { display: flex; align-items: center; gap: 8px; padding: 12px 16px 0; font-weight: 600; }
     header img { width: 20px; height: 20px; }
-    main { flex: 1; padding: 18px 18px 12px; display: flex; flex-direction: column; gap: 12px; }
-    .site { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+    main { padding: 10px 16px 6px; display: flex; flex-direction: column; gap: 10px; }
+    .site { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: var(--surface-2); border-radius: 12px; }
     .site .icon { color: var(--passkey); }
     .site b { display: block; overflow-wrap: anywhere; }
-    .choice { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-    .choice:hover { border-color: var(--accent); background: var(--accent-soft); }
+    .choice { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .choice:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+    .choice:disabled { opacity: .55; cursor: default; }
     .choice .row-text { flex: 1; }
     .radio { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; }
     .radio input { margin-top: 3px; }
-    footer { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding: 12px 18px 16px; border-top: 1px solid var(--border); background: var(--surface); }
+    input.pin { font-size: 16px; letter-spacing: .15em; text-align: center; }
+    footer { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding: 6px 16px 14px; }
   </style>
 </head>
 <body>
-  <header><img src="../icons/icon32.png" alt="">Keevault</header>
-  <main id="main"><span class="spinner"></span></main>
-  <footer id="footer"></footer>
+  <div class="card" id="card">
+    <header><img src="../icons/icon32.png" alt="">Keevault</header>
+    <main id="main"><span class="spinner"></span></main>
+    <footer id="footer"></footer>
+  </div>
   <script type="module" src="prompt.js"></script>
 </body>
 </html>

@@ -10,9 +10,12 @@ import { filesApi } from './files.js';
 import { foldersApi } from './folders.js';
 import { integrationsApi } from './integrations.js';
 import { itemsApi } from './items.js';
+import { releaseApi } from './release.js';
 import { reportsApi } from './reports.js';
 import { vaultsApi } from './vaults.js';
 import { lockNow } from '../session.js';
+import { diag } from '../diag.js';
+import { maskForLog, uiMessage } from '../../../extension/core/azure-errors.js';
 
 export const api = {
   ...appApi,
@@ -24,6 +27,7 @@ export const api = {
   ...adminApi,
   ...integrationsApi,
   ...reportsApi,
+  ...releaseApi,
 };
 
 ipcMain.handle('api', async (event, method, args) => {
@@ -34,6 +38,8 @@ ipcMain.handle('api', async (event, method, args) => {
     return { ok: true, result: await fn(...(Array.isArray(args) ? args : [])) };
   } catch (e) {
     if (e instanceof LockedError && method !== 'unlock') await lockNow();
-    return { ok: false, error: { name: e.name, message: e.message, status: e.status } };
+    // Raw Azure/Graph text (subscription, resource group, object ID, UPN) never reaches the window: log only, masked.
+    if (e?.name === 'AzureError') diag(`AZURE ${method} ${e.status} ${e.code || ''} ${maskForLog(e.message)}`);
+    return { ok: false, error: { name: e.name, message: uiMessage(e), status: e.status } };
   }
 });

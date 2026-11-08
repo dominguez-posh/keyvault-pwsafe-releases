@@ -108,3 +108,34 @@ test('host: app not running – answers at once, starts the app, connects when i
     host.proc.kill();
   }
 });
+
+test('hello: the extension version is a checked claim – plain numbers only, otherwise null, answer after approval (#347)', async () => {
+  const pipe = pipeName();
+  const seen = [];
+  const bridge = new BrowserBridge({
+    path: pipe,
+    approve: async () => true,
+    handlers: { hello: async (_msg, client) => { seen.push(client.extVersion); return { version: '1.0' }; } },
+  });
+  await bridge.start();
+  try {
+    let n = 0;
+    const host = startHost(pipe, 'chrome-extension://good/');
+    assert.deepEqual(await host.next(++n), { event: 'online' });
+    const hello = async (extVersion) => {
+      host.send({ id: n, cmd: 'hello', extVersion });
+      assert.equal((await host.next(++n)).ok, true);
+    };
+    await hello('0.9.28');
+    await hello('0.9.28-beta.1');
+    await hello('1.2.3.4.5');
+    await hello('9'.repeat(40));
+    await hello('1.2\n<script>');
+    await hello({ toString: 'x' });
+    await hello(undefined);
+    assert.deepEqual(seen, ['0.9.28', null, null, null, null, null, null]);
+    host.proc.kill();
+  } finally {
+    bridge.stop();
+  }
+});

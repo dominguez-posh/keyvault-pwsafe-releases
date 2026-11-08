@@ -10,6 +10,7 @@ import { t } from '../../../extension/core/i18n.js';
 import { smokeTest } from '../boot.js';
 import { vault, win } from '../state.js';
 import { diag } from '../diag.js';
+import { uiMessage } from '../../../extension/core/azure-errors.js';
 import { requireOpen } from '../guards.js';
 import { actor, containerResource, send } from '../session.js';
 
@@ -86,7 +87,7 @@ export const reportsApi = {
           });
         }
       } catch (e) {
-        rows.push({ vault: c.name, vaultUrl: c.vaultUrl, error: e.message });
+        rows.push({ vault: c.name, vaultUrl: c.vaultUrl, error: uiMessage(e) });
       }
       send({ type: 'progress', id: 'accessReport', done: ++done, total: containers.length });
     });

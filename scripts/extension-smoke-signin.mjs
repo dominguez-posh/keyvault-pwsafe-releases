@@ -1,6 +1,26 @@
 // Extension smoke, part: sign-in data only for the right scheme and port (#367). Each page asks the service worker the
 // way the content script does after a click, from the content script's own context. `otherPort` serves the same pages
 // but is no test origin of the copy, so the real checks apply there.
+
+/** #405: once the passkey tag takes clicks, a space or Enter while typing still doesn't sign in: its button has no focus. */
+/** Types into fields [id, text] with input events of the browser: a value set by script offers nothing to save (#383). */
+export async function typeInto({ send, evaluate, sessionId, fields }) {
+  for (const [id, text] of fields) {
+    await evaluate(sessionId, `(() => { const f = document.getElementById(${JSON.stringify(id)}); f.focus(); f.select(); return true; })()`);
+    await send('Input.insertText', { text }, sessionId);
+  }
+}
+
+export async function keysDoNotSign({ send, sleep, check, evaluate, shadowNode, sessionId, settle }) {
+  await sleep(settle);
+  for (const [key, code, vk, text] of [[' ', 'Space', 32, ' '], ['Enter', 'Enter', 13, '\r']]) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, windowsVirtualKeyCode: vk, text }, sessionId);
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: vk }, sessionId);
+  }
+  await sleep(600);
+  check(!(await evaluate(sessionId, 'results')).get && !!(await shadowNode(sessionId, 'kvpwsafe-ui', '.kvtag .primary')), '#405 Passkey-Schild: Taste beim Tippen meldet an');
+}
+
 export async function checkSignInPages({ send, events, open, sw, waitFor, check, ext, options, personal, port, otherPort, shadowNode }) {
   const contentCall = async (sessionId, cmd, args = {}) => {
     const created = await waitFor(() => [...events].reverse().find((e) => e.sessionId === sessionId && e.method === 'Runtime.executionContextCreated' && e.params.context.origin === ext), 6000);
@@ -44,6 +64,14 @@ export async function checkSignInPages({ send, events, open, sw, waitFor, check,
   check(refused(await contentCall(ms.sessionId, 'cs:msAccount', ids(msHttpEntry))), 'F2 Microsoft: cs:msAccount antwortet über http');
   check(refused(await contentCall(ms.sessionId, 'cs:fill', ids(msHttpEntry))), 'F2 Microsoft: Rückfall auf cs:fill gibt Anmeldedaten aus');
 
+  // #374: no page but Microsoft's own sign-in over https sets the account that signs in by itself.
+  const remembered = async () => (await send('Runtime.evaluate', { expression: 'chrome.storage.local.get("msDefault").then((r) => r.msDefault ?? null)', awaitPromise: true, returnByValue: true }, options.sessionId)).result.value;
+  const rememberedBefore = await remembered();
+  for (const [name, page] of [['fremde Seite', own], ['Microsoft über http', ms]]) {
+    await contentCall(page.sessionId, 'cs:msRemember', { key: 'smoke/f2' });
+    check(await remembered() === rememberedBefore, `#374 cs:msRemember: ${name} setzt das automatische Konto`);
+  }
+
   // Save prompt (#380): a page the entry doesn't fit hears nothing about the stored password and can't replace it.
   const captured = async (page, username, password) => (await contentCall(page.sessionId, 'cs:capture', { username, password }))?.result?.action;
   check(await captured(http, 'f2-https', 'F2-Https-1') === 'save', 'F2 Erfassung http: gleiches Passwort wird erkannt');
@@ -52,6 +80,40 @@ export async function checkSignInPages({ send, events, open, sw, waitFor, check,
   check(await captured(foreign, 'f2-http', 'F2-Fremd-1') === 'save', 'F2 Erfassung Port: Aktualisieren auf fremdem Port angeboten');
   check(await captured(own, 'f2-http', 'F2-Http-1') === 'none', 'F2 Erfassung: gleiches Passwort auf der eigenen Seite nicht erkannt');
   check(await captured(own, 'f2-http', 'F2-Neu-1') === 'update', 'F2 Erfassung: Aktualisieren auf der eigenen Seite fehlt');
+
+  // Clickjacking (#411): the page makes the bar transparent, a real click on "Update" must not replace the password. The
+  // click on the visible bar after that tells this check from a bar that never saves.
+  await send('Page.bringToFront', {}, own.sessionId);
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true }, own.sessionId);
+  const ownPause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const inOwn = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true }, own.sessionId)).result.value;
+  const stored = async () => (await contentCall(own.sessionId, 'cs:fill', ids(httpEntry)))?.result?.password;
+  const clickUpdate = async () => {
+    const { model } = await send('DOM.getBoxModel', { nodeId: await shadowNode(own.sessionId, 'kvpwsafe-ui', '.banner .b.primary') }, own.sessionId);
+    const [x, y] = [(model.border[0] + model.border[4]) / 2, (model.border[1] + model.border[5]) / 2];
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, own.sessionId);
+    await ownPause(1500);
+  };
+  check(!!(await waitFor(() => shadowNode(own.sessionId, 'kvpwsafe-ui', '.banner .b.primary'), 6000)), '#411 Speichern-Leiste erschien nicht');
+  await inOwn('(() => { const st = document.createElement("style"); st.id = "cj"; st.textContent = "kvpwsafe-ui { opacity: 0 !important; }"; document.head.append(st); return true; })()');
+  await ownPause(1200);
+  await clickUpdate();
+  check(await stored() === 'F2-Http-1', '#411 Speichern-Leiste: Klick auf durchsichtige Leiste überschreibt das Passwort');
+  await inOwn('document.getElementById("cj").remove(), true');
+  await ownPause(1200);
+  await clickUpdate();
+  check(await stored() === 'F2-Neu-1', '#411 Speichern-Leiste: Klick auf sichtbare Leiste speichert nicht');
+
+  // Confirmed fill (#412): the tab has moved on from the origin in the confirmation, nothing goes there. The right origin
+  // tells this from a fill that never works.
+  const ownTab = (await send('Runtime.evaluate', { expression: `chrome.tabs.query({}).then((ts) => ts.find((x) => (x.url || "").startsWith("http://router-smoke.example:${port}"))?.id)`, awaitPromise: true, returnByValue: true }, options.sessionId)).result.value;
+  const ownField = async () => (await send('Runtime.evaluate', { expression: 'document.querySelector("input[autocomplete=username]").value', returnByValue: true }, own.sessionId)).result.value;
+  const forced = (origin) => sw(options.sessionId, 'fill', { tabId: ownTab, ...ids(httpsEntry), force: true, origin }).then(() => true, () => false);
+  check(!(await forced('https://shop-smoke.example')), '#412 Bestätigung: Füllen trotz anderem Ursprung');
+  check(!(await forced('')), '#412 Bestätigung: Füllen ohne bestätigten Ursprung');
+  check(await ownField() === '', '#412 Bestätigung: Feld gefüllt trotz anderem Ursprung');
+  check(await forced(`http://router-smoke.example:${port}`), '#412 Bestätigung: Füllen mit bestätigtem Ursprung schlägt fehl');
+  await send('Runtime.evaluate', { expression: 'document.querySelector("input[autocomplete=username]").value = "", true' }, own.sessionId);
 
   // Field menu (#380): only real input at the field opens it, whatever the page's own script does. A separate tab: the
   // save prompts above must not count as a menu. The real clicks and keys come through CDP, so they are trusted events.
@@ -85,6 +147,61 @@ export async function checkSignInPages({ send, events, open, sw, waitFor, check,
   check(await closed(), 'F2 Feldmenü: Autofokus öffnet das Menü');
   await realKey('a', 'KeyA', 65, 'a');
   check(await opened(), 'F2 Feldmenü: Taste im Feld nach Autofokus öffnet nichts');
+
+  // Clickjacking (#373): the page hides the menu or lays something over it, a real click on the entry must not fill. The
+  // last run without any of it tells these checks from a menu that never fills.
+  const FIELD = 'document.querySelector("input[autocomplete=username]")';
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const clickEntry = async (attack = null) => {
+    await blur();
+    await inPage(`${FIELD}.value = "", true`);
+    await realClick(box.x, box.y);
+    if (!(await opened())) return 'kein Menü';
+    await pause(1200); // far longer than the wait for a menu that just appeared
+    if (attack) await inPage(`(() => { const st = document.createElement("style"); st.id = "cj"; st.textContent = "kvpwsafe-ui { display: block !important; ${attack} !important; }"; document.head.append(st); return true; })()`);
+    const { model } = await send('DOM.getBoxModel', { nodeId: await shadowNode(s, 'kvpwsafe-ui', '.menu .entry') }, s);
+    await realClick((model.border[0] + model.border[4]) / 2, (model.border[1] + model.border[5]) / 2);
+    await pause(1200);
+    return inPage(`${FIELD}.value`);
+  };
+  await inPage('(() => { const st = document.createElement("style"); st.id = "cj"; st.textContent = "kvpwsafe-ui { opacity: 0 !important; }"; document.head.append(st); return true; })()');
+  const transparent = await clickEntry();
+  check(transparent === '', `#373 Feldmenü: Klick auf durchsichtiges Menü füllt (${transparent ? 'Wert gesetzt' : transparent})`);
+  await inPage('document.getElementById("cj").remove(), true');
+  await inPage('(() => { const c = document.createElement("div"); c.id = "cj"; c.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none;background:#fff"; document.body.append(c); return true; })()');
+  const covered = await clickEntry();
+  check(covered === '', `#373 Feldmenü: Klick auf verdecktes Menü füllt (${covered ? 'Wert gesetzt' : covered})`);
+  await inPage('document.getElementById("cj").remove(), true');
+  // Konrad M1, M2: moved after the menu's time was over; clipped or masked. The box model reads where the entry is now.
+  for (const [name, attack] of [['verschoben', 'transform: translate(0, 40px)'], ['clip-path', 'clip-path: inset(0 0 0 0 round 1px)'], ['mask', 'mask-image: linear-gradient(#000, #000)']]) {
+    const value = await clickEntry(attack);
+    check(value === '', `#373 Feldmenü: Klick füllt, Menü ${name} (${value ? 'Wert gesetzt' : value})`);
+    await inPage('document.getElementById("cj").remove(), true');
+  }
+  // Konrad F4: kept away by the page during the wait, back the moment the pointer is on the bait; the click comes right after.
+  for (const [name, away] of [['weggeschoben', 'translate: -5000px 0 !important;'], ['verkleinert', 'transform-origin: 0 0 !important; scale: 0.01 !important;']]) {
+    await blur();
+    await inPage(`${FIELD}.value = "", true`);
+    await realClick(box.x, box.y);
+    check(await opened(), `#373 Feldmenü ${name}: kein Menü`);
+    await inPage(`(() => { const st = document.createElement("style"); st.id = "cj"; st.textContent = "kvpwsafe-ui { display: block !important; ${away} }"; document.head.append(st); return true; })()`);
+    await pause(1200);
+    await inPage('document.getElementById("cj").remove(), true');
+    const { model } = await send('DOM.getBoxModel', { nodeId: await shadowNode(s, 'kvpwsafe-ui', '.menu .entry') }, s);
+    await realClick((model.border[0] + model.border[4]) / 2, (model.border[1] + model.border[5]) / 2);
+    await pause(1200);
+    const value = await inPage(`${FIELD}.value`);
+    check(value === '', `#373 Feldmenü: Klick füllt, Menü ${name} und zurück (${value ? 'Wert gesetzt' : value})`);
+  }
+  // What the browser itself says about clip-path and mask (M2 was a guess): for the log, the checks above hold either way.
+  const verdict = await send('Runtime.evaluate', { awaitPromise: true, returnByValue: true, expression: `Promise.all(["", "clip-path:inset(100%)", "mask-image:linear-gradient(transparent,transparent)"].map((style) => new Promise((done) => {
+    const d = document.createElement("div"); d.style.cssText = "position:fixed;left:0;top:0;width:50px;height:50px;background:#000;z-index:2147483646;" + style; document.body.append(d);
+    const io = new IntersectionObserver((seen) => { io.disconnect(); d.remove(); done((style || "frei") + ": isVisible=" + seen.at(-1).isVisible); }, { trackVisibility: true, delay: 100 }); io.observe(d);
+    setTimeout(() => done((style || "frei") + ": keine Meldung"), 2000);
+  }))).then((r) => r.join("; "))` }, s);
+  console.log(`[#373 M2] ${verdict.result.value}`);
+  const free = await clickEntry();
+  check(free === 'f2-http', `#373 Feldmenü: Klick auf sichtbares Menü füllt nicht (${free || 'leer'})`);
   await send('Target.closeTarget', { targetId: menuPage.targetId }).catch(() => {});
 
   for (const x of [httpsEntry, httpEntry, msHttpEntry]) await sw(options.sessionId, 'delete', ids(x)).catch(() => {});

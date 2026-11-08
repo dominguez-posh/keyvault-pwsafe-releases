@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+export { exitIfRealApp } from './smoke-real-app.mjs';
+
 /** Browser flag value: the imitated hosts go to the local server, everything else fails to resolve. */
 export function hostResolverRules(mappedHosts) {
   return [

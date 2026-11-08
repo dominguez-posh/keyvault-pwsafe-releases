@@ -142,32 +142,43 @@ namespace Keevault.Setup
             var until = DateTime.Now + wait;
             while (DateTime.Now < until)
             {
-                var running = Find(dir);
-                var none = running.Count == 0;
-                running.ForEach((p) => p.Dispose());
-                if (none) return new List<string>();
+                // #351: the browser's and the agents' connections never end by themselves – ended at once, not waited for.
+                var waitFor = 0;
+                foreach (var p in Find(dir))
+                {
+                    using (p)
+                    {
+                        var commandLine = HelperProcesses.CommandLine(p.Id);
+                        if (HelperProcesses.IsHelper(commandLine)) End(p, commandLine, "a connection for the browser or an AI agent");
+                        else waitFor++;
+                    }
+                }
+                if (waitFor == 0) return new List<string>();
                 await Task.Delay(500);
             }
             foreach (var p in Find(dir))
             {
-                using (p)
-                {
-                    try
-                    {
-                        UpdateLog.Write($"ending {p.ProcessName} ({p.Id}), still running from the installation folder");
-                        p.Kill();
-                        p.WaitForExit(5000);
-                    }
-                    catch (Exception e)
-                    {
-                        UpdateLog.Write($"could not end {p.ProcessName} ({p.Id}): {e.Message}");
-                    }
-                }
+                using (p) End(p, HelperProcesses.CommandLine(p.Id), "still running from the installation folder");
             }
             var left = Find(dir);
             var names = left.Select((p) => $"{p.ProcessName}.exe").Distinct().ToList();
             left.ForEach((p) => p.Dispose());
             return names;
+        }
+
+        /// <summary>Ends one process; the log names it with its command line (#351: which ones they were).</summary>
+        private static void End(Process p, string commandLine, string why)
+        {
+            try
+            {
+                UpdateLog.Write($"ending {p.ProcessName} ({p.Id}), {why}: {commandLine ?? "(command line not readable)"}");
+                p.Kill();
+                p.WaitForExit(5000);
+            }
+            catch (Exception e)
+            {
+                UpdateLog.Write($"could not end {p.ProcessName} ({p.Id}): {e.Message}");
+            }
         }
     }
 }

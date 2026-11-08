@@ -1,6 +1,6 @@
 // Passkey dialogs (create / sign in). Unlocking happens in the desktop app; the dialog continues once it is open.
 
-import { h, icon, avatar, setChildren, toast, passkeySuccess } from '../core/dom.js';
+import { h, icon, avatar, setChildren, toast, passkeySuccess, showPinProblem } from '../core/dom.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call } from '../lib/api.js';
 
@@ -187,19 +187,54 @@ async function renderGet() {
       [button(t('Abbrechen'), cancel), button(t('Anderes Gerät verwenden'), fallback, 'btn primary')]);
     return undefined;
   }
-  const choices = d.candidates.map((c) => h('button', { type: 'button', class: 'choice', onclick: () => guard(async () => {
-    show([h('span', { class: 'spinner' }), ` ${t('Anmeldung …')}`]);
-    await call('webauthn:approve', { requestId, containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId });
+  // #439: the app PIN is typed here, in the extension's own window (never in the page), and checked by the app for this use.
+  const needPin = !!d.pin?.required;
+  const noPin = needPin && !d.pin.pinSet;
+  const pin = needPin && !noPin ? h('input', { type: 'password', autocomplete: 'off', class: 'pin', placeholder: t('App-PIN') }) : null;
+  const problem = h('div', { class: 'notice error', role: 'alert', hidden: true });
+  const choices = d.candidates.map((c) => h('button', { type: 'button', class: 'choice', disabled: noPin, onclick: async () => {
+    if (pin && !pin.value) { pin.focus(); return; }
+    const typed = pin?.value || '';
+    if (pin) pin.value = '';
+    problem.hidden = true;
+    try {
+      await call('webauthn:approve', { requestId, containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId, pin: typed });
+    } catch (e) {
+      // Wrong PIN, blocked, no PIN set: the request stays open, this window stays.
+      showPinProblem(problem, e.message);
+      pin?.focus();
+      return;
+    }
     await celebrate(t('Angemeldet'));
     window.close();
-  }, renderGet) }, avatar(c.userName || c.title), h('div', { class: 'row-text' },
+  } }, avatar(c.userName || c.title), h('div', { class: 'row-text' },
     h('div', { class: 'row-title' }, c.userName || t('(ohne Benutzername)')),
     h('div', { class: 'row-sub' }, `${c.title} · ${c.container}`)), icon('fill')));
-  show([site(d), h('p', {}, t('Mit welchem Passkey möchtest du dich anmelden?')), ...choices, lockedHint(d, renderGet)],
-    [button(t('Abbrechen'), cancel), button(t('Anderes Gerät verwenden'), fallback)]);
-  choices[0].focus();
+  show([site(d), noPin ? h('div', { class: 'notice' }, t('Für Passkeys braucht Keevault eine App-PIN. Lege sie in der Keevault-App unter Einstellungen → Sicherheit fest.')) : null,
+    h('p', {}, t('Mit welchem Passkey möchtest du dich anmelden?')),
+    pin ? h('label', { class: 'field' }, h('span', { class: 'muted small' }, t('App-PIN eingeben, um diese Anmeldung zu erlauben')), pin) : null, problem,
+    ...choices, lockedHint(d, renderGet)],
+  [button(t('Abbrechen'), cancel), button(t('Anderes Gerät verwenden'), fallback)]);
+  pin?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && choices.length === 1) choices[0].click(); });
+  (pin || choices[0]).focus();
   return undefined;
 }
+
+// #459: Enter confirms (the primary button of the card, unless a choice list needs a pick), Esc cancels (below).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing || !e.isTrusted || e.target.closest?.('button, select, textarea, a, input.pin')) return;
+  const go = footer.querySelector('.btn.primary:not(:disabled)');
+  if (go) { e.preventDefault(); go.click(); }
+});
+
+// The window fits its card: the service worker sets the height (only for this prompt window, it checks the sender).
+let fitted = 0;
+new ResizeObserver(() => {
+  const need = Math.ceil(document.getElementById('card').getBoundingClientRect().height) + 20 + (window.outerHeight - window.innerHeight);
+  if (Math.abs(need - fitted) < 4) return;
+  fitted = need;
+  call('prompt:fit', { height: need }).catch(() => {});
+}).observe(document.getElementById('card'));
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {

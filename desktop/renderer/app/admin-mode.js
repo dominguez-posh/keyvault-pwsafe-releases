@@ -3,6 +3,7 @@
 import { h, toast, modal } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
+import { focusField } from './focus.js';
 import { setSt, st } from './state.js';
 import { field } from './helpers.js';
 import { renderDetail } from './detail.js';
@@ -57,17 +58,19 @@ export function adminModeDialog() {
     } },
   ]);
   pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') dialog.querySelector('.modal-footer .btn.primary')?.click(); });
-  setTimeout(() => pin.focus(), 0);
+  focusField(pin);
 }
 
-export function pinDialog({ forced = false } = {}) {
+export function pinDialog({ forced = false, passkeys = false, onSaved = null } = {}) {
   const current = st.pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' }) : null;
   const next = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' });
   const repeat = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' });
   const { close } = modal(st.pinSet ? t('PIN ändern') : t('PIN festlegen'), h('div', {},
-    h('p', { class: 'muted' }, forced
+    h('p', { class: 'muted' }, passkeys
+      ? t('Keevault fragt vor jeder Passkey-Nutzung nach deiner PIN – ohne PIN wird kein Passkey verwendet. Lege jetzt eine fest (mindestens 6 Zeichen).')
+      : forced
       ? t('Eure Organisation verlangt eine PIN zum Entsperren von Keevault.')
-      : t('Die PIN wird beim Entsperren abgefragt – so öffnet niemand die App an deinem gerade nicht gesperrten PC. Mindestens 4 Zeichen.')),
+      : t('Die PIN wird beim Entsperren abgefragt – so öffnet niemand die App an deinem gerade nicht gesperrten PC. Mindestens 6 Zeichen.')),
     current ? field(t('Aktuelle PIN'), current) : null,
     h('div', { class: 'grid2' }, field(t('Neue PIN'), next), field(t('Wiederholen'), repeat))), [
     forced ? null : { label: t('Abbrechen') },
@@ -81,6 +84,7 @@ export function pinDialog({ forced = false } = {}) {
       await call('setPin', { current: current?.value, next: next.value });
       toast(t('PIN gespeichert'));
       setSt(await fetchState());
+      onSaved?.();
     } },
   ].filter(Boolean));
   void close;

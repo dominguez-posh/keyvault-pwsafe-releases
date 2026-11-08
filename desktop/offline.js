@@ -21,7 +21,15 @@ export class OfflineError extends Error {
   }
 }
 
-const isVaultUrl = (url) => /^https:\/\/[^/]+\.vault\.azure\.net\//i.test(String(url));
+// With the port: the vault's links to its further list pages may name it.
+const isVaultUrl = (url) => /^https:\/\/[^/:]+\.vault\.azure\.net(:443)?\//i.test(String(url));
+
+/** Which secret a URL is about: /secrets/<name>[/<version or versions>]. Names don't depend on case. No name: the list, or something else. */
+function secretOf(url) {
+  const u = new URL(String(url));
+  const [kind, name] = u.pathname.split('/').filter(Boolean);
+  return { host: u.hostname.toLowerCase(), name: kind === 'secrets' && name ? decodeURIComponent(name).toLowerCase() : null };
+}
 
 /** Errors that mean "no network" rather than "sign-in refused". */
 export const isNetworkError = (e) => /network|ENOTFOUND|ECONN|EAI_AGAIN|fetch failed|offline|timed ?out|ERR_INTERNET|ERR_NAME_NOT_RESOLVED/i
@@ -36,6 +44,7 @@ export class OfflineMirror {
     this.unprotect = unprotect;
     this.now = now;
     this.entries = new Map(); // URL → { status, type, body }
+    this.listings = new Map(); // vault host → the list of all secrets being read: { names, next page }
     this.containers = [];
     this.key = null; // derived data key, RAM only, after a PIN unlock
     this.at = 0;
@@ -89,18 +98,58 @@ export class OfflineMirror {
     await fs.rm(this.keyFile, { force: true });
   }
 
-  /** fetch wrapper: records every successful GET to a Key Vault while the key is available. */
+  /**
+   * fetch wrapper: records every successful GET to a Key Vault while the key is available. What the vault says is gone
+   * leaves the mirror, or an entry deleted long ago could be read offline, password included (#413).
+   */
   record(fetch) {
     return async (url, init = {}) => {
       const res = await fetch(url, init);
       const method = String(init.method || 'GET').toUpperCase();
-      if (this.key && method === 'GET' && res.ok && isVaultUrl(url)) {
+      if (!this.key || !isVaultUrl(url)) return res;
+      const { host, name } = secretOf(url);
+      if (name && ((method === 'DELETE' && (res.ok || res.status === 404)) || (method === 'GET' && res.status === 404))) {
+        this.forget(host, (n) => n === name);
+      } else if (method === 'GET' && res.ok) {
         const body = await res.clone().text();
         this.entries.set(String(url), { status: res.status, type: res.headers.get('content-type') || 'application/json', body });
+        if (!name) this.followListing(url, host, body);
         this.schedule();
       }
       return res;
     };
+  }
+
+  /** Removes every URL of the vault's secrets whose name fits, whatever the version. */
+  forget(host, fits) {
+    let changed = false;
+    for (const url of this.entries.keys()) {
+      const secret = secretOf(url);
+      if (secret.host === host && secret.name && fits(secret.name)) changed = this.entries.delete(url) || changed;
+    }
+    if (changed) this.schedule();
+  }
+
+  /**
+   * The list of all secrets, page by page. Only a list followed to its last page says what is missing: a page out of turn
+   * (a second list at the same time, one given up half way) ends it without any conclusion.
+   */
+  followListing(url, host, body) {
+    const u = new URL(String(url));
+    if (u.pathname.replace(/\/+$/, '') !== '/secrets') return;
+    const running = u.searchParams.has('$skiptoken') ? this.listings.get(host) : { names: new Set(), next: String(url) };
+    this.listings.delete(host);
+    if (running?.next !== String(url)) return;
+    let page;
+    try {
+      page = JSON.parse(body);
+    } catch {
+      return;
+    }
+    if (!Array.isArray(page?.value)) return;
+    for (const s of page.value) running.names.add(secretOf(s.id).name);
+    if (page.nextLink) this.listings.set(host, { names: running.names, next: page.nextLink });
+    else this.forget(host, (name) => !running.names.has(name));
   }
 
   /** fetch replacement without network: answers GETs from the mirror and refuses every change. */

@@ -11,6 +11,8 @@ Thumbs.db
 
 # Windows passkey provider build output
 windows/out/
+# Fingerprint of the shipped provider certificate, written by scripts/before-pack.cjs
+desktop/cert-pin.json
 windows/PasskeyProvider/bin/
 windows/PasskeyProvider/obj/
 
@@ -34,3 +36,4 @@ mobile/android/local.properties
 mobile/android/.idea/
 windows/Setup/obj/
 windows/Setup/bin/
+

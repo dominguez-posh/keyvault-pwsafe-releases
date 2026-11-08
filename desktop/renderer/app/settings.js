@@ -1,6 +1,6 @@
 // The settings dialog.
 
-import { h, icon, toast, modal } from '../../../extension/core/dom.js';
+import { h, icon, toast, modal, confirmDialog } from '../../../extension/core/dom.js';
 import { t, LANGUAGES } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { explicitFolders, items, st } from './state.js';
@@ -63,6 +63,8 @@ export function settingsDialog() {
   const mcpPasskeys = h('input', { type: 'checkbox', name: 'mcpPasskeys', checked: !!s.mcpPasskeys });
   const mcpMicrosoft = h('input', { type: 'checkbox', name: 'mcpMicrosoft', checked: !!s.mcpMicrosoft });
   const offlineMirror = h('input', { type: 'checkbox', checked: !!s.offlineMirror && st.pinSet, disabled: enforced('offlineMirror') || !st.pinSet });
+  // #439: the organization's RequirePin makes this fixed on (state.passkeyPinFixed).
+  const passkeyPin = h('input', { type: 'checkbox', name: 'passkeyPin', checked: st.passkeyPinFixed || s.passkeyPin !== false, disabled: st.passkeyPinFixed });
   const mcpBox = h('div', {});
   const mcpMode = h('select', { disabled: enforced('mcpScope') },
     h('option', { value: 'selected', selected: s.mcpScope !== 'all' }, t('Nur freigegebene Tresore und Ordner (empfohlen)')),
@@ -135,11 +137,15 @@ export function settingsDialog() {
   const drawMachine = (x) => {
     if (!x?.supported) return machine.replaceChildren();
     const yes = (v) => (v ? t('ja') : t('nein'));
+    // #455: where the company sets the browser policies, Keevault creates none and says so.
+    const policy = (v, company) => (company && !x.policyBlocked ? t('von der IT verwaltet') : yes(v));
+    const company = !x.policyBlocked && (x.edgeCompany || x.chromeCompany);
     const button = h('button', { type: 'button', class: 'btn small', onclick: async () => {
       button.disabled = true;
       try {
-        drawMachine((await call('runMachineSetup')).machine);
-        toast(t('Gerät eingerichtet – Edge/Chrome ggf. neu starten'));
+        const r = await call('runMachineSetup');
+        drawMachine(r.machine);
+        toast(r.company?.length ? t('Gerät eingerichtet. Die Browser-Erweiterung verteilt eure IT, dafür hat Keevault keine Richtlinie angelegt.') : t('Gerät eingerichtet – Edge/Chrome ggf. neu starten'));
       } catch (e) {
         toast(e.message, 'error');
         button.disabled = false;
@@ -148,8 +154,9 @@ export function settingsDialog() {
     // h() skips null children, replaceChildren() would print "null".
     return machine.replaceChildren(h('div', {},
       h('div', {}, t('Zertifikat des Passkey-Anbieters vertraut: {v}', { v: yes(x.certTrusted) })),
-      h('div', {}, t('Erweiterungs-Richtlinie Edge: {edge} · Chrome: {chrome}', { edge: yes(x.edgePolicy), chrome: yes(x.chromePolicy) })),
-      (!x.certTrusted || !x.edgePolicy) && x.canRunSetup ? button : null));
+      h('div', {}, t('Erweiterungs-Richtlinie Edge: {edge} · Chrome: {chrome}', { edge: policy(x.edgePolicy, x.edgeCompany), chrome: policy(x.chromePolicy, x.chromeCompany) })),
+      company ? h('div', { id: 'machine-company' }, t('Die Browser-Richtlinien setzt auf diesem Gerät eure IT. Keevault legt dort keine Richtlinie an – die Erweiterung verteilt die IT.')) : null,
+      x.canRunSetup ? button : null));
   };
   call('machineSetupStatus').then(drawMachine, () => {});
   const section = (title, ...children) => h('div', { class: 'settings-section' }, h('h3', {}, title), ...children);
@@ -184,7 +191,13 @@ export function settingsDialog() {
           ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.')
           : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
         st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
-          : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.'))),
+          : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
+        st.pinShort ? h('div', { class: 'notice warn pin-short' }, t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern')) : null),
+      section(t('Passkeys'),
+        h('label', { class: 'inline' }, passkeyPin, t('PIN vor jeder Passkey-Nutzung')),
+        h('p', { class: 'muted small' }, st.passkeyPinFixed
+          ? t('Eure Organisation verlangt eine PIN – sie wird auch vor jeder Passkey-Nutzung abgefragt.')
+          : t('Jede Anmeldung mit einem Passkey – über die Browser-Erweiterung, den Windows-Passkey-Anbieter oder einen KI-Agenten – wird mit deiner App-PIN bestätigt, jedes Mal neu. Ohne gesetzte PIN wird kein Passkey verwendet.'))),
       section(t('Offline-Lesemodus'),
         h('label', { class: 'inline' }, offlineMirror, t('Einträge verschlüsselt für unterwegs spiegeln (nur lesen, PIN nötig)')),
         h('p', { class: 'muted small' }, st.pinSet
@@ -252,6 +265,9 @@ export function settingsDialog() {
   ]), [
     { label: t('Abbrechen') },
     { label: t('Speichern'), primary: true, onClick: async () => {
+      if (!passkeyPin.checked && st.settings.passkeyPin !== false && !(await confirmDialog(t('PIN vor Passkeys ausschalten?'),
+        t('Ohne die PIN kann jeder, der deinen entsperrten PC nutzt oder eine freigegebene Anfrage bestätigt, sich mit deinen Passkeys anmelden. Nur ausschalten, wenn du das Risiko kennst.'),
+        { confirmLabel: t('Ausschalten'), danger: true }))) return false;
       const changedTenant = tenant.value.trim() !== s.tenantId || client.value.trim() !== s.clientId;
       await call('updateSettings', {
         language: language.value,
@@ -271,6 +287,7 @@ export function settingsDialog() {
         updateChannel: updateChannel.value === 'beta' ? 'beta' : 'stable',
         mcpEnabled: mcpEnabled.checked,
         offlineMirror: offlineMirror.checked && st.pinSet,
+        passkeyPin: st.passkeyPinFixed || passkeyPin.checked,
         mcpScope: mcpMode.value,
         mcpPasskeys: mcpEnabled.checked && mcpPasskeys.checked,
         mcpMicrosoft: mcpEnabled.checked && mcpMicrosoft.checked,

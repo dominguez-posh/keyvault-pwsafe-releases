@@ -8,12 +8,15 @@ import { t } from './i18n.js';
 import { hostFromUrl } from './match.js';
 import { pickImage, ICON_MAX_CHARS } from './image.js';
 import { expiryState } from './health.js';
+import { actionCard, actionRow, secretRow, urlRow, userRow } from './field-row.js';
+import { historySection } from './ui-history.js';
+import { totpEditor } from './ui-totp.js';
 
 /**
  * @param {object} item  parsed item
  * @param {{ copy: (text: string, label: string) => void, openUrl: (url: string) => void,
  *           containerName: (id: string) => string, actions?: Array<{ icon, label, onClick, danger?, primary? }>,
- *           onRemovePasskey?: (credentialId: string) => void }} ctx
+ *           showLinkedAssets?: (item: object) => void }} ctx
  */
 /** Admin centers of a Microsoft account: PIM ("activate a role") on top, then the centers grouped as tiles. */
 function adminPanel(item, links) {
@@ -66,17 +69,19 @@ export function itemDetail(item, ctx) {
       h('div', { class: 'field-row' }, h('span', { class: 'value linked' }, icon('link', 14), ' ',
         l && !l.missing ? [l.title, l.username].filter(Boolean).join(' · ') : t('Verknüpfter Eintrag (nicht verfügbar)')))));
   }
-  if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx));
-  if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx));
+  if (item.username) rows.push(textField(t('Benutzername'), item.username, ctx, { typeWhat: 'u' }));
+  if (item.password) rows.push(secretField(item.type === 'certificate' ? t('Zertifikats-Passwort') : t('Passwort'), item.password, ctx, { typeWhat: item.type === 'certificate' ? null : 'p' }));
   if (item.totp) rows.push(totpField(item.totp, ctx));
   if (item.urls.length) {
-    rows.push(h('div', { class: 'field' }, h('label', {}, item.urls.length > 1 ? t('Websites') : t('Website')),
-      ...item.urls.map((u) => h('div', { class: 'field-row' },
-        h('a', { href: '#', class: 'url', title: u, onclick: (e) => { e.preventDefault(); ctx.openUrl(u); } }, u),
-        iconButton('copy', t('Kopieren'), () => ctx.copy(u, t('Adresse')))))));
+    const urlLabel = item.urls.length > 1 ? t('Websites') : t('Website');
+    const urlRows = item.urls.map((u) => (ctx.hoverActions ? urlRow(u, ctx) : h('div', { class: 'field-row' },
+      h('a', { href: '#', class: 'url', title: u, onclick: (e) => { e.preventDefault(); ctx.openUrl(u); } }, u),
+      iconButton('copy', t('Kopieren'), () => ctx.copy(u, t('Adresse'))))));
+    rows.push(ctx.hoverActions ? actionCard(urlLabel, ...urlRows) : h('div', { class: 'field' }, h('label', {}, urlLabel), ...urlRows));
   }
-  if (item.passkeys.length) rows.push(passkeyList(item.passkeys, ctx));
-  for (const f of item.fields) rows.push(customField(f, ctx));
+  if (item.passkeys.length) rows.push(passkeyList(item.passkeys));
+  // #458: like the standard fields, an additional field without a value (e.g. from a template) is not shown here.
+  for (const f of item.fields) if (String(f.value ?? '') !== '') rows.push(customField(f, ctx));
   if (item.notes) rows.push(h('div', { class: 'field' }, h('label', {}, t('Notizen')), h('div', { class: 'notes' }, item.notes)));
 
   // With ctx.menu (desktop): the actions sit in the head – main action as a button, "quick" ones as icons, the rest
@@ -96,7 +101,7 @@ export function itemDetail(item, ctx) {
     // Admin mode (#307): which assets and linked logins use this login.
     item.type === 'login' && ctx.showLinkedAssets ? h('div', { class: 'actions linked-assets-row' },
       h('button', { type: 'button', class: 'btn small linked-assets', onclick: () => ctx.showLinkedAssets(item) }, icon('link', 14), t('Verknüpfte Assets anzeigen'))) : null,
-    h('div', { class: 'meta muted' }, item.updatedBy
+    ctx.history ? historySection(item, ctx.history) : h('div', { class: 'meta muted' }, item.updatedBy
       ? t('Geändert {date} von {user}', { date: formatDateTime(item.updated), user: item.updatedBy })
       : t('Geändert {date}', { date: formatDateTime(item.updated) })),
     !hoverMenu && ctx.actions?.length ? h('div', { class: 'actions' }, ...ctx.actions.map((a) => h('button', {
@@ -135,12 +140,15 @@ export function expiryBadge(expires) {
   return h('span', { class: 'badge expiry' }, icon('clock', 11), t('Gültig bis {date}', { date }));
 }
 
-function textField(label, value, ctx) {
+// #458: with hover actions every text field (user name, card holder, server, additional fields) is the card with "Copy".
+function textField(label, value, ctx, { typeWhat = null } = {}) {
+  if (ctx.hoverActions) return actionCard(label, userRow(label, value, ctx, { typeWhat }));
   return h('div', { class: 'field' }, h('label', {}, label),
     h('div', { class: 'field-row' }, h('span', { class: 'value' }, value), iconButton('copy', t('Kopieren'), () => ctx.copy(value, label))));
 }
 
-function secretField(label, value, ctx, { masked = '••••••••••••', copyValue = value } = {}) {
+function secretField(label, value, ctx, { masked = '••••••••••••', copyValue = value, typeWhat = null } = {}) {
+  if (ctx.hoverActions) return actionCard(label, secretRow(label, value, ctx, { masked, copyValue, typeWhat }));
   const span = h('span', { class: 'value secret' }, masked);
   let shown = false;
   const toggle = iconButton('eye', t('Anzeigen'), () => {
@@ -190,16 +198,24 @@ function customField(f, ctx) {
   if (f.type === 'totp' && f.value) return totpField(f.value, ctx, f.name);
   if (f.hidden || f.type === 'hidden') return secretField(f.name, f.value, ctx);
   if (f.type === 'multiline') {
+    if (ctx.hoverActions) return copyCard(f.name, f.value, ctx, 'value notes');
     return h('div', { class: 'field' }, h('label', {}, f.name),
       h('div', { class: 'field-row' }, h('span', { class: 'value notes' }, f.value), iconButton('copy', t('Kopieren'), () => ctx.copy(f.value, f.name))));
   }
   if (f.type === 'url' && f.value) {
     const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(f.value) ? f.value : `https://${f.value}`;
+    if (ctx.hoverActions) return actionCard(f.name, urlRow(url, ctx));
     return h('div', { class: 'field' }, h('label', {}, f.name),
       h('div', { class: 'field-row' }, h('a', { href: '#', class: 'url', title: url, onclick: (e) => { e.preventDefault(); ctx.openUrl(url); } }, f.value), iconButton('copy', t('Kopieren'), () => ctx.copy(f.value, f.name))));
   }
-  if (f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(f.value)) return textField(f.name, new Date(`${f.value}T12:00:00`).toLocaleDateString(), ctx);
-  return textField(f.name, f.value, ctx);
+  const shown = f.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(f.value) ? new Date(`${f.value}T12:00:00`).toLocaleDateString() : f.value;
+  // #458: additional and template fields use the card of the user name ("Copy" anywhere on the card), no icon of their own.
+  return textField(f.name, shown, ctx);
+}
+
+/** A field card whose action is "Copy" (detail view with hover actions). */
+function copyCard(label, value, ctx, valueClass = 'value') {
+  return actionCard(label, actionRow(h('span', { class: valueClass }, value), { ctx, label, action: t('Kopieren'), run: () => ctx.copy(value, label) }));
 }
 
 /** File → base64 (for certificates, within CERT_MAX_BYTES). */
@@ -214,11 +230,18 @@ async function readCertificate(file) {
 function totpField(secret, ctx, label = t('Einmalcode (TOTP)')) {
   const code = h('span', { class: 'value totp' }, '––– –––');
   const ring = h('span', { class: 'totp-timer' });
-  const el = h('div', { class: 'field' }, h('label', {}, label),
-    h('div', { class: 'field-row' }, code, ring, iconButton('copy', t('Kopieren'), async () => {
-      const c = await totpCode(secret).catch(() => null);
-      if (c) ctx.copy(c.code, t('Einmalcode'));
-    })));
+  // Copies only the current code, never the secret (#469).
+  const copyCode = async () => {
+    const c = await totpCode(secret).catch(() => null);
+    if (c) ctx.copy(c.code, t('Einmalcode'));
+  };
+  // #458: with hover actions the card of the other fields: current code with countdown, "Copy securely" anywhere on it.
+  const el = ctx.hoverActions
+    ? actionCard(label, actionRow(h('span', { class: 'totp-value' }, code, ring), {
+      ctx, label, action: ctx.secureCopy === false ? t('Kopieren') : t('Sicher kopieren'), run: copyCode }))
+    : h('div', { class: 'field' }, h('label', {}, label),
+      h('div', { class: 'field-row' }, code, ring, iconButton('copy', t('Kopieren'), copyCode)));
+  el.classList.add('totp-field');
   let config;
   try {
     config = parseTotp(secret);
@@ -266,13 +289,20 @@ function serverRows(item, ctx) {
   if (s.tvId) rows.push(textField(t('TeamViewer-ID'), s.tvId, ctx));
   if (s.tvLink) rows.push(link(t('TeamViewer-Passwort'), s.tvLink));
   else if (s.tvPassword) rows.push(secretField(t('TeamViewer-Passwort'), s.tvPassword, ctx));
+  // #458: with hover actions the server addresses are cards too ("Open"; copying the address is in the arrow menu).
+  const addressCard = (label, shown, url) => actionCard(label, actionRow(h('a', { href: '#', class: 'url', title: shown }, shown), {
+    ctx, label, action: t('Öffnen'), run: () => ctx.openUrl(url),
+    menu: () => [{ action: 'copy-url', icon: 'copy', label: t('Adresse kopieren'), onClick: () => ctx.copy(url, t('Adresse')) }],
+  }));
   if (s.bastionUrl) {
-    rows.push(h('div', { class: 'field' }, h('label', {}, t('Bastion-Link')), h('div', { class: 'field-row' },
+    if (ctx.hoverActions) rows.push(addressCard(t('Bastion-Link'), s.bastionUrl, bastionUrlInTenant(s.bastionUrl, s.bastionTenant)));
+    else rows.push(h('div', { class: 'field' }, h('label', {}, t('Bastion-Link')), h('div', { class: 'field-row' },
       h('a', { href: '#', class: 'url', title: s.bastionUrl, onclick: (e) => { e.preventDefault(); ctx.openUrl(bastionUrlInTenant(s.bastionUrl, s.bastionTenant)); } }, s.bastionUrl),
       iconButton('copy', t('Kopieren'), () => ctx.copy(bastionUrlInTenant(s.bastionUrl, s.bastionTenant), t('Adresse'))))));
     if (s.bastionTenant) rows.push(h('div', { class: 'field' }, h('label', {}, t('Microsoft-Tenant')), h('div', { class: 'field-row' }, h('span', { class: 'value' }, s.bastionTenant))));
   }
-  if (s.mgmtUrl) {
+  if (s.mgmtUrl && ctx.hoverActions) rows.push(addressCard(t('Verwaltungsseite'), s.mgmtUrl, s.mgmtUrl));
+  else if (s.mgmtUrl) {
     rows.push(h('div', { class: 'field' }, h('label', {}, t('Verwaltungsseite')), h('div', { class: 'field-row' },
       h('a', { href: '#', class: 'url', title: s.mgmtUrl, onclick: (e) => { e.preventDefault(); ctx.openUrl(s.mgmtUrl); } }, s.mgmtUrl),
       iconButton('copy', t('Kopieren'), () => ctx.copy(s.mgmtUrl, t('Adresse'))))));
@@ -289,17 +319,14 @@ function mgmtLabel(kind) {
   return t('Verwaltungsseite');
 }
 
-function passkeyList(passkeys, ctx) {
+/** Detail view: the passkey card only shows; moving and removing a passkey is edit mode only (the form passkey rows). */
+function passkeyList(passkeys) {
   return h('div', { class: 'field' }, h('label', {}, passkeys.length > 1 ? t('Passkeys') : t('Passkey')),
-    ...passkeys.map((p) => h('div', { class: 'passkey-row', ...(ctx.passkeyDrag ? {
-      draggable: 'true', title: t('Auf einen anderen Login in der Liste ziehen, um den Passkey dorthin zu verschieben'),
-      ondragstart: (e) => ctx.passkeyDrag(e, p), ondragend: () => ctx.passkeyDragEnd?.() } : {}) },
+    ...passkeys.map((p) => h('div', { class: 'passkey-row' },
       icon('key'),
       h('div', { class: 'passkey-text' },
         h('div', {}, p.userName || p.userDisplayName || t('(ohne Benutzername)')),
-        h('div', { class: 'muted small' }, t('{rpId} · erstellt {date}', { rpId: p.rpId, date: formatDateTime(p.created) }))),
-      ctx.onMovePasskey ? iconButton('move', t('In anderen Eintrag verschieben'), () => ctx.onMovePasskey(p)) : null,
-      ctx.onRemovePasskey ? iconButton('trash', t('Passkey entfernen'), () => ctx.onRemovePasskey(p.credentialId)) : null)));
+        h('div', { class: 'muted small' }, t('{rpId} · erstellt {date}', { rpId: p.rpId, date: formatDateTime(p.created) }))))));
 }
 
 const secretInputEl = (name, value) => h('input', { name, type: 'password', value, autocomplete: 'off', spellcheck: 'false' });
@@ -397,35 +424,8 @@ export function itemForm(item, ctx) {
   const collectPortals = () => [...portalRows.querySelectorAll('.portal-row')]
     .map((r) => ({ label: r.querySelector('.portal-label').value, url: r.querySelector('.portal-url').value }))
     .filter((p) => p.url.trim());
-  // The TOTP secret is as sensitive as the password: hidden unless revealed.
-  const totp = h('input', { name: 'totp', type: 'password', value: it.totp, placeholder: t('otpauth://… oder Base32-Geheimnis'), autocomplete: 'off', spellcheck: 'false' });
-  const revealTotp = iconButton('eye', t('Anzeigen'), () => {
-    totp.type = totp.type === 'password' ? 'text' : 'password';
-    revealTotp.replaceChildren(icon(totp.type === 'password' ? 'eye' : 'eyeOff'));
-  });
-  // ctx.scanQr() (browser extension): reads the QR code the website shows when setting up two-factor sign-in.
-  const scanTotp = ctx.scanQr ? iconButton('qr', t('QR-Code auf der Seite scannen'), async () => {
-    scanTotp.disabled = true;
-    try {
-      const text = await ctx.scanQr();
-      if (!text) {
-        toast(t('Kein QR-Code auf der sichtbaren Seite gefunden. Bitte den QR-Code ins Bild holen und erneut scannen.'), 'error');
-        return;
-      }
-      try {
-        parseTotp(text); // throws when it is neither an otpauth:// link nor a Base32 secret
-      } catch {
-        toast(t('Der QR-Code auf der Seite enthält keinen Einmalcode (otpauth://).'), 'error');
-        return;
-      }
-      totp.value = text;
-      toast(t('Einmalcode aus QR-Code übernommen'));
-    } catch (e) {
-      toast(e.message, 'error');
-    } finally {
-      scanTotp.disabled = false;
-    }
-  }) : null;
+  // #469: a set TOTP secret is never shown again (not even put into the field) – only replaced or removed.
+  const totp = totpEditor(it.totp, { name: 'totp', scanQr: ctx.scanQr });
   const startFolder = it.folder || (ctx.isNew && ctx.defaultFolder) || '';
   // folderFree false: the vault's admin has not enabled creating folders – choose among existing ones only.
   const folder = ctx.folderFree === false
@@ -472,6 +472,11 @@ export function itemForm(item, ctx) {
   const valueInput = (f, i) => {
     const set = (e) => { fields[i].value = e.target.value; };
     if (f.type === 'multiline') return h('textarea', { rows: 3, value: f.value, placeholder: t('Wert'), oninput: set, spellcheck: 'false' });
+    // #469: a one-time code field keeps its stored secret out of the page as well – replace or remove only.
+    if (f.type === 'totp') {
+      const ed = totpEditor(f.value, { onChange: () => { fields[i].value = ed.value(); } });
+      return ed.el;
+    }
     if (f.type === 'file') {
       const picker = h('input', { type: 'file', hidden: true, onchange: async () => {
         const file = picker.files?.[0];
@@ -525,9 +530,12 @@ export function itemForm(item, ctx) {
   let passkeys = it.passkeys;
   const passkeyBox = h('div');
   const renderPasskeys = () => {
-    passkeyBox.replaceChildren(...(passkeys.length ? [h('label', {}, t('Passkeys')), ...passkeys.map((p) => h('div', { class: 'passkey-row' },
+    passkeyBox.replaceChildren(...(passkeys.length ? [h('label', {}, t('Passkeys')), ...passkeys.map((p) => h('div', { class: 'passkey-row', ...(ctx.passkeyDrag ? {
+      draggable: 'true', title: t('Auf einen anderen Login in der Liste ziehen, um den Passkey dorthin zu verschieben'),
+      ondragstart: (e) => ctx.passkeyDrag(e, p), ondragend: () => ctx.passkeyDragEnd?.() } : {}) },
       icon('key'),
       h('div', { class: 'passkey-text' }, h('div', {}, p.userName || t('(ohne Benutzername)')), h('div', { class: 'muted small' }, p.rpId)),
+      ctx.onMovePasskey ? iconButton('move', t('In anderen Eintrag verschieben'), () => ctx.onMovePasskey(p)) : null,
       iconButton('trash', t('Passkey entfernen'), () => { passkeys = passkeys.filter((x) => x !== p); renderPasskeys(); })))] : []));
   };
   renderPasskeys();
@@ -703,7 +711,7 @@ export function itemForm(item, ctx) {
       h('div', { class: 'muted small' }, t('Z. B. den Domain-Login oder bei Portalen mit Microsoft-Anmeldung den Microsoft-Login wählen – Benutzername und Passwort kommen dann von dort.'))) : null,
     ownLogin,
     urlsRow,
-    row(t('Einmalcode (TOTP)'), h('div', { class: 'field-row' }, totp, revealTotp, scanTotp)),
+    row(t('Einmalcode (TOTP)'), totp.el),
     h('label', { class: 'inline' }, msAdmin, t('Microsoft-Admin-Konto (für Admin Center und Bastion)')),
     h('label', { class: 'inline' }, sophos, t('Sophos-Login (Portale, bei MFA Passwort + Einmalcode zusammen)')),
     portalBox,
@@ -785,14 +793,11 @@ export function itemForm(item, ctx) {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (totp.value.trim()) {
-      try {
-        parseTotp(totp.value);
-      } catch (err) {
-        toast(err.message, 'error');
-        totp.focus();
-        return;
-      }
+    const totpError = totp.check();
+    if (totpError) {
+      toast(totpError, 'error');
+      totp.focus();
+      return;
     }
     if (!containerSelect.value) {
       toast(t('Kein beschreibbarer Tresor verfügbar'), 'error');
@@ -813,7 +818,7 @@ export function itemForm(item, ctx) {
       password: login ? (loginLink.value ? '' : password.value) : type === 'certificate' ? certPassword.value : type === 'server' && !srvRdpLink.value ? srvPass.value : '',
       loginLink: login ? loginLink.value : '',
       urls: login && !sophos.checked ? urls.value.split(/\r?\n/) : [],
-      totp: login ? totp.value : '',
+      totp: login ? totp.value() : '',
       card: type === 'card' ? { holder: cardHolder.value, number: cardNumber.value, expiry: cardExpiry.value, cvc: cardCvc.value, pin: cardPin.value } : undefined,
       cert: type === 'certificate' ? cert : undefined,
       server: type === 'server' ? {

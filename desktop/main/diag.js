@@ -5,12 +5,15 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { secureFetch } from '../secure-net.js';
 import { auth } from './state.js';
+import { maskLogText } from '../../extension/core/log-mask.js';
 
 // ---- Diagnostics: slow or failing requests (> 1 s, status >= 400) and slow token requests go to
 // %APPDATA%\KeyVault PwSafe\diagnostics.log – method, host, path, status, duration; never headers, bodies or values.
 const SLOW_MS = 1000;
 let diagWrites = Promise.resolve();
-export function diag(line) {
+export function diag(raw) {
+  // #484: subscription IDs, GUIDs and UPNs never reach the file (ARM and Graph paths, Azure error texts).
+  const line = maskLogText(raw);
   const file = path.join(app.getPath('userData'), 'diagnostics.log');
   diagWrites = diagWrites.then(async () => {
     try {

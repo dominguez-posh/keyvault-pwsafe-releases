@@ -4,6 +4,7 @@ import { totpCode } from '../../extension/core/totp.js';
 import { fqdnUserName } from '../../extension/core/model.js';
 import { bridge } from './state.js';
 import { splitEntryKey, usableItem } from './devices.js';
+import { claimJob } from '../signin-claim.js';
 
 // Sign-in handed to the browser extension: for two minutes, only on the named sign-in hosts, the extension may ask
 // for this one account (bridge "signIn"; the host comes from the browser, not from the page). Several steps (account,
@@ -22,11 +23,11 @@ export function addSignInJob(hosts, source, mode) {
   bridge?.broadcast('signin');
 }
 
-export async function signInFor(host) {
+export async function signInFor(host, tab) {
   const now = Date.now();
   signInJobs = signInJobs.filter((j) => j.until > now);
   const job = signInJobs.find((j) => hostIn(String(host || '').toLowerCase(), j.hosts));
-  if (!job) return null;
+  if (!job || !claimJob(job, tab)) return null;
   const item = typeof job.source === 'string' ? await usableItem(...splitEntryKey(job.source)) : job.source;
   // Bastion's sign-in on the VM always gets the FQDN form (user@contoso.local) when the account knows its domain.
   const username = job.mode === 'form' || job.mode === 'bastion' ? fqdnUserName(item) : item.username || '';
@@ -38,21 +39,9 @@ export async function signInFor(host) {
 export const ADMIN_CENTER_HOSTS = ['admin.microsoft.com', 'entra.microsoft.com', 'intune.microsoft.com', 'security.microsoft.com', 'purview.microsoft.com',
   'admin.exchange.microsoft.com', 'admin.teams.microsoft.com', 'portal.azure.com'];
 
-/**
- * Azure portal, Entra and Intune open in the account's tenant (#@contoso.com): a browser signed in with an account of
- * another tenant then has to sign in again – otherwise Microsoft keeps that account silently and the extension never
- * gets to pick the chosen one.
- */
-const AZURE_PORTAL_HOSTS = ['portal.azure.com', 'entra.microsoft.com', 'intune.microsoft.com'];
+// The address for the entry's account: desktop/admin-center-url.js.
+export { adminCenterUrl } from '../admin-center-url.js';
 export let lastAdminUrl = '';
-export function adminCenterUrl(url, username) {
-  const domain = /^[^@\s]+@([a-z0-9-]+(?:\.[a-z0-9-]+)+)$/i.exec(String(username || '').trim())?.[1];
-  const u = new URL(url);
-  if (!domain || !AZURE_PORTAL_HOSTS.includes(u.hostname)) return url;
-  const view = u.hash.replace(/^#\/?/, '');
-  u.hash = `@${domain.toLowerCase()}${view ? `/${view}` : ''}`;
-  return u.toString();
-}
 
 // Other modules read these bindings directly and change them through the setters (imports are read-only).
 export function setSignInJobs(value) { signInJobs = value; return value; }

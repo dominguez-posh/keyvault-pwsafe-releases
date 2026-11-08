@@ -413,7 +413,8 @@ export async function parseImport(file) {
       throw new Error(t('Die JSON-Datei ist fehlerhaft'));
     }
     if (data.format === 'kvpwsafe' && Array.isArray(data.items)) {
-      return { format: 'kvpwsafe-json', label: 'Keevault (JSON)', items: data.items.map((i) => normalizeItem({ ...i, id: '' })) };
+      // #476: "Nur für mich" is never taken over from a file – only setPrivacy sets it.
+      return { format: 'kvpwsafe-json', label: 'Keevault (JSON)', items: data.items.map((i) => normalizeItem({ ...i, id: '', privateOwner: '', privateOwnerName: '' })) };
     }
     if (Array.isArray(data.accounts)) return from1pux(data);
     if (Array.isArray(data.items) || data.encrypted) return fromBitwardenJson(data);

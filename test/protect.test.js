@@ -6,6 +6,17 @@ import { b64uEncode, randomBytes } from '../extension/core/util.js';
 
 const prf = () => b64uEncode(randomBytes(32));
 
+test('a new recovery key replaces the old one, which no longer opens (#399: an unconfirmed key is renewed)', async () => {
+  const { keyring, ck, recoveryKey } = await P.setupKeyring('c1', { password: 'correct horse battery' }, 'alice');
+  const renewed = await P.newRecoveryKey(keyring, ck, 'alice');
+  assert.notEqual(renewed.recoveryKey, recoveryKey);
+  assert.deepEqual((await P.unlockWithCode(renewed.keyring, renewed.recoveryKey)).ck.raw, ck.raw);
+  await assert.rejects(P.unlockWithCode(renewed.keyring, recoveryKey), P.UnlockError);
+  assert.equal(renewed.keyring.entries.filter((e) => e.type === 'recovery').length, 1);
+  assert.equal(JSON.stringify(renewed.keyring).includes(renewed.recoveryKey), false, 'the key is not in the keyring');
+  assert.deepEqual((await P.unlockWithPassword(renewed.keyring, 'correct horse battery')).ck.raw, ck.raw);
+});
+
 test('keyring: master password, passkeys of two users, recovery key, invitation', async () => {
   const alicePrf = prf();
   const { keyring, ck, recoveryKey } = await P.setupKeyring('c1', {
@@ -99,4 +110,26 @@ test('file container: create, reopen with a second user, merge concurrent edits,
   // mergeDocs: newer entry wins.
   const merged = mergeDocs({ items: { x: { updated: 2, data: 'new' } }, keyring: setup.keyring }, { items: { x: { updated: 1, data: 'old' } }, keyring: setup.keyring });
   assert.equal(merged.items.x.data, 'new');
+});
+
+test('#441: only completing an invitation adds a password; changing it replaces every one, also after an actor change', async () => {
+  const { keyring, ck } = await P.setupKeyring('c1', { password: 'owner-password-1' }, 'alice');
+  const { keyring: invited, inviteCode } = await P.createInvite(keyring, ck, { label: 'Kim' }, 'alice');
+  const viaInvite = await P.unlockWithCode(invited, inviteCode);
+  // Completing the invitation (op with add): the owner keeps the password.
+  const kims = (await P.applyKeyringOp(invited, viaInvite.ck, { type: 'setPassword', password: 'kim-password-1', add: true }, 'kim')).keyring;
+  assert.deepEqual((await P.unlockWithPassword(kims, 'owner-password-1')).ck.raw, ck.raw, 'the owner keeps the password');
+  assert.deepEqual((await P.unlockWithPassword(kims, 'kim-password-1')).ck.raw, ck.raw);
+  // Every password entry is listed, each removable on its own.
+  const listed = P.describeKeyring(kims, 'localhost').passwords;
+  assert.deepEqual(listed.map((p) => p.createdBy).sort(), ['alice', 'kim']);
+  const withoutKim = P.removeEntry(kims, listed.find((p) => p.createdBy === 'kim').id);
+  await assert.rejects(P.unlockWithPassword(withoutKim, 'kim-password-1'), P.UnlockError);
+  assert.deepEqual((await P.unlockWithPassword(withoutKim, 'owner-password-1')).ck.raw, ck.raw);
+  // "Change master password" by another actor (e.g. signed out: other user name): no old password stays valid.
+  const changed = (await P.applyKeyringOp(kims, ck, { type: 'setPassword', password: 'new-password-2' }, 'DESKTOP-USER')).keyring;
+  await assert.rejects(P.unlockWithPassword(changed, 'owner-password-1'), P.UnlockError, 'the old password of the owner is invalid');
+  await assert.rejects(P.unlockWithPassword(changed, 'kim-password-1'), P.UnlockError, 'the password of the invited person is invalid');
+  assert.deepEqual((await P.unlockWithPassword(changed, 'new-password-2')).ck.raw, ck.raw);
+  assert.equal(P.describeKeyring(changed, 'localhost').passwords.length, 1);
 });

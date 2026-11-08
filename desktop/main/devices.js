@@ -10,6 +10,7 @@ import { resolveLogin } from '../../extension/core/model.js';
 import { smokeTest } from './boot.js';
 import { vault } from './state.js';
 import { copyToClipboard } from './clipboard.js';
+import { checkRdpTarget } from '../rdp-target.js';
 import { helperExe } from './typing.js';
 import { showHint } from './hint-window.js';
 
@@ -93,12 +94,17 @@ export async function launchSsh(host, port, username, password) {
  * server, starts mstsc and removes it again after the connection was made (a credential saved before is restored).
  * The password goes through stdin, never onto a command line.
  */
+/** #349: remote desktop under Credential Guard keeps the copied password at least this long (not measured live). */
+export const RDP_CLIPBOARD_SECONDS = 120;
+
 export async function launchRdp(host, port, username, password) {
+  // Before anything else, also in smoke runs (#371): the target ends up in a line protocol, an .rdp file and mstsc's command line.
+  port = checkRdpTarget(host, port, username);
   if (smokeTest) {
     // Smoke: KVPWSAFE_TEST_CREDENTIAL_GUARD=1 takes the Credential Guard way (nothing is started).
     if (process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD === '1' && password) {
-      await copyToClipboard(password);
-      showHint({ kind: 'rdp', user: username });
+      await copyToClipboard(password, { atLeastSeconds: RDP_CLIPBOARD_SECONDS });
+      showHint({ kind: 'rdp', user: username, atLeastSeconds: RDP_CLIPBOARD_SECONDS });
       return { prompt: true, copied: true, credentialGuard: true };
     }
     return { prompt: !password };
@@ -110,13 +116,14 @@ export async function launchRdp(host, port, username, password) {
   // on the clipboard (cleared as usual) for the Windows dialog. That dialog drops every typed input – Unicode, real
   // keys and UI Automation alike (tested 2026-11-05, #336) –, so typing it in (#189) never worked: Ctrl+V it is.
   if (password && (await credentialGuardRunning())) {
-    await copyToClipboard(password);
+    // #349: copied before mstsc starts, needed only when its dialog is ready – a short clearing time would be over.
+    await copyToClipboard(password, { atLeastSeconds: RDP_CLIPBOARD_SECONDS });
     const file = path.join(app.getPath('temp'), `keevault-rdp-${process.pid}.rdp`);
     await fs.writeFile(file, [`full address:s:${target}`, `username:s:${username}`, 'prompt for credentials:i:1', ''].join('\r\n'), 'utf8');
     spawn('mstsc.exe', [file], { detached: true, stdio: 'ignore' }).unref();
     setTimeout(() => fs.rm(file, { force: true }).catch(() => {}), 60_000).unref?.();
     // The window explains why there is no automatic sign-in and what to do (#338).
-    showHint({ kind: 'rdp', user: username });
+    showHint({ kind: 'rdp', user: username, atLeastSeconds: RDP_CLIPBOARD_SECONDS });
     return { prompt: true, copied: true, credentialGuard: true };
   }
   const exe = helperExe();
@@ -143,16 +150,16 @@ function credentialGuardRunning() {
   return credentialGuard;
 }
 
-/** TeamViewer with ID (and password when stored); without the program installed: its link, password to clipboard. */
+/**
+ * TeamViewer with the ID, or its link without the program installed. The password goes to the protected clipboard, never
+ * on the command line: other programs of the same user can read that (#374).
+ */
 export async function launchTeamViewer(id, password) {
-  if (smokeTest) return { copied: false };
+  if (smokeTest) return { copied: !!password };
   const dirs = [process.env.ProgramFiles, process.env['ProgramFiles(x86)']].filter(Boolean);
   const exe = process.platform === 'win32' ? dirs.map((d) => path.join(d, 'TeamViewer', 'TeamViewer.exe')).find((p) => { try { return statSync(p).isFile(); } catch { return false; } }) : null;
-  if (exe) {
-    spawn(exe, ['-i', id, ...(password ? ['--Password', password] : [])], { detached: true, stdio: 'ignore' }).unref();
-    return { copied: false };
-  }
-  await shell.openExternal(`teamviewer10://control?device=${encodeURIComponent(id)}`);
+  if (exe) spawn(exe, ['-i', id], { detached: true, stdio: 'ignore' }).unref();
+  else await shell.openExternal(`teamviewer10://control?device=${encodeURIComponent(id)}`);
   if (password) await copyToClipboard(password);
   return { copied: !!password };
 }

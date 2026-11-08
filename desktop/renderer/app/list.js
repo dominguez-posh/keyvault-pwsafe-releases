@@ -13,10 +13,12 @@ import { dropPasskey, passkeyFits } from './admin-tools.js';
 import { newItem, renderDetail } from './detail.js';
 import { DRAG_PASSKEY, draggedPasskey, endDrag, setDraggedPasskey, startDrag } from './dragdrop.js';
 import { secureUnlockPanel } from './file-vaults.js';
+import { fileRepair, fileSwapDialog } from './file-swap.js';
 import { folderActions, folderRows, newFolderDialog } from './folders.js';
 import { itemAvatar } from './icons.js';
 import { itemActions } from './item-actions.js';
 import { contextMenu } from './menus.js';
+import { isCut, pasteAction } from './cut-paste.js';
 import { TYPE_TESTS, adminMode, deviceMode, folderList, typePills } from './modes.js';
 import { clearSelection, selectRow } from './multi.js';
 import { personalPinPrompt } from './personal.js';
@@ -26,6 +28,8 @@ import { syncNewEntryTarget, syncNotice } from './sidebar.js';
 import { trashDialog } from './trash.js';
 import { licenseBadge } from './vault-dialogs.js';
 import { accessBadge, containerActions, featureAllowed, refreshContainer, roleMark } from './vault-menu.js';
+import { privateBadge } from './private.js';
+import { privateFirst } from '../../../extension/core/private.js';
 
 export function visibleItems({ ignoreType = false } = {}) {
   if (ui.devices && !adminMode()) ui.devices = false;
@@ -42,7 +46,8 @@ export function visibleItems({ ignoreType = false } = {}) {
     list = list.filter((i) => [i.title, i.username, i.folder, ...i.hosts, ...i.rpIds, containerName(i.containerId)]
       .some((v) => String(v || '').toLowerCase().includes(q)));
   }
-  return [...list].sort((a, b) => a.title.localeCompare(b.title));
+  // #476: "Nur für mich" entries at the very top.
+  return privateFirst([...list].sort((a, b) => a.title.localeCompare(b.title)));
 }
 
 export function renderList() {
@@ -84,7 +89,7 @@ export function renderList() {
   function row(i) {
     const draggable = !!container && writable(container);
     return h('li', {
-      class: `row-item ${ui.selected === i.key ? 'active' : ''} ${ui.multi.has(i.key) ? 'multi' : ''}`,
+      class: `row-item ${ui.selected === i.key ? 'active' : ''} ${ui.multi.has(i.key) ? 'multi' : ''} ${isCut(i.key) ? 'cut' : ''}`,
       dataset: { key: i.key },
       oncontextmenu: (e) => contextMenu(e, itemActions(i)),
       draggable: draggable ? 'true' : false,
@@ -131,6 +136,7 @@ export function renderList() {
       // Expired entries struck through, as KeePass shows them (#327).
       h('div', { class: 'row-title' }, expiryState(i.expires) === 'expired' ? h('span', { class: 'expired-title' }, i.title) : i.title,
         i.favorite ? icon('star', 12) : null,
+        privateBadge(i),
         i.rpIds.length ? h('span', { class: 'badge passkey', title: t('Passkey') }, icon('key', 11)) : null,
         i.type === 'note' ? h('span', { class: 'badge' }, t('Notiz')) : null,
         i.type === 'card' ? h('span', { class: 'badge', title: t('Kreditkarte') }, icon('card', 11)) : null,
@@ -204,6 +210,10 @@ export function renderList() {
       : container.rbac === false
         ? t('{message}. Dieser Key Vault nutzt Zugriffsrichtlinien statt Azure RBAC: Stelle ihn unter „Zugriffskonfiguration“ auf „Azure RBAC“ um oder lege eine Zugriffsrichtlinie für dein Konto an.', { message: container.error.message })
         : t('{message}. Für Lesezugriff braucht dein Konto die Rolle „Key Vault Secrets User“, zum Bearbeiten „Key Vault Secrets Officer“. Besitzer oder Mitwirkender auf Subscription oder Ressourcengruppe reichen nicht – das sind keine Datenrollen.', { message: container.error.message })) : null,
+    // A changed file was refused (#430): what is shown is the last good state, nothing of the file was taken.
+    container?.warning ? h('div', { id: 'file-warning' }, notice(t('Die geänderte Datei wurde nicht übernommen: {message}', { message: container.warning }), 'warn')) : null,
+    fileRepair(container),
+    container?.swap ? h('button', { class: 'btn', id: 'file-swap-check', onclick: () => fileSwapDialog(container) }, icon('shield', 14), t('Erstellerin und Sicherheitscode prüfen')) : null,
     container?.error?.status === 403 && container.access?.manage !== false && container.rbac !== false ? h('button', { class: 'btn primary', onclick: async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
@@ -327,12 +337,10 @@ function newMenuItems(container) {
       { action: 'new-sophos', icon: 'shield', label: t('Neuer Sophos-Login'), onClick: () => newItem('login', entryTemplate('sophos')) },
     ] : []),
   ];
-  return [
-    ...kinds,
-    container ? '-' : null,
-    container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
-      ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null,
-  ];
+  // #481: the folder comes first, then a separator, then the new entries.
+  const folderItem = container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
+      ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null;
+  return [folderItem, folderItem ? '-' : null, ...kinds];
 }
 
 /** Right-click on the empty list area: create something here, the current folder's functions, select all, refresh. */
@@ -347,6 +355,7 @@ function listAreaActions(container) {
   const visible = [...document.querySelectorAll('.list-pane li.row-item[data-key]')].map((el) => el.dataset.key);
   return [
     ...newMenuItems(container),
+    container ? pasteAction({ containerId: container.id, folder }) : null,
     inFolder.length ? '-' : null,
     ...inFolder,
     folder ? { action: 'folder-up', icon: 'back', label: t('Übergeordneter Ordner'), onClick: () => open(folder.includes('/') ? folder.slice(0, folder.lastIndexOf('/')) : '') } : null,

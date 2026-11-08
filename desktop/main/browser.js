@@ -1,6 +1,6 @@
 // Browser extension through the desktop app: approval of a browser, the commands it may call, native messaging host.
 
-import { app, dialog } from 'electron';
+import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { BrowserBridge, launchPath, pipePath, registerNativeHost, unregisterNativeHost } from '../bridge.js';
@@ -10,13 +10,18 @@ import { t } from '../../extension/core/i18n.js';
 import { ORIGIN as WINDOWS_ORIGIN, rememberDesktopCommand } from '../windows-provider.js';
 import { appRoot, demo, devIsolated } from './boot.js';
 import { bridge, config, opened, setBridge, vault, win } from './state.js';
-import { approveAgent, mcpHandlers, mcpScriptPath } from './agents.js';
+import { approveAgent, askInApp, mcpHandlers, mcpScriptPath } from './agents.js';
 import { api } from './api/index.js';
-import { requireOpen } from './guards.js';
+import { passkeyPin, requireOpen } from './guards.js';
+import { effectiveRpId, getAssertion } from '../../extension/core/webauthn.js';
 import { copyToClipboard } from './clipboard.js';
-import { changed, lockNow } from './session.js';
+import { confirmInCard } from './confirm-card.js';
+import { changed, lockNow, send } from './session.js';
+import { extensionOutdated, extensionStatus } from '../versions.js';
+import { restoreStoredKeys, withoutPasskeyKeys } from '../passkey-keys.js';
 import { hostIn, setSignInJobs, signInFor, signInJobs } from './signin.js';
 import { windowsHandlers } from './windows-passkeys.js';
+import { browserItemHandlers, ITEM_CAPS } from '../browser-items.js';
 
 async function approveBrowser(origin) {
   const s = config.get();
@@ -26,15 +31,13 @@ async function approveBrowser(origin) {
   if (s.approvedBrowsers.includes(origin)) return true;
   if (!win) return false;
   win.show();
-  const r = await dialog.showMessageBox(win, {
-    type: 'question',
-    buttons: [t('Erlauben'), t('Ablehnen')],
-    defaultId: 0,
-    cancelId: 1,
-    message: t('Die Browser-Erweiterung möchte auf deine Datei-Tresore zugreifen.'),
+  // #459: a Keevault card instead of the Windows message box; Enter confirms after the waiting time (not on "Ablehnen", Lucas 2026-11-08), Esc and closing refuse.
+  const ok = await confirmInCard({
+    title: t('Die Browser-Erweiterung möchte auf deine Datei-Tresore zugreifen.'),
     detail: t('{origin}\n\nErlaube das nur, wenn du die Erweiterung Keevault gerade nutzt.', { origin }),
-  });
-  if (r.response !== 0) return false;
+    go: t('Erlauben'), cancel: t('Ablehnen'),
+  }, { parent: win });
+  if (!ok) return false;
   config.update({ approvedBrowsers: [...s.approvedBrowsers, origin] });
   return true;
 }
@@ -44,6 +47,8 @@ async function approveBrowser(origin) {
 const forBrowser = (c) => ({
   id: c.id, name: c.name, source: c.kind, sources: ['file'], locked: !!c.locked, protected: !!c.protected,
   error: c.error ? { status: c.error.status || 0, message: c.error.message } : null, access: c.access || null,
+  // #479: lets the extension show the host next to a name that comes from the vault itself.
+  vaultUrl: c.vaultUrl || null, metaName: c.metaName || null,
 });
 const browserContainers = async () => (opened ? (await vault.containers()).map(forBrowser) : []);
 
@@ -59,9 +64,56 @@ export async function refreshStaleForBrowser() {
   staleRefresh = vault.summaries({ maxAgeMs: INDEX_MAX_AGE }).then(changed, () => {}).finally(() => { staleRefresh = null; });
 }
 
+export const APP_CAPS = ['passkeySign', 'copy', ...ITEM_CAPS]; // (not the other way round: the key scanner would read the pair as a text)
+
+/** An extension that reports no usable version or an old one gets one hint in the app (the claim is not trusted for
+ * anything else; an old extension cannot show a hint itself). Returns whether the hint applies. */
+export function noteExtension(client) {
+  const outdated = extensionOutdated(client?.extVersion);
+  if (outdated && client && !client.hinted) {
+    client.hinted = true;
+    send({ type: 'extensionOutdated' });
+  }
+  return outdated;
+}
+
+/** Smoke only: a simulated list of bridge clients instead of the real ones (null = real). */
+let simulatedClients = null;
+export function simulateExtensionClients(list) { simulatedClients = list; }
+
+/** #454: state of the browser extension for the hint at the bottom right. */
+export function currentExtensionStatus() {
+  const clients = simulatedClients || (bridge ? [...bridge.clients] : []);
+  return extensionStatus(clients, app.getVersion());
+}
+
+/** #439: an item saved by the browser gets the stored private keys of its passkeys back. */
+const withStoredPasskeyKeys = (containerId, item) => restoreStoredKeys(item, () => vault.getItem(containerId, item.id, { fresh: true }));
+
+/** #464: version history, linked assets and moving for the extension (logic and checks in browser-items.js). `vault` is replaced when the app locks, so it is looked up at each call. */
+const liveVault = new Proxy({}, { get: (_target, name) => (...args) => vault[name](...args) });
+/** A move into another vault, started by the browser, is confirmed in the app window (source, target, entries, passkeys). */
+export const MOVE_CARD_ROWS = 20;
+export const confirmBrowserMove = async ({ from, to, entries }) => (await askInApp({
+  kind: 'browser-move',
+  title: t('Die Browser-Erweiterung möchte Einträge in einen anderen Tresor verschieben'),
+  lead: t('Von „{from}“ nach „{to}“', { from, to }),
+  // Own list (the titles as written, not translated); entries with passkeys come first and are named one by one. The total stays visible.
+  entries: {
+    total: entries.length,
+    rows: [...entries.filter((e) => e.passkey), ...entries.filter((e) => !e.passkey)].slice(0, MOVE_CARD_ROWS).map((e) => ({ title: e.title, passkey: e.passkey })),
+  },
+  note: entries.some((e) => e.passkey) ? t('Passkeys bleiben in der App und wandern mit in den Zieltresor.') : '',
+  allow: t('Verschieben'),
+  cancel: 'deny',
+})) === 'allow';
+
+const itemHandlers = browserItemHandlers({ vault: liveVault, requireOpen, changed, movePasskey: (args) => api.movePasskey(args), confirm: confirmBrowserMove });
+
 export const browserHandlers = {
+  ...itemHandlers,
   // Admin tools: the account for a sign-in started in the app (only for the host it was started for, see signInFor).
-  signIn: async ({ host }) => (opened ? signInFor(host) : null),
+  signIn: async ({ host, tab }) => (opened ? signInFor(host, tab) : null),
   /** The extension filled the last step: the job is used up – a second sign-in on the page (other admin center, other
    * user) is left alone. */
   signInDone: async ({ host }) => {
@@ -69,16 +121,22 @@ export const browserHandlers = {
     setSignInJobs(signInJobs.filter((j) => !hostIn(h, j.hosts)));
     return true;
   },
-  hello: async () => ({ version: app.getVersion(), opened, pinSet: !!config.get().appPin, containers: await browserContainers() }),
+  // caps: what this app can do for the extension (feature check instead of a version comparison: it also holds for
+  // development and pre-release builds, and an app without the list simply has none of them).
+  hello: async (_msg, client) => {
+    noteExtension(client);
+    send({ type: 'extensionChanged' });
+    return { version: app.getVersion(), caps: APP_CAPS, opened, pinSet: !!config.get().appPin, passkeyPin: passkeyPin.state(), containers: await browserContainers() };
+  },
   // Everything the extension lists in one answer, straight from the cache (never waits for Azure when there is a
   // cache); outdated vaults are reloaded afterwards and announced with "changed".
   snapshot: async () => {
     const pinSet = !!config.get().appPin;
-    if (!opened) return { version: app.getVersion(), opened: false, pinSet, containers: [], summaries: [] };
+    if (!opened) return { version: app.getVersion(), opened: false, pinSet, passkeyPin: passkeyPin.state(), containers: [], summaries: [] };
     const summaries = await vault.summaries({ maxAgeMs: Infinity });
     refreshStaleForBrowser().catch(() => {});
     // Native messaging allows 1 MB per message: big lists go in pages (summariesPage).
-    const out = { version: app.getVersion(), opened: true, pinSet, containers: await browserContainers(), summaries: summaries.slice(0, SNAPSHOT_PAGE) };
+    const out = { version: app.getVersion(), opened: true, pinSet, passkeyPin: passkeyPin.state(), containers: await browserContainers(), summaries: summaries.slice(0, SNAPSHOT_PAGE) };
     if (summaries.length > SNAPSHOT_PAGE) out.more = { total: summaries.length, pageSize: SNAPSHOT_PAGE };
     return out;
   },
@@ -114,16 +172,18 @@ export const browserHandlers = {
     return true;
   },
   // itemId – "id" is the request number of the bridge protocol.
-  item: ({ containerId, itemId }) => {
+  // #439: no private passkey key goes to the browser; save puts the stored ones back.
+  item: async ({ containerId, itemId }) => {
     requireOpen();
-    return vault.getItem(containerId, itemId, { fresh: true });
+    return withoutPasskeyKeys(await vault.getItem(containerId, itemId, { fresh: true }));
   },
   // Changes from the browser show up in the app (and other browsers) at once.
+  // #466: the saved item has the stored keys back – the answer goes without them, like item.
   save: async ({ containerId, item, expectedVersion }) => {
     requireOpen();
-    const saved = await vault.saveItem(containerId, item, { expectedVersion });
+    const saved = await vault.saveItem(containerId, await withStoredPasskeyKeys(containerId, item), { expectedVersion });
     changed();
-    return saved;
+    return withoutPasskeyKeys(saved);
   },
   delete: async ({ containerId, itemId }) => {
     requireOpen();
@@ -135,7 +195,26 @@ export const browserHandlers = {
     await lockNow();
     return true;
   },
-  passkeyCandidates: async ({ rpId }) => (opened ? vault.passkeyCandidates(rpId) : []),
+  // #439: no key material in the list – signing is passkeySign, which asks for the PIN (an extension before 0.9.29 can no longer sign here).
+  passkeyCandidates: async ({ rpId }) => (opened ? (await vault.passkeyCandidates(rpId)).map((c) => ({ ...c, passkey: { ...c.passkey, privateKey: '' } })) : []),
+  /**
+   * #439: the assertion for one sign-in. The PIN typed in the extension's own window (never in a web page) is checked here,
+   * for this one use; wrong, missing or no PIN set: nothing is signed. The extension gets the signed answer, not a key.
+   */
+  passkeySign: async ({ containerId, itemId, credentialId, origin, rpId, challenge, pin }) => {
+    requireOpen();
+    await passkeyPin.check(typeof pin === 'string' ? pin : '');
+    const rp = effectiveRpId(String(origin || ''), rpId);
+    const candidate = (await vault.passkeyCandidates(rp))
+      .find((c) => c.containerId === containerId && c.itemId === itemId && c.passkey.credentialId === credentialId);
+    if (!candidate) throw new Error(t('Passkey nicht gefunden'));
+    const { response, signCount } = await getAssertion({ origin: String(origin), rpId: rp, challenge, passkey: candidate.passkey });
+    if (signCount > 0) {
+      const item = await vault.getItem(containerId, itemId, { fresh: true });
+      await vault.saveItem(containerId, { ...item, passkeys: item.passkeys.map((k) => (k.credentialId === credentialId ? { ...k, signCount } : k)) }).catch(() => {});
+    }
+    return { response };
+  },
   matches: async ({ host }) => (opened ? (await vault.summaries()).filter((s) => s.type === 'login' && itemMatchesHost(s.hosts, host)) : []),
   focus: async () => {
     if (win?.isMinimized()) win.restore();

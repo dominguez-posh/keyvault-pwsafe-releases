@@ -7,6 +7,7 @@ import { mkdirSync } from 'node:fs';
 import { spawn, execFile as execFileCb } from 'node:child_process';
 import crypto from 'node:crypto';
 import { t } from '../../extension/core/i18n.js';
+import { KEY_CHANGE } from '../../extension/core/protect.js';
 import { demo, smokeTest } from './boot.js';
 import { config, files, opened, win } from './state.js';
 import { api } from './api/index.js';
@@ -123,17 +124,75 @@ export async function createPersonal({ folder, password, pin }) {
   requirePersonalLocation(info);
   if (info.exists) throw new Error(t('Dort liegt schon ein persönlicher Tresor – „Bestehenden verwenden“ wählen.'));
   const r = await files.create(info.path, t('Persönlich'), { password }, actor());
-  config.update({ personalVaults: [...personalPaths().filter((p) => p !== info.path), info.path] });
+  // In one write with the vault's listing: whatever ends the app from here on, the key still counts as not confirmed.
+  config.update({ personalVaults: [...personalPaths().filter((p) => p !== info.path), info.path], personalRecoveryPending: { ...pendingRecovery(), [r.id]: recoveryEntryId(files.get(r.id)) } });
   fileLocations.set(info.path, await locate(info.path) || info.location);
   await bindPersonalKey(personalEntries().find((e) => e.path === info.path), { force: true }).catch(() => {});
   changed();
   return { id: r.id, recoveryKey: r.recoveryKey };
 }
 
+// The recovery key of a new personal vault has to be confirmed (#399). It is never kept to be shown again: stored are the
+// vault's id and the id of its recovery entry, the wizard holds the key while it is open. Only the person's click makes
+// a new key. The entry id tells whether the mark still means the current key: a key made another way (the protection
+// dialog, another device) is someone's saved key, so the mark goes and that key stays. A key renewed here was shown once;
+// not confirmed then, nobody can say it was saved, so only a further new key ends the wait (Konrad F12).
+const pendingRecovery = () => config.get().personalRecoveryPending || {};
+const renewedRecovery = () => config.get().personalRecoveryRenewed || {};
+const recoveryEntryId = (vault) => vault?.keyring?.entries?.find((e) => e.type === 'recovery')?.id || null;
+
+/** Personal vaults that still wait for a confirmation. Marks that no longer fit the keyring are dropped here. */
+export function pendingRecoveryIds() {
+  const pending = pendingRecovery();
+  const open = [];
+  const next = { ...pending };
+  for (const entry of personalEntries()) {
+    if (!Object.hasOwn(pending, entry.id) || !entry.vault?.keyring) continue;
+    if (recoveryEntryId(entry.vault) === pending[entry.id]) open.push(entry.id);
+    else delete next[entry.id];
+  }
+  if (Object.keys(next).length !== Object.keys(pending).length) {
+    const renewed = Object.fromEntries(Object.entries(renewedRecovery()).filter(([id]) => Object.hasOwn(next, id)));
+    config.update({ personalRecoveryPending: next, personalRecoveryRenewed: renewed });
+  }
+  return open;
+}
+
+/** Of those, the ones whose key was renewed in the app and never confirmed: "I have stored it" is no answer there. */
+export const renewedRecoveryIds = () => pendingRecoveryIds().filter((id) => renewedRecovery()[id] === pendingRecovery()[id]);
+
+/** A new recovery key is a real key change (#402): the vault gets a new key, a new master password and the new key. */
+export async function renewPersonalRecovery(id, password) {
+  requireOpen();
+  if (!pendingRecoveryIds().includes(id)) throw new Error(t('Der Wiederherstellungsschlüssel ist schon bestätigt.'));
+  const { recoveryKey } = await files.updateKeyring(id, KEY_CHANGE.enabled ? { type: 'rekey', password } : { type: 'newRecovery' }, actor());
+  const entry = recoveryEntryId(files.get(id));
+  config.update({ personalRecoveryPending: { ...pendingRecovery(), [id]: entry }, personalRecoveryRenewed: { ...renewedRecovery(), [id]: entry } });
+  changed();
+  return { recoveryKey };
+}
+
+export function confirmPersonalRecovery(id) {
+  requireOpen();
+  const next = { ...pendingRecovery() };
+  const renewed = { ...renewedRecovery() };
+  delete next[id];
+  delete renewed[id];
+  config.update({ personalRecoveryPending: next, personalRecoveryRenewed: renewed });
+  changed();
+  return true;
+}
+
 export async function usePersonal({ folder }) {
   requireOpen();
   if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
-  if (personalPaths().length) throw new Error(t('Es gibt schon einen persönlichen Tresor – für mehr Ordnung darin Ordner anlegen.'));
+  if (personalPaths().length) {
+    // The same vault again: the wizard's first try had a wrong master password, the vault is listed already (#400).
+    const again = (await personalInfo(folder || defaultPersonalFolder()).catch(() => null))?.path;
+    const listed = again && personalPaths().includes(again) && [...(files?.entries?.values() || [])].find((e) => e.path === again);
+    if (listed) return { id: listed.id };
+    throw new Error(t('Es gibt schon einen persönlichen Tresor – für mehr Ordnung darin Ordner anlegen.'));
+  }
   const info = await personalInfo(folder || defaultPersonalFolder());
   requirePersonalLocation(info);
   if (!info.exists) throw new Error(t('Dort liegt kein persönlicher Tresor.'));
@@ -167,6 +226,14 @@ async function bindPersonalKey(entry, { force = false } = {}) {
   config.update({ personalDeviceKeys: { ...config.get().personalDeviceKeys, [entry.path]: (await safeStorage.encryptStringAsync(blob)).toString('base64') } });
 }
 
+/** After a key change (#402): the device binding holds the old key – renewed with the PIN just entered, otherwise dropped. */
+export async function rebindPersonalKey(entry) {
+  if (!entry?.path || !personalPaths().includes(entry.path)) return;
+  const { [entry.path]: _old, ...keys } = config.get().personalDeviceKeys || {};
+  config.update({ personalDeviceKeys: keys });
+  await bindPersonalKey(entry).catch(() => {});
+}
+
 /** A correct PIN unlocks every personal vault on this device whose key was bound here before. */
 export async function unlockPersonalWithPin(pin) {
   for (const entry of personalEntries()) {
@@ -189,7 +256,16 @@ async function unlockPersonalEntry(entry, pin) {
   decipher.setAAD(Buffer.from(`keevault-personal|${entry.id}`));
   decipher.setAuthTag(data.subarray(data.length - 16));
   const raw = Buffer.concat([decipher.update(data.subarray(0, data.length - 16)), decipher.final()]);
-  await entry.vault.unlock(new Uint8Array(raw));
+  try {
+    await entry.vault.unlock(new Uint8Array(raw));
+  } catch (e) {
+    // The key was changed on another device (#402): the binding is useless now and goes; the master password opens it.
+    if (e.name === 'UnlockError') {
+      const { [entry.path]: _old, ...keys } = config.get().personalDeviceKeys || {};
+      config.update({ personalDeviceKeys: keys });
+    }
+    throw e;
+  }
   changed();
 }
 

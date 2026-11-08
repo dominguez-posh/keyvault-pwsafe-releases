@@ -11,6 +11,7 @@ import { itemDetail, itemForm } from '../../extension/core/ui-item.js';
 import { t, setLanguage } from '../../extension/core/i18n.js';
 import { expiryState } from '../../extension/core/health.js';
 import { Auth, ARM_SCOPE } from './auth.js';
+import { isShortPin, MIN_PIN_LENGTH } from './pin-rule.mjs';
 
 const VERSION = '0.1.0';
 const LOCK_AFTER_MS = 5 * 60_000;
@@ -110,7 +111,7 @@ function setPinScreen() {
   const input = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN') });
   const again = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN wiederholen') });
   const go = async () => {
-    if (input.value.length < 4) return toast(t('Die PIN braucht mindestens {n} Zeichen', { n: 4 }), 'error');
+    if (isShortPin(input.value)) return toast(t('Die PIN braucht mindestens {n} Zeichen', { n: MIN_PIN_LENGTH }), 'error');
     if (input.value !== again.value) return toast(t('Die PINs stimmen nicht überein'), 'error');
     await call(async () => {
       await auth.setPin(input.value);
@@ -138,7 +139,11 @@ function pinScreen(error) {
     } catch (e) {
       return pinScreen(e.message);
     }
-    return openMain();
+    // #475: a PIN shorter than the rule, set earlier, still unlocks – with the request to change it.
+    const short = isShortPin(input.value);
+    await openMain();
+    if (short) toast(t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern'), 'error');
+    return undefined;
   };
   input.addEventListener('keydown', (e) => e.key === 'Enter' && go());
   setChildren(root, h('div', { class: 'screen' },
@@ -331,6 +336,7 @@ function settingsSheet() {
         { label: t('Abbrechen') },
         { label: t('Speichern'), primary: true, onClick: async () => {
           try {
+            if (isShortPin(next.value)) throw new Error(t('Die PIN braucht mindestens {n} Zeichen', { n: MIN_PIN_LENGTH }));
             if (await Auth.hasPin()) await auth.restore(current.value);
             await auth.setPin(next.value);
             toast(t('PIN gespeichert'));

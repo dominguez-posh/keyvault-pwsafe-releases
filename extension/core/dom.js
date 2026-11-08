@@ -55,6 +55,7 @@ const PATHS = {
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
   caret: '<path d="m9 18 6-6-6-6"/>',
+  type: '<path d="M4 7V4h16v3M9 20h6M12 4v16"/>',
   chevronDown: '<path d="m6 9 6 6 6-6"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
@@ -224,4 +225,29 @@ export function confirmDialog(title, text, { confirmLabel = t('OK'), danger = fa
     ]);
     dialog.addEventListener('close', () => { if (!answered) resolve(false); });
   });
+}
+
+/**
+ * #439: shows a PIN problem in `box` (an alert element). A message with a waiting time ("… 30 Sekunden warten") counts the
+ * seconds down and hides itself when the time is over; any other message just stays. Works in every language: the one
+ * number in the message is the time.
+ */
+export function showPinProblem(box, message) {
+  clearInterval(box._pinTimer);
+  box.hidden = false;
+  const found = /\d+/.exec(message);
+  if (!found) { box.textContent = message; return; }
+  const end = Date.now() + Number(found[0]) * 1000;
+  const render = () => {
+    const left = Math.ceil((end - Date.now()) / 1000);
+    if (left <= 0 || !box.isConnected) {
+      clearInterval(box._pinTimer);
+      box.hidden = true;
+      box.textContent = '';
+      return;
+    }
+    box.textContent = message.replace(found[0], String(left));
+  };
+  render();
+  box._pinTimer = setInterval(render, 1000);
 }

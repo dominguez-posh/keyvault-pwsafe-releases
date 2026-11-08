@@ -1,6 +1,6 @@
 {
   "name": "keyvault-pwsafe",
-  "version": "0.9.28",
+  "version": "0.9.30",
   "description": "Passwort- und Passkey-Tresor auf Azure Key Vault mit Entra-ID-Anmeldung: Desktop-App und Browser-Erweiterung",
   "type": "module",
   "main": "desktop/main.js",
@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node scripts/start.mjs",
     "demo": "node scripts/start.mjs --demo",
-    "smoke": "node scripts/start.mjs --smoke-test && node scripts/start.mjs --demo --smoke-test",
+    "smoke": "node scripts/smoke.mjs",
     "test": "node --test",
     "check": "node scripts/check.mjs",
     "ext:key": "node scripts/extension-key.mjs",
@@ -41,6 +41,7 @@
   "build": {
     "appId": "com.kvpwsafe.desktop",
     "productName": "Keevault",
+    "beforePack": "scripts/before-pack.cjs",
     "directories": {
       "output": "release",
       "buildResources": "installer"

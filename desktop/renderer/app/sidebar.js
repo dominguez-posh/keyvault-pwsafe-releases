@@ -2,6 +2,7 @@
 
 import { h, icon, iconButton, setChildren, toast, formatDateTime } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
+import { sharedNames, shownVaultHost } from '../../../extension/core/session-meta.js';
 import { call } from './ipc.js';
 import { panes } from './layout.js';
 import { busyContainers, items, logos, st, ui } from './state.js';
@@ -13,6 +14,7 @@ import { renderList, visibleItems } from './list.js';
 import { adminFootButton, applyViewClass, mainMenuButton, pimHeadButton } from './main-menu.js';
 import { contextMenu } from './menus.js';
 import { adminMode, deviceMode, modeSwitch } from './modes.js';
+import { askPendingRecovery, pendingRecoveryVault } from './personal.js';
 import { reloadAll } from './shell.js';
 import { containerActions, containerMenu, refreshContainer } from './vault-menu.js';
 
@@ -154,6 +156,7 @@ export function renderSidebar() {
     onclick: () => select({ view, containerId: null }),
   }, icon(iconName), h('span', { class: 'nav-label' }, label), h('span', { class: 'count' }, count));
   // The personal vault has its own place right below the views; the vault list shows the others.
+  const sameName = sharedNames(st.containers);
   const vaultRow = (c) => {
     const refresh = iconButton('refresh', t('Aktualisieren'), (e) => {
       e.stopPropagation();
@@ -176,7 +179,9 @@ export function renderSidebar() {
         title: [c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
         onclick: () => select({ view: 'container', containerId: c.id }),
       // Personal vault: the person first, then where it lives (OneDrive, iCloud, Dropbox …); other vaults the other way round.
-      }, ...(c.personal ? [containerIcon(c), sourceBadge(c)] : [sourceBadge(c), containerIcon(c)]), h('span', { class: 'nav-label' }, c.name),
+      }, ...(c.personal ? [containerIcon(c), sourceBadge(c)] : [sourceBadge(c), containerIcon(c)]), h('span', { class: 'nav-label' }, c.name,
+        // Name from the vault itself, or two vaults with the same name (#479): the host tells them apart.
+        shownVaultHost(c, sameName) ? h('span', { class: 'nav-host' }, shownVaultHost(c, sameName)) : null),
       c.error ? h('span', { class: 'badge danger' }, '!') : c.locked ? icon('lock', 13) : h('span', { class: 'count' }, c.count ?? '')),
       refresh);
   };
@@ -194,7 +199,7 @@ export function renderSidebar() {
     nav('all', deviceMode() ? t('Alle Assets') : t('Alle Einträge'), 'shield', items.filter((i) => (i.type === 'server') === deviceMode()).length),
     nav('favorites', t('Favoriten'), 'star', items.filter((i) => i.favorite && (i.type === 'server') === deviceMode()).length),
     deviceMode() ? null : nav('passkeys', t('Passkeys'), 'key', items.filter((i) => i.rpIds.length).length),
-    personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow)) : null,
+    personal.length ? h('div', { class: 'personal-slot' }, ...personal.map(vaultRow), recoveryDue()) : null,
     h('div', { class: 'nav-section' }, h('span', {}, t('Tresore')), h('span', { class: 'spacer' }), containers.length > 1 ? vaultFinder() : null,
       iconButton('plus', t('Tresor hinzufügen oder erstellen'), containerMenu)),
     containers.length ? vaultList(containers) : h('p', { class: 'muted small pad' }, t('Noch keine Tresore. Mit + hinzufügen oder erstellen.')),
@@ -213,6 +218,12 @@ export function renderSidebar() {
       }
     } }, icon('unlock', 14), t('Key-Vault-Tresore anmelden')) : null,
   );
+}
+
+/** The recovery key of the personal vault is not confirmed yet: stays until it is (#399). */
+function recoveryDue() {
+  const c = pendingRecoveryVault();
+  return c ? h('button', { type: 'button', class: 'notice warn recovery-due', onclick: () => askPendingRecovery(c) }, icon('key', 14), t('Wiederherstellungsschlüssel bestätigen')) : null;
 }
 
 /**

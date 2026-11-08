@@ -6,6 +6,7 @@ import { t } from '../../extension/core/i18n.js';
 import { demo, forcedTheme, here, smokeTest } from './boot.js';
 import { config, opened, quitting, setQuitting, setWin, win } from './state.js';
 import { lockNow, send } from './session.js';
+import { bringToFront } from './focus.js';
 
 /**
  * View settings: zoom of the window content and the transparency of the whole window (programs behind it shine through).
@@ -49,9 +50,7 @@ export let tray = null;
 
 export function showWindow() {
   if (!win) createWindow();
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
+  bringToFront(win);
 }
 
 /** Icon next to the clock: the app (passkeys via Windows and the browser) keeps running without a window. */
@@ -143,7 +142,7 @@ export function createWindow() {
 
 /** Every start begins in the normal mode: admin mode is switched on deliberately, with the PIN, each time. */
 export function startInNormalMode() {
-  if (config.get().adminTools) config.update({ adminTools: false, pimButton: false });
+  if (config.get().adminTools || config.get().showOthersPrivate) config.update({ adminTools: false, pimButton: false, showOthersPrivate: false });
 }
 
 // Other modules read these bindings directly and change them through the setters (imports are read-only).

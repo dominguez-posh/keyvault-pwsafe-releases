@@ -110,6 +110,8 @@ export async function updateDialog(offered) {
   };
   updateListeners.add(draw);
   body.closest('dialog')?.addEventListener('close', () => updateListeners.delete(draw));
+  // No secret in it, and it follows a running download.
+  if (body.closest('dialog')) body.closest('dialog').dataset.keepOnLock = '1';
   if (offered) {
     draw(offered);
     return close;

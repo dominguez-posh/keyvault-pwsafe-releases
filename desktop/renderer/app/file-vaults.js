@@ -18,6 +18,8 @@ function authenticatorSelect() {
 
 const PASSKEY_ONLY_HINT = 'Kein Masterpasswort, kein Wiederherstellungscode: Die Datei öffnet sich nur mit einem Passkey (oder Windows Hello). Richte danach einen zweiten Passkey oder einen zweiten Admin ein, damit die Datei nicht verloren geht.';
 
+const SHARE_HINT = 'Eine geteilte Datei schützt vor Außenstehenden, nicht vor einem Mitglied mit Schreibzugriff auf die Freigabe. Für Teams mit getrennten Rechten empfehlen wir Azure Key Vault.';
+
 /** Prominent warning before a vault is stored as a local file: the file can simply be copied and taken away. */
 function fileRiskBox() {
   const accept = h('input', { type: 'checkbox' });
@@ -167,6 +169,8 @@ export async function membersDialog(c) {
     const admins = active.filter((m) => m.role === 'admin');
     setChildren(body,
       h('p', { class: 'muted' }, t('Die Datei öffnet sich nur mit Passkey oder Windows Hello. Jede Person meldet sich mit ihrer E-Mail-Adresse und ihrem eigenen Passkey an; Admins geben den Zugriff frei.')),
+      // #446: calm, permanent hint in the members view (no state, no repeat prompts); text only until the article's path is agreed.
+      h('div', { class: 'notice info share-hint' }, t(SHARE_HINT)),
       admins.length === 1 && me?.role === 'admin' && me.credentials?.length === 1
         ? notice(t('Es gibt keinen Wiederherstellungscode. Richte einen zweiten Passkey oder einen zweiten Admin ein, damit die Datei nicht verloren geht.'), 'warn') : null,
       admin ? h('label', { class: 'inline' }, h('input', { type: 'checkbox', checked: info.sharing, onchange: (e) => op({ type: 'sharing', enabled: e.target.checked },
@@ -177,7 +181,10 @@ export async function membersDialog(c) {
       ...(admin ? pending : []).map((m) => {
         let role = 'editor';
         return h('div', { class: 'member-row' },
-          h('div', { class: 'grow' }, h('b', {}, m.email), h('div', { class: 'muted small' }, t('Sicherheitscode {code}', { code: m.safetyCode }), ' · ', formatDateTime(m.requested))),
+          h('div', { class: 'grow' }, h('b', {}, m.email), m.invalid ? h('span', { class: 'badge danger invalid-entry' }, t('ungültiger Eintrag')) : null,
+            h('div', { class: 'muted small' }, t('Sicherheitscode {code}', { code: m.safetyCode }), ' · ', formatDateTime(m.requested)),
+            // #440: a signed grant that does not count here; a device without a floor may count it.
+            m.invalid ? h('div', { class: 'muted small' }, t('Dieses Konto hat einen signierten Eintrag, der hier nicht gilt (zurückdatiert oder ohne Admin-Recht signiert). Andere Geräte könnten ihn zählen – mit „Ablehnen“ austragen.')) : null),
           roleSelect(role, (v) => { role = v; }),
           h('button', { class: 'btn small primary', onclick: () => op({ type: 'approve', memberId: m.id, role }, t('{email} freigegeben', { email: m.email })) }, t('Freigeben')),
           h('button', { class: 'btn small', onclick: () => op({ type: 'reject', memberId: m.id }, t('Anfrage abgelehnt')) }, t('Ablehnen')));

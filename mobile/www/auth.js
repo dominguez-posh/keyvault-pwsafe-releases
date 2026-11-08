@@ -4,6 +4,7 @@
 // refresh token is kept only AES-GCM-encrypted with a key from the app PIN (PBKDF2) in the app's preferences.
 
 import { Preferences } from '@capacitor/preferences';
+import { isShortPin, MIN_PIN_LENGTH } from './pin-rule.mjs';
 
 export const CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46';
 export const KV_SCOPE = 'https://vault.azure.net/user_impersonation';
@@ -118,7 +119,7 @@ export class Auth {
 
   /** Sets (or changes) the PIN and stores the refresh token encrypted with it. */
   async setPin(pin) {
-    if (String(pin).length < 4) throw new Error('Die PIN braucht mindestens 4 Zeichen');
+    if (isShortPin(pin)) throw new Error(`Die PIN braucht mindestens ${MIN_PIN_LENGTH} Zeichen`);
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const key = await pinKey(pin, salt);
     const iv = crypto.getRandomValues(new Uint8Array(12));

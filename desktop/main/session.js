@@ -9,10 +9,12 @@ import { OfflineMirror } from '../offline.js';
 import { setLanguage, t } from '../../extension/core/i18n.js';
 import { demo, smokeTest } from './boot.js';
 import { auth, bridge, config, files, mcp, opened, setOpened, setVault, vault, win, windows } from './state.js';
+import { cancelQuestions } from './agents.js';
 import { lastBackup, pendingRestore, setLastBackup, setPendingRestore } from './backup.js';
 import { busySince, diag, timedFetch, timedToken } from './diag.js';
 import { scheduleSettingsSync } from './settings-sync.js';
 import { applyShortcuts, selectedKey, setSelectedKey } from './typing.js';
+import { viewerId } from './private.js';
 
 export class DemoAuth {
   account = null;
@@ -74,6 +76,8 @@ export function newSession() {
     // In-memory session: Key Vault responses never reach a disk cache – except the encrypted offline mirror.
     fetch: demo?.fetch || (offlineMode ? offlineMirror().replay : mirrorWanted() ? offlineMirror().record(timedFetch) : timedFetch),
     actor,
+    // #476: "Nur für mich" entries of other people stay out of every list (window, extension, MCP, bridge).
+    viewer: viewerId,
     adapters: { file: files },
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.
     multiTenant: true,
@@ -154,6 +158,7 @@ export function lockIfWindowsLocked() {
 
 export async function lockNow() {
   mcp?.revoke();
+  cancelQuestions();
   if (!opened && !auth.account) return;
   clearInterval(reconcileTimer);
   if (opened && !offlineMode) await vault.flushFastIndex().catch(() => {});

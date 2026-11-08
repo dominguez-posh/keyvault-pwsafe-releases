@@ -7,6 +7,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -47,6 +48,11 @@ namespace Keevault.Setup
         [DllImport("advapi32.dll")]
         private static extern void CredFree(IntPtr buffer);
 
+        // The app's rule (desktop/rdp-target.js RDP_HOST) character for character: ECMAScript keeps \w to ASCII letters,
+        // digits and underscore (otherwise it is any Unicode letter); \z is the real end (a "$" lets a final line break pass).
+        private static readonly System.Text.RegularExpressions.Regex HostPattern =
+            new System.Text.RegularExpressions.Regex(@"^[\w\[][\w.:\[\]-]*\z", System.Text.RegularExpressions.RegexOptions.ECMAScript);
+
         public static int Run()
         {
             string input;
@@ -57,7 +63,10 @@ namespace Keevault.Setup
             var port = int.TryParse(parts[1].Trim(), out var p) && p > 0 && p < 65536 ? p : 3389;
             var user = parts[2].Trim();
             var password = parts[3].TrimEnd('\r', '\n');
-            if (host.Length == 0) return 2;
+            // Same rule as the app (desktop/rdp-target.js): no option-like host reaches mstsc or the credential target.
+            if (host.Length == 0 || host.Length > 253 || !HostPattern.IsMatch(host)) return 2;
+            // Same characters as hasControl() there: control characters, DEL and the Unicode line separators.
+            if (user.Length > 512 || user.IndexOfAny(new[] { '\u007f', '\u2028', '\u2029' }) >= 0 || user.Any(c => c < ' ')) return 2;
 
             var target = "TERMSRV/" + host;
             var saved = Read(target);
