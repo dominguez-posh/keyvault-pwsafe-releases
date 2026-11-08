@@ -74,7 +74,7 @@ const LINE_LIMITS = {
   'desktop/main/smoke.js': 933, // measured after merging main into #455 (#470/#471/#472)
   'extension/core/ui-item.js': 900,
   'extension/core/filevault.js': 800,
-  'scripts/extension-smoke.mjs': 841, // #458 + #476 + popup-url + #459 combined (measured)
+  'scripts/extension-smoke.mjs': 843, // #458 + #476 + popup-url + #459 + #463 combined (measured)
 };
 const posixRel = (p) => relative(root, p).replace(/\\/g, '/');
 const under = (rel, prefix) => (prefix.endsWith('/') ? rel.startsWith(prefix) : rel === prefix);

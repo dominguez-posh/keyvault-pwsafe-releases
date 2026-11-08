@@ -149,6 +149,28 @@
     use.after(frame);
   }
 
+  // #496: a click on "Use passkey" while the tag still drops in and swings (about 2 s: the browser calls the button not
+  // visible then) is kept instead of refused, so the very first click asks for the PIN. The field opens only once the
+  // button has really been visible for 500 ms (#373/#401), and only if that happens within PIN_FRAME_WAIT: a covered tag
+  // still opens nothing while covered, and one that stays covered ends with the note, as before. The click signs nothing:
+  // the PIN in the extension's frame does, checked against that frame's own visibility (pinframe:clear).
+  let pinArmed = null;
+  function openPinWhenSeen(guard, use, sw, list, tag) {
+    if (guard?.clear()) return openPinFrame(use, sw, list);
+    if (pinArmed) return;
+    const cur = inline;
+    const until = Date.now() + PIN_FRAME_WAIT;
+    let tries = PIN_FRAME_WAIT / 100; // also by count: a stalled clock must not keep it looking forever
+    const tick = () => {
+      pinArmed = null;
+      if (inline !== cur || pill !== tag || pinBox) return; // answered, cancelled or replaced meanwhile
+      if (guard?.clear()) openPinFrame(use, sw, list);
+      else if (--tries <= 0 || Date.now() >= until) refuse(tag);
+      else pinArmed = setTimeout(tick, 100);
+    };
+    pinArmed = setTimeout(tick, 100);
+  }
+
   function pinFallback(box) {
     if (pinBox === box) openPromptWindow();
   }
@@ -245,7 +267,10 @@
 
     const use = el('button', 'primary', create ? (texts.savePasskey || 'Save') : (texts.usePasskey || 'Passkey'));
     use.type = 'button';
-    use.addEventListener('click', (e) => { if (trusted(e, pillGuard, tag)) (create ? savePasskey(inline.containerId) : info.pin ? openPinFrame(use, sw, list) : choosePasskey(inline.choice)); });
+    use.addEventListener('click', (e) => {
+      if (!create && info.pin) { if (e.isTrusted) openPinWhenSeen(pillGuard, use, sw, list, tag); return; } // #496
+      if (trusted(e, pillGuard, tag)) (create ? savePasskey(inline.containerId) : choosePasskey(inline.choice));
+    });
     const head = create ? el('div', 'title', texts.saveQuestion || 'Passkey') : null;
     tag.append(shieldBadge(), ...(head ? [head] : []), sw, list, use, links());
     ui().append(tag);
@@ -519,11 +544,14 @@
   // shadow root, but not generated content (#383). A page could otherwise test guesses at names without any input.
   const hide = (e, text) => { e.dataset.t = text; e.className += ' pc'; return e; };
   const watch = (surface) => globalThis.kvpwsafeVisibleGuard?.(surface) || null;
+  const refuse = (where) => {
+    const note = where?.querySelector?.('.user, .sub, .title');
+    if (note && texts.menuRefused) { if (note.className.split(' ').includes('pc')) note.dataset.t = texts.menuRefused; else note.textContent = texts.menuRefused; }
+  };
   const trusted = (e, guard, where) => {
     if (!e.isTrusted) return false;
     if (guard?.clear()) return true;
-    const note = where?.querySelector?.('.user, .sub, .title');
-    if (note && texts.menuRefused) { if (note.className.split(' ').includes('pc')) note.dataset.t = texts.menuRefused; else note.textContent = texts.menuRefused; }
+    refuse(where);
     return false;
   };
 
@@ -983,7 +1011,11 @@
     else look();
   }
 
-  const visibleInput = (sel) => { const e = document.querySelector(sel); return e && usable(e) ? e : null; };
+  // Microsoft keeps copies for password managers on its pages (#463): on the password page the name it already has as
+  // an invisible "loginfmt" (class moveOffScreen: opacity 0, aria-hidden, yet with a size), on the name page an invisible
+  // "passwd". They are never a step of the sign-in: the first field of the name that is really shown counts.
+  const offScreen = (e) => e.getAttribute('aria-hidden') === 'true' || e.classList.contains('moveOffScreen') || getComputedStyle(e).opacity === '0';
+  const visibleInput = (sel) => [...document.querySelectorAll(sel)].find((e) => usable(e) && !offScreen(e)) || null;
   // The page asks for an account (name field, account tiles) or a password – only then the bar makes sense.
   // Signing out (Microsoft's "Which account do you want to sign out of?") is not a sign-in: no bar, no auto sign-in.
   const SIGN_OUT_PATH = /\/(oauth2\/(v2\.0\/)?logout|logout\.srf|logoutsession|signout)/i;
@@ -1005,7 +1037,8 @@
     let busy = false;
     let timer = null;
     let observer = null;
-    const stop = () => { observer?.disconnect(); clearTimeout(timer); };
+    let poll = null;
+    const stop = () => { observer?.disconnect(); clearTimeout(timer); clearInterval(poll); };
     const next = () => {
       // Never "Sign in" with an empty password field (Microsoft only answers "Enter your password").
       const pwField = visibleInput('input[name=passwd]');
@@ -1018,8 +1051,8 @@
     const passkeyFirst = job.mode === 'microsoft' && (job.passkey || !job.password);
     let passwordPageAt = 0;
     const step = async () => {
-      if (busy || !alive) return;
-      if (Date.now() - started > 120_000) return stop();
+      if (!alive || Date.now() - started > 120_000) return stop();
+      if (busy) return;
       // The page turned out to be a sign-out (only recognisable by its heading): nothing is filled in here.
       if (MS_LOGIN_HOSTS.test(location.hostname) && signingOut()) { stop(); signedOut(); return; }
       busy = true;
@@ -1092,6 +1125,8 @@
     const begin = () => {
       observer = new MutationObserver(schedule);
       observer.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
+      // A step that leaves the page as it is (#463) must not wait for a change that never comes: looked at every second too.
+      poll = setInterval(schedule, 1000);
       schedule();
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', begin, { once: true });

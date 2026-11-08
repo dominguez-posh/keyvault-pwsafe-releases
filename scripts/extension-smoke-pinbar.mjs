@@ -37,8 +37,19 @@ export async function checkPinInBar({ send, evaluate, attach, open, shadowNode, 
     check(use, '#465: kein Passkey-Schild mit „Passkey verwenden“');
     check(!(await findTarget(`${ext}/prompt/prompt.html`)), '#465: eigenes Fenster statt der Leiste');
     if (!use) return;
-    await sleep(settle);
+    const shownAt = Date.now();
+    // #496: the very first click on the fresh page, as a person does it – right after the tag has dropped in (0.6 s),
+    // while it still swings. That one click must open the PIN field (once the tag has settled), not end in "Nichts
+    // eingefügt" and need a second click. No second click here.
+    await sleep(700);
     await clickNode(tab.sessionId, '.kvtag .primary');
+    check(await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag iframe.pinframe')), '#496: erster Klick öffnet kein PIN-Feld');
+    // The refusal is drawn by CSS into the account line (data-t, #383): read it from the attributes.
+    const subNode = await shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .switch .sub');
+    const attrs = subNode ? (await send('DOM.getAttributes', { nodeId: subNode }, tab.sessionId).catch(() => ({}))).attributes || [] : [];
+    const at = attrs.indexOf('data-t');
+    const subText = at >= 0 ? attrs[at + 1] : '';
+    check(!/Nichts eingefügt/.test(subText), `#496: erster Klick auf „Passkey verwenden“ abgewiesen (${subText})`);
     // Shown only after the worker reported our page in it (pinframe:ready); until then hidden, the tag "loading".
     const frameNode = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag iframe.pinframe:not([hidden])'));
     check(frameNode, '#465: Leiste klappt nicht auf (kein PIN-Rahmen oder nie als bereit gemeldet)');
@@ -63,6 +74,7 @@ export async function checkPinInBar({ send, evaluate, attach, open, shadowNode, 
     // By selector: the node id from above is stale once the tag has re-rendered or the document was fetched again.
     await clickNode(tab.sessionId, '.kvtag iframe.pinframe:not([hidden])');
     await sleep(1500);
+    await sleep(Math.max(0, shownAt + settle - Date.now())); // the frame swings with the tag: visible for 500 ms only after that
     const typePin = async (text) => {
       await evaluate(frame, 'document.querySelector("input.pin").focus(), true');
       await send('Input.insertText', { text }, tab.sessionId);

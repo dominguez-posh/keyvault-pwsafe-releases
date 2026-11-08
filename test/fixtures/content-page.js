@@ -27,11 +27,18 @@ function element(tag) {
   return e;
 }
 
-export function page({ host = 'shop.example', replies = {}, signIn = '' } = {}) {
+// query: the page's own fields for a selector (#463), in place of the fixed sign-in input.
+export function page({ host = 'shop.example', replies = {}, signIn = '', query = null } = {}) {
   const listeners = {};
   const created = [];
   class HTMLInputElement {
-    type = 'text'; autocomplete = 'username'; name = 'user'; maxLength = -1; isConnected = true; value = ''; form = null;
+    type = 'text'; autocomplete = 'username'; name = 'user'; maxLength = -1; isConnected = true; form = null;
+    // An accessor on the prototype like the browser's: the content script sets values through it (setValue).
+    get value() { return this.v ?? ''; }
+    set value(v) { this.v = v; }
+    focus() {}
+    dispatchEvent() {}
+    classList = { contains: () => false };
     getAttribute() { return null; }
     closest() { return null; }
     getBoundingClientRect() { return { left: 0, top: 0, bottom: 20, width: 100 }; }
@@ -42,8 +49,8 @@ export function page({ host = 'shop.example', replies = {}, signIn = '' } = {}) 
     createElement: (tag) => { const e = element(tag); created.push(e); return e; },
     createTextNode: (text) => ({ text }),
     // The sign-in pages: the one input the bar waits for (Microsoft: account name, Bastion: password), really on screen.
-    querySelector: (sel) => (signIn === 'ms' && sel === 'input[name=loginfmt]' ? signInput : null),
-    querySelectorAll: (sel) => (signIn === 'bastion' && sel === 'input' ? [signInput] : []),
+    querySelector: (sel) => (query ? query(sel)[0] || null : signIn === 'ms' && sel === 'input[name=loginfmt]' ? signInput : null),
+    querySelectorAll: (sel) => (query ? query(sel) : signIn === 'bastion' && sel === 'input' ? [signInput] : signIn === 'ms' && sel === 'input[name=loginfmt]' ? [signInput] : []),
   };
   const signInput = new HTMLInputElement();
   signInput.getBoundingClientRect = () => ({ left: 0, top: 0, bottom: 20, width: 100, height: 20 });
@@ -81,7 +88,7 @@ export function page({ host = 'shop.example', replies = {}, signIn = '' } = {}) 
   const requestAnimationFrame = (fn) => { frames.set(++frameId, fn); return frameId; };
   const cancelAnimationFrame = (id) => { frames.delete(id); };
   vm.runInNewContext(source, {
-    window: win, document, chrome, HTMLInputElement, globalThis: {}, console, setTimeout: signIn === 'bastion' ? () => 0 : setTimeout, clearTimeout, Event: class {}, requestAnimationFrame, cancelAnimationFrame,
+    window: win, document, chrome, HTMLInputElement, globalThis: {}, console, setTimeout: signIn === 'bastion' ? () => 0 : setTimeout, clearTimeout, setInterval, clearInterval, Event: class {}, requestAnimationFrame, cancelAnimationFrame,
     Date: class extends Date { static now() { return clock.start + clock.offset; } }, IntersectionObserver, getComputedStyle: (e) => ({ visibility: 'visible', ...e.computed }),
     location: { hostname: host, pathname: '/', href: `https://${host}/` }, sessionStorage: { getItem: () => null, setItem() {} },
     MutationObserver: class { observe() {} disconnect() {} },
@@ -91,7 +98,7 @@ export function page({ host = 'shop.example', replies = {}, signIn = '' } = {}) 
   const other = new HTMLInputElement();
   const button = element('button');
   return {
-    field, other, button, sent, document,
+    field, other, button, sent, document, Input: HTMLInputElement,
     // The background asks the page to show the save prompt (save:show).
     showSave: (info) => fromBackground({ type: 'save:show', info }, { id: 'test' }),
     // Any other message of the service worker; returns what the content script answered right away.

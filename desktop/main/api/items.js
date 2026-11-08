@@ -19,11 +19,14 @@ import { exportPin, requireFeature, requireOpen } from '../guards.js';
 import { changed, refreshAll, send } from '../session.js';
 import { autoTypeCalls, autoTypeText, autoTypeValue, selectedKey, setSelectedKey } from '../typing.js';
 import { othersView, setPrivacy } from '../private.js';
+import { scanScreenQr } from '../qr-scan.js';
 
 // Import: entries per block (progress and, in a file vault, one write each).
 const IMPORT_BLOCK = 50;
 
 export const itemsApi = {
+  // TOTP editor (#492): the QR code a website shows for two-factor setup, read from the screen; only the text comes back.
+  scanScreenQr: () => scanScreenQr(),
   async refresh() {
     requireOpen();
     const discoverError = await refreshAll();

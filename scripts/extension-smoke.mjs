@@ -18,6 +18,7 @@ import { checkPrivateFromExtension } from './extension-smoke-private.mjs';
 import { checkDetailCards } from './extension-smoke-detail.mjs';
 import { checkCardHover } from './extension-smoke-hover.mjs';
 import { checkUrlSchema } from './extension-smoke-url.mjs';
+import { checkMsPasswordPage, msPasswordPage } from './extension-smoke-mspw.mjs';
 import { checkForeignRedirect, checkJobBoundToTab, checkRememberedAccount, checkStartPage, checkVaultSearch } from './extension-smoke-mstab.mjs';
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const browser = arg('browser') || [
@@ -146,7 +147,7 @@ const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
 const sophosPage = `<!doctype html><meta charset="utf-8"><title>VPN Portal</title>
 <form onsubmit="return false" method="post"><input name="username" type="text" id="username"><input name="password" type="password" id="password" autocomplete="off">
 <input class="blue_btn" name="loginbutton" value="Login" type="submit"></form>`;
-const server = createServer((req, res) => req.url.startsWith('/go302?') ? res.writeHead(302, { location: new URL(req.url, 'http://x').searchParams.get('to') }).end() : res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
+const server = createServer((req, res) => req.url.startsWith('/go302?') ? res.writeHead(302, { location: new URL(req.url, 'http://x').searchParams.get('to') }).end() : res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspw') ? msPasswordPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 // A second port with the same pages: not a test origin below, so the copy treats it with the real checks (#367).
@@ -570,6 +571,7 @@ try {
     menuResult = await waitFor(async () => { const r = await evaluate(msMenu.sessionId, 'signedIn'); return r.password && r; }, 6000);  }
   check(!!menuResult?.user && !!menuResult?.password, `Feldmenü auf der Microsoft-Seite: Anmeldung bleibt stehen (${JSON.stringify(menuResult && { user: menuResult.user, password: !!menuResult.password })} ${JSON.stringify(menuState)})`);
   pageErrors(msMenu.sessionId, 'ms-menu');
+  await checkMsPasswordPage({ send, evaluate, open, waitFor, check, sleep, sw, port: server.address().port, sessionId: options.sessionId, personal }); // #463
 
   await checkSignInPages({ send, events, open, sw, waitFor, check, ext, options, personal, port: server.address().port, otherPort, shadowNode });
 

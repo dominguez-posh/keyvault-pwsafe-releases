@@ -6,6 +6,16 @@ GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Ver
 
 ## Unveröffentlicht
 
+## 0.9.31 – 2026-11-08
+- Passkey: Schon der erste Klick auf „Passkey verwenden“ öffnet die PIN-Abfrage. Bisher wurde ein schneller erster Klick während der Einblend-Animation abgewiesen („Nichts eingefügt“) (#496).
+- Microsoft-Anmeldung: Die Erweiterung trägt auf der Seite „Kennwort eingeben“ das Passwort wieder ein und geht danach zum Einmalcode (TOTP) weiter. Eine unsichtbare Kopie des Namensfelds hatte das blockiert (#463).
+- Einmalcode einrichten: Die Desktop-App kann den QR-Code (z. B. aus der Microsoft-Authenticator-Einrichtung) jetzt direkt vom Bildschirm lesen – Knopf „QR-Code scannen“ im Einmalcode-Feld, auch nach „Erneuern“. Das Bildschirmfoto wird nicht gespeichert (#492).
+
+### English
+- Passkey: the very first click on "Use passkey" opens the PIN prompt. Until now a quick first click during the slide-in animation was refused ("Nothing filled in") (#496).
+- Microsoft sign-in: on the "Enter password" page the extension fills in the password again and moves on to the one-time code (TOTP). A hidden copy of the name field had blocked it (#463).
+- One-time code setup: the desktop app can now read the QR code (e.g. from the Microsoft Authenticator setup) straight from the screen – button "Scan QR code" in the one-time code field, also after "Renew". The screenshot is not stored (#492).
+
 ## 0.9.30 – 2026-11-08
 - Sicherheit: Ein OTP-Secret lässt sich nach dem Setzen nicht mehr anzeigen, nur noch erneuern oder entfernen – auch nicht über KI-Agenten (MCP) oder die Erweiterung (#469).
 - Sicherheit: Vor jedem Klartext-Export fragt die App nach der App-PIN. Der persönliche Tresor lässt sich jetzt ebenfalls exportieren, mit denselben Hinweisen (#470, #473).
