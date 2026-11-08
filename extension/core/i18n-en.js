@@ -1655,6 +1655,8 @@ export default {
   'Neu in dieser Version': 'New in this version',
   'Neu seit deiner Version ({count} Updates)': 'New since your version ({count} updates)',
   'QR-Code auf der Seite scannen': 'Scan the QR code on the page',
+  'QR-Code auf dem Bildschirm scannen': 'Scan the QR code on the screen',
+  'Kein QR-Code auf dem Bildschirm gefunden. Bitte den QR-Code sichtbar neben Keevault anzeigen und erneut scannen.': 'No QR code found on the screen. Show the QR code next to Keevault and scan again.',
   'Kein QR-Code auf der sichtbaren Seite gefunden. Bitte den QR-Code ins Bild holen und erneut scannen.': 'No QR code found on the visible page. Scroll the QR code into view and scan again.',
   'Einmalcode aus QR-Code übernommen': 'One-time code taken from the QR code',
   'Bildschirmfoto fehlgeschlagen': 'Screenshot failed',

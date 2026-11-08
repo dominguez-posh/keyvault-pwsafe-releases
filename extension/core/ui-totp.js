@@ -26,7 +26,7 @@ export function resolveTotp(stored, choice = {}) {
  * Editor for one TOTP secret. Without a stored secret: an input (plus QR scan). With one: "gesetzt", "Erneuern" and
  * "Entfernen". The returned value() is what to save; check() validates a newly entered secret (error text or '').
  * @param {string} stored
- * @param {{ name?: string, scanQr?: () => Promise<string>, onChange?: () => void }} [opts]
+ * @param {{ name?: string, scanQr?: () => Promise<string>, scanQrScreen?: boolean, onChange?: () => void }} [opts]
  */
 export function totpEditor(stored, opts = {}) {
   const { set } = totpEditModel(stored);
@@ -38,13 +38,16 @@ export function totpEditor(stored, opts = {}) {
     input.type = input.type === 'password' ? 'text' : 'password';
     reveal.replaceChildren(icon(input.type === 'password' ? 'eye' : 'eyeOff'));
   });
-  // ctx.scanQr() (browser extension): reads the QR code the website shows when setting up two-factor sign-in.
-  const scan = opts.scanQr ? iconButton('qr', t('QR-Code auf der Seite scannen'), async () => {
+  // ctx.scanQr(): reads the QR code the website shows when setting up two-factor sign-in – the extension from the visible
+  // tab, the desktop app from the screen (scanQrScreen, #492).
+  const screen = !!opts.scanQrScreen;
+  const scan = opts.scanQr ? iconButton('qr', screen ? t('QR-Code auf dem Bildschirm scannen') : t('QR-Code auf der Seite scannen'), async () => {
     scan.disabled = true;
     try {
       const text = await opts.scanQr();
       if (!text) {
-        toast(t('Kein QR-Code auf der sichtbaren Seite gefunden. Bitte den QR-Code ins Bild holen und erneut scannen.'), 'error');
+        toast(screen ? t('Kein QR-Code auf dem Bildschirm gefunden. Bitte den QR-Code sichtbar neben Keevault anzeigen und erneut scannen.')
+          : t('Kein QR-Code auf der sichtbaren Seite gefunden. Bitte den QR-Code ins Bild holen und erneut scannen.'), 'error');
         return;
       }
       try {

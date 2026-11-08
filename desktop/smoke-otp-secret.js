@@ -4,6 +4,8 @@
 
 import { totpCode } from '../extension/core/totp.js';
 import { until } from './smoke-wait.js';
+import { setSmokeScreens } from './qr-decode.js';
+import { MS_STYLE_URI, screenWithQr } from './smoke-qr-image.js';
 
 const A = 'JBSWY3DPEHPK3PXP';
 const B = 'GEZDGNBVGY3TQOJQ';
@@ -51,6 +53,13 @@ export async function otpSecretCheck(ctx) {
     await js('document.querySelector(".detail-pane .item-form .totp-renew")?.click(); true');
     if (!(await until(() => js('!!document.querySelector(".detail-pane .item-form input[name=totp]")'), 3000))) return fail('"Erneuern" opens no input');
     if (await js('document.querySelector(".detail-pane .item-form input[name=totp]").value !== ""')) fail('the input for the new secret is not empty');
+    // #492: the scan button reads the setup QR code from the screen (here a Microsoft-style test screen, never the real one).
+    const scanQr = 'document.querySelector(".detail-pane .item-form .totp-editor .icon-btn[aria-label*=QR]")';
+    if (!(await js(`!!${scanQr}`))) fail('#492: the TOTP editor offers no QR scan');
+    setSmokeScreens(async () => [screenWithQr({ scale: 1.25 })]);
+    await js(`${scanQr}?.click(); true`);
+    if (!(await until(() => js(`document.querySelector(".detail-pane .item-form input[name=totp]").value === ${JSON.stringify(MS_STYLE_URI)}`), 8000))) fail('#492: the QR code on the screen was not taken into the input');
+    setSmokeScreens(null);
     await js(`(() => { const i = document.querySelector(".detail-pane .item-form input[name=totp]"); i.value = ${JSON.stringify(B)}; i.dispatchEvent(new Event("input")); return true; })()`);
     if (!(await submit())) return fail('saving after "Erneuern" did not return to the detail view');
     stored = await getItem(saved.id);
@@ -68,6 +77,7 @@ export async function otpSecretCheck(ctx) {
       else fail('older version did not open');
     } else fail('no older version in the history');
   } finally {
+    setSmokeScreens(null);
     await js('document.querySelector("dialog[open]")?.close(); true');
     await sleep(200);
   }

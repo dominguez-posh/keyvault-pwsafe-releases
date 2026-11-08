@@ -425,7 +425,7 @@ export function itemForm(item, ctx) {
     .map((r) => ({ label: r.querySelector('.portal-label').value, url: r.querySelector('.portal-url').value }))
     .filter((p) => p.url.trim());
   // #469: a set TOTP secret is never shown again (not even put into the field) – only replaced or removed.
-  const totp = totpEditor(it.totp, { name: 'totp', scanQr: ctx.scanQr });
+  const totp = totpEditor(it.totp, { name: 'totp', scanQr: ctx.scanQr, scanQrScreen: ctx.scanQrScreen });
   const startFolder = it.folder || (ctx.isNew && ctx.defaultFolder) || '';
   // folderFree false: the vault's admin has not enabled creating folders – choose among existing ones only.
   const folder = ctx.folderFree === false

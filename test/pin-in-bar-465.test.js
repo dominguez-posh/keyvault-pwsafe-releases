@@ -156,6 +156,41 @@ test('content script: a covered "Use passkey" button opens no frame (#401)', asy
   assert.ok(!p.created.some((e) => e.className === 'pinframe'));
 });
 
+const tick = () => new Promise((r) => setTimeout(r, 150)); // the kept click looks again every 100 ms
+
+test('content script (#496): the first click while the tag still drops in opens the PIN field once it is really visible', async () => {
+  const p = page({ replies: pinOffer() });
+  p.passkeyRequest();
+  await flush();
+  p.click('primary'); // right away: the browser has not called the button visible yet
+  await tick();
+  assert.ok(!p.created.some((e) => e.className === 'pinframe'), 'nothing before it is visible');
+  p.browserSays(true);
+  p.wait(300);
+  await tick();
+  assert.ok(!p.created.some((e) => e.className === 'pinframe'), 'nor before 500 ms of it');
+  p.wait(300);
+  await tick();
+  const f = p.created.find((e) => e.className === 'pinframe');
+  assert.ok(f, 'the first click is enough');
+  assert.ok(!p.sent.includes('cs:webauthnSelect'), 'nothing signed without the PIN');
+});
+
+test('content script (#496): a kept click on a tag that stays covered opens nothing and ends with the note', async () => {
+  const p = page({ replies: pinOffer() });
+  p.passkeyRequest();
+  await flush();
+  p.browserSays(false);
+  p.click('primary');
+  p.wait(4100);
+  await tick();
+  assert.ok(!p.created.some((e) => e.className === 'pinframe'));
+  p.browserSays(true); // shown again later: the old click no longer counts
+  p.wait(600);
+  await tick();
+  assert.ok(!p.created.some((e) => e.className === 'pinframe'));
+});
+
 test('content script: with the PIN the account of a running sign-in is not used on its own', async () => {
   const p = page({ replies: pinOffer({ auto: true }) });
   p.passkeyRequest();

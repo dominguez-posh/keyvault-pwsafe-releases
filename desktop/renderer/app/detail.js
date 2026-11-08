@@ -155,6 +155,8 @@ function renderEditor() {
   const knownFolders = [...new Set([...folderList(folderTarget), ...modeItems(folderTarget).map((i) => i.folder).filter(Boolean)])].sort();
   const folderContainer = st.containers.find((c) => c.id === folderTarget);
   const form = itemForm(item, {
+    // TOTP: the setup QR code from the screen (#492), read in the main process.
+    scanQr: () => call('scanScreenQr'), scanQrScreen: true,
     // Moving a passkey: edit mode only (#453).
     onMovePasskey: (passkey) => movePasskeyDialog(item, passkey),
     passkeyDrag: (e, passkey) => {
