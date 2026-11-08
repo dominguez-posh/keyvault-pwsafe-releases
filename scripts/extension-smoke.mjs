@@ -10,11 +10,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyRegistrationResponse, verifyAuthenticationResponse } from '@simplewebauthn/server';
-import { extensionIdFromKey, foreignKeevault, hostResolverRules } from './smoke-browser-guard.mjs';
+import { exitIfRealApp, extensionIdFromKey, foreignKeevault, hostResolverRules } from './smoke-browser-guard.mjs';
 import { checkSignInPages, keysDoNotSign, typeInto } from './extension-smoke-signin.mjs';
 import { checkNoPinInPage } from './extension-smoke-pin.mjs';
-import { checkForeignRedirect, checkJobBoundToTab, checkRememberedAccount, checkStartPage } from './extension-smoke-mstab.mjs';
-
+import { checkOtpSecret } from './extension-smoke-otp.mjs';
+import { checkPrivateFromExtension } from './extension-smoke-private.mjs';
+import { checkDetailCards } from './extension-smoke-detail.mjs';
+import { checkCardHover } from './extension-smoke-hover.mjs';
+import { checkUrlSchema } from './extension-smoke-url.mjs';
+import { checkForeignRedirect, checkJobBoundToTab, checkRememberedAccount, checkStartPage, checkVaultSearch } from './extension-smoke-mstab.mjs';
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const browser = arg('browser') || [
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
@@ -24,6 +28,7 @@ const browser = arg('browser') || [
   '/usr/bin/microsoft-edge',
 ].find(existsSync);
 if (!browser) throw new Error('Kein Edge/Chrome gefunden (--browser=<pfad>)');
+exitIfRealApp(); // #346: never beside the real app (its native host and agents' MCP servers don't count)
 const out = arg('out');
 const profile = mkdtempSync(join(tmpdir(), 'kvpwsafe-smoke-'));
 // A copy without the fixed key: its own extension ID, and the app's native host only accepts the real ID. A Keevault
@@ -319,7 +324,7 @@ try {
   // Developer demo backend instead of the desktop app – set in the service worker itself, before any page asks the
   // app (a real Keevault on this machine must not be involved); restart so that the worker picks it up.
   const workerSession = await attach(worker.targetId);
-  await checkNoPinInPage({ send, evaluate, attach, open, shadowNode, waitFor, findTarget, check, ext, origin, workerSession });
+  await checkNoPinInPage({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession, settle: TAG_SETTLED }); // then #465
   await evaluate(workerSession, `chrome.storage.local.set({ devDemo: true, settings: { language: 'de' } }).then(() => true)`);
   await evaluate(workerSession, 'setTimeout(() => chrome.runtime.reload(), 50), true');
   await sleep(2500);
@@ -361,6 +366,12 @@ try {
   check(/^data:image\/(webp|png)/.test(fav.png || ''), `Favicon als Symbol: ${favicon}`);
   check(fav.svg === '' && fav.none === '', `Favicon: SVG/leer sollte '' ergeben (${favicon})`);
   pageErrors(popup.sessionId, 'popup');
+  await checkOtpSecret({ send, evaluate, open, waitFor, check, sleep, sw, ext, sessionId: options.sessionId, personal }); // #469
+  await checkPrivateFromExtension({ sw, check, sessionId: options.sessionId, personal }); // #476
+  await checkUrlSchema({ send, evaluate, open, waitFor, check, sleep, sw, ext, sessionId: options.sessionId, personal }); // only http(s) links
+  await checkDetailCards({ evaluate, waitFor, check, shot, popup });
+  await checkCardHover({ send, evaluate, waitFor, check, popup }); // #458
+  pageErrors(popup.sessionId, 'popup-detail');
 
   // Passkey registration through the bar at the top of the page ("Save in Keevault"), verified by an independent
   // RP library.
@@ -471,6 +482,16 @@ try {
           const g = await attach(prompt.targetId);
           await waitFor(() => evaluate(g, '!!document.querySelector(".choice")'));
           await shot(g, 'ext-prompt-get');
+          // #459: the window is a compact card at the top centre of the browser window, sized to its content; Enter/Esc are wired.
+          const card = await evaluate(g, 'JSON.stringify({ card: !!document.querySelector("#card.card"), noFooterLine: getComputedStyle(document.getElementById("footer")).borderTopWidth === "0px" })');
+          check(JSON.parse(card || '{}').card && JSON.parse(card || '{}').noFooterLine, `Passkey-Dialog ist keine Karte: ${card}`);
+          const pw = await send('Browser.getWindowForTarget', { targetId: prompt.targetId }).catch(() => null);
+          const bw = await send('Browser.getWindowForTarget', { targetId: tab.targetId }).catch(() => null);
+          if (pw?.bounds && bw?.bounds && bw.bounds.windowState === 'normal') {
+            check(pw.bounds.width <= 440, `Passkey-Karte zu breit: ${pw.bounds.width}`);
+            check(pw.bounds.height <= 720, `Passkey-Karte zu hoch: ${pw.bounds.height}`);
+            check(Math.abs((pw.bounds.left + pw.bounds.width / 2) - (bw.bounds.left + bw.bounds.width / 2)) < 80, 'Passkey-Karte nicht mittig über dem Browserfenster');
+          }
           await evaluate(g, 'document.querySelector(".choice").click(), true');
           const r3 = await waitFor(async () => (await evaluate(tab.sessionId, 'results')).get && evaluate(tab.sessionId, 'results'));
           check(r3?.get === 'resolved', `get() über das Fenster: ${r3?.get}`);
@@ -508,7 +529,7 @@ try {
   };
   const firstAccount = (n) => n.nodeName === 'BUTTON' && attrsOf(n).class === 'entry';
   const rememberBox = (n) => n.nodeName === 'INPUT' && attrsOf(n).type === 'checkbox' && !attrsOf(n).id;
-  let msResult = null;
+  await checkVaultSearch({ send, sleep, check, sessionId: ms.sessionId, findNode, findAll, attrsOf, barPoint, firstAccount });  let msResult = null;
   // The bar sits in a closed shadow root at the top right: click its first account (trusted click by position).
   for (let attempt = 0; attempt < 3; attempt++) {
     const p = await barPoint(ms.sessionId, firstAccount);
@@ -784,8 +805,8 @@ try {
   check(imported === 4, `Import: ${imported}`);
   check((await sw(options.sessionId, 'items')).length === before + 4, 'Importierte Einträge fehlen');
 
-  // English UI.
-  await sw(options.sessionId, 'updateSettings', { patch: { language: 'en' } });
+  // English UI. The Microsoft passkey above left editAfter (no toolbar popup took it): cleared, else the popup opens its form.
+  await Promise.all([sw(options.sessionId, 'updateSettings', { patch: { language: 'en' } }), evaluate(options.sessionId, 'chrome.storage.session.remove("editAfter").then(() => true)')]);
   const popupEn = await open(`${ext}/popup/popup.html`);
   const text = await waitFor(async () => {
     const tx = await evaluate(popupEn.sessionId, 'document.body.innerText');

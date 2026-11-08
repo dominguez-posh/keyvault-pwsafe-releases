@@ -28,7 +28,7 @@ export function contextMenu(event, actions) {
       return wrap;
     }
     return h('button', {
-      type: 'button', role: 'menuitem', class: a.danger ? 'danger' : '', disabled: a.disabled, dataset: { action: a.action || '' },
+      type: 'button', role: 'menuitem', class: a.danger ? 'danger' : '', disabled: a.disabled, title: a.title || undefined, dataset: { action: a.action || '' },
       onclick: async () => {
         close();
         try {

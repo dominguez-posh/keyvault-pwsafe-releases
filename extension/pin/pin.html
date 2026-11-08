@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Keevault</title>
+  <!-- #465: the app PIN field inside the Keevault tag at the top of the page. An extension frame: the page can neither
+       read nor script what is typed here. Same look as the tag (content/styles.js, .kvtag). -->
+  <style>
+    :root { color-scheme: light dark; --kv: #0f6cbd; --line: #dde2ec; --muted: #5d6779; --surface: #fff; --ink: #141a26; --err: #b42318; }
+    @media (prefers-color-scheme: dark) {
+      :root { --kv: #5aa6ff; --line: #2a3344; --muted: #9aa6ba; --surface: #171d28; --ink: #e8edf5; --err: #ff8a80; }
+    }
+    html, body { margin: 0; padding: 0; background: var(--surface); color: var(--ink); font: 13px "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+    * { box-sizing: border-box; }
+    main { display: grid; gap: 6px; padding: 3px; text-align: center; }
+    label { color: var(--muted); font-size: 12px; }
+    input.pin { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink);
+      font: inherit; font-size: 16px; letter-spacing: .3em; text-align: center; outline: none; }
+    input.pin:focus { border-color: var(--kv); box-shadow: 0 0 0 3px rgba(15,108,189,.16); }
+    .problem { color: var(--err); font-size: 12px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main id="main"></main>
+  <script src="../content/visible-guard.js"></script>
+  <script type="module" src="pin.js"></script>
+</body>
+</html>

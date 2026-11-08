@@ -7,12 +7,13 @@
 // The clipboard is checked through Keevault-Update.exe (clipboardHas clears it when the text matches) – never read
 // with Electron, never restored: after the run it is empty. Nothing is typed (auto-type: the helper's mode with
 // empty input only).
-
 import { readFile } from 'node:fs/promises';
 import { autotypeFallbackCheck } from './smoke-autotype-fallback.js';
 import { multiClearCheck } from './smoke-multi.js';
 import { passkeyPinAgentCheck, passkeyPinBrowserCheck, passkeyPinSettingCheck, passkeyPinWindowsCheck } from './smoke-passkey-pin.js';
-import { deleteRefusedCheck } from './smoke-delete-refused.js';
+import { deleteRefusedCheck, folderFirstCheck, renameCheck } from './smoke-delete-refused.js';
+import { moveAssetsCheck } from './smoke-move-assets.js';
+import { cutPasteCheck } from './smoke-cut-paste.js';
 import { deleteRaceCheck } from './smoke-delete-race.js';
 import { agentAdmissionCheck } from './smoke-agent-admission.js';
 import { versionChannelCheck, versionMixCheck } from './smoke-version.js';
@@ -21,10 +22,12 @@ import { firstStartCheck } from './smoke-first-start.js';
 import { recoveryKeyCheck } from './smoke-recovery-key.js';
 import { shareHintCheck } from './smoke-share-hint.js';
 import { extensionHintCheck } from './smoke-ext-hint.js';
-import { deliberateAnswerCheck, lockRefusesCheck, microsoftChoiceCheck, writeDetailsCheck } from './smoke-agent-questions.js';
+import { browserMoveCardCheck, deliberateAnswerCheck, lockRefusesCheck, microsoftChoiceCheck, writeDetailsCheck } from './smoke-agent-questions.js';
 import { releaseSignCheck } from './smoke-release.js';
+import { versionHistoryCheck } from './smoke-version-history.js';
+import { otpSecretCheck } from './smoke-otp-secret.js';
+import { headingCheck } from './smoke-headings.js';
 import { questionsGone, until } from './smoke-wait.js';
-
 export async function featureChecks(ctx) {
   const { js, sleep, errors, win, api, vault, config, changed, clipboardHas } = ctx;
   const fail = (area, message) => errors.push(`features/${area}: ${message}`);
@@ -77,6 +80,7 @@ export async function featureChecks(ctx) {
   }
   // A full run has a PIN by now (the personal vault flow); a partial run starts with the same state.
   if (ctx.areas.partial) await ctx.ensurePin();
+  const leftovers = await (await import('./smoke-leftovers.js')).leftoverGuard({ vault, kvc, changed }); // areas stay apart
   const created = [];
   const save = async (item) => {
     const saved = await vault.saveItem(kvc.id, item);
@@ -144,7 +148,7 @@ export async function featureChecks(ctx) {
     }
     if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[features] ${area} ${Date.now() - started} ms`);
     await closeDialogs();
-    await cleanUp();
+    await cleanUp(); await leftovers(area, fail);
     // A step that resized the window must not leave the next ones in a small one: back to the size of the start,
     // checked on the page too (Windows sometimes applies a late resize after the restore).
     await resizeTo(...baseSize, area);
@@ -184,6 +188,12 @@ export async function featureChecks(ctx) {
       // the arrow menu offers show/hide, large display, typing; "Show" works and the large display opens (display only).
       const pwRow = '[...document.querySelectorAll(".detail-pane .field")].find((f) => /^(Passwort|Password)$/.test(f.querySelector("label")?.textContent.trim()))?.querySelector(".act-row")';
       const hv = await js(`(() => { const r = ${pwRow}; return r ? { act: r.querySelector(".act-label")?.textContent, more: r.querySelector(".act-more")?.getAttribute("aria-haspopup"), masked: !r.querySelector(".value.secret").classList.contains("revealed") } : null; })()`);
+      // #458: focus inside a field lights up the whole field card (background and frame on the .field, not only on the value row).
+      const card = await js(`(() => { const r = ${pwRow}; const f = r?.closest(".field"); if (!f) return null; const idle = getComputedStyle(f).backgroundColor;
+        r.querySelector(".act-label").focus(); const c = getComputedStyle(f), rc = getComputedStyle(r);
+        const res = { changed: c.backgroundColor !== idle, frame: c.boxShadow !== "none", rowPlain: rc.backgroundColor === "rgba(0, 0, 0, 0)" };
+        r.querySelector(".act-label").blur(); return res; })()`);
+      if (!card || !card.changed || !card.frame || !card.rowPlain) fail('clipboard', `field card does not light up as a whole: ${JSON.stringify(card)}`);
       if (!hv || !/^(Sicher kopieren|Copy securely)$/.test(hv.act) || hv.more !== 'menu' || !hv.masked) fail('clipboard', `password row: ${JSON.stringify(hv)}`);
       else {
         await js(`${pwRow}.querySelector(".value.secret").click()`);
@@ -191,9 +201,26 @@ export async function featureChecks(ctx) {
         for (let i = 0; i < 10 && !pw; i++) { await sleep(300); pw = await clipboardHas('Cp-1'); }
         if (!pw) fail('clipboard', 'click on the password row did not reach the clipboard');
         if (!(await js('!document.querySelector(".detail-pane .value.secret").classList.contains("revealed")'))) fail('clipboard', 'password became visible by copying');
+        // #458: the whole card is the click target. Label click copies (secure path); arrow click does not.
+        const mk1 = `kv-card-${Date.now()}`;
+        if (await ctx.copyViaHelperExe(mk1)) {
+          await sleep(200);
+          await js(`${pwRow}.closest(".field").querySelector(":scope > label").click()`);
+          let viaLabel = false;
+          for (let i = 0; i < 10 && !viaLabel; i++) { await sleep(300); viaLabel = await clipboardHas('Cp-1'); }
+          if (!viaLabel) fail('clipboard', '#458: click on the label of the password card did not copy');
+          const mk2 = `kv-card2-${Date.now()}`;
+          await ctx.copyViaHelperExe(mk2);
+          await sleep(200);
+          await js(`${pwRow}.querySelector(".act-more").click()`);
+          await sleep(500);
+          if (!(await clipboardHas(mk2))) fail('clipboard', '#458: click on the arrow button copied (it must only open the menu)');
+          await js('document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))');
+          await sleep(200);
+        }
         await js(`${pwRow}.querySelector(".act-more").click()`);
         await sleep(300);
-        const acts = await js('[...document.querySelectorAll(".context-menu [data-action]")].map((b) => b.dataset.action).join(",")');
+        const acts =await js('[...document.querySelectorAll(".context-menu [data-action]")].map((b) => b.dataset.action).join(",")');
         if (acts !== 'reveal,big,type') fail('clipboard', `password menu entries: ${acts}`);
         await js('document.querySelector(".context-menu [data-action=reveal]").click()');
         await sleep(200);
@@ -362,9 +389,10 @@ export async function featureChecks(ctx) {
       if (again !== all) fail('vaultsearch', 'Esc did not show all vaults again');
     });
 
+    await step('navheading', () => headingCheck({ js, fail: (m) => fail('navheading', m) }));
     // ---- sharing hint in the members view of a file vault (#446)
     await step('sharehint', () => shareHintCheck({ js, fail: (m) => fail('sharehint', m), home: kvc.name }));
-    await step('exthint', () => extensionHintCheck({ js, fail: (m) => fail('exthint', m), simulate: ctx.simulateExtensionClients }));
+    await step('exthint', () => extensionHintCheck({ js, fail: (m) => fail('exthint', m), simulate: ctx.simulateExtensionClients, simulatePolicy: ctx.simulateExtensionPolicy }));
 
     // ---- vault order: drag a vault row before another one – the sidebar shows and keeps the new order
     await step('vaultorder', async () => {
@@ -796,7 +824,7 @@ export async function featureChecks(ctx) {
 
     await step('agententer', () => deliberateAnswerCheck({ ...ctx, fail }));
     await step('agentrevoke', () => agentAdmissionCheck({ ...ctx, fail }));
-    await step('agentwrite', () => writeDetailsCheck({ ...ctx, fail }));
+    await step('agentwrite', async () => { await writeDetailsCheck({ ...ctx, fail }); await browserMoveCardCheck({ ...ctx, fail }); });
     await step('agentlock', () => lockRefusesCheck({ ...ctx, fail, kvc }));
 
     // ---- AI agents: "never ask again" for one entry shows "Revoke AI approval" in its context menu, which removes it
@@ -907,8 +935,10 @@ export async function featureChecks(ctx) {
     });
 
     await step('multiclear', () => multiClearCheck({ js, sleep, fail, vaultName: kvc.name }));
-    await step('deleterefused', () => deleteRefusedCheck({ js, fail, vault, changed, kvc }));
+    await step('deleterefused', async () => { await deleteRefusedCheck({ js, fail, vault, changed, kvc }); await folderFirstCheck({ js, fail }); await renameCheck({ js, fail, vault, api, kvc }); });
     await step('deleterace', () => deleteRaceCheck({ js, fail, vault, changed, kvc }));
+    await step('moveassets', () => moveAssetsCheck({ js, fail, vault, api, changed, kvc }));
+    await step('cutpaste', () => cutPasteCheck({ js, fail, vault, api, changed, kvc }));
     // ---- passkey: drag it from the entry onto another login in the list – it moves there (after one confirmation)
     // ---- AI agents (#308, #315): passkey sign-ins and Microsoft sign-ins for tools are two switches, off by default
     await step('mcpextra', async () => {
@@ -1087,6 +1117,12 @@ export async function featureChecks(ctx) {
     await step('adminpin', async () => {
       await ctx.ensurePin();
       if (await api.updateSettings({ adminTools: true }).then(() => true, () => false)) fail('adminpin', 'settings patch switched admin mode on');
+      // #472 (review): the PIN, its counter and the personal device keys can't be written through a settings patch.
+      const pinBefore = JSON.stringify(config.get().appPin);
+      for (const key of ['appPin', 'pinGuard', 'personalDeviceKeys']) {
+        if (await api.updateSettings({ [key]: null }).then(() => true, () => false)) fail('adminpin', `settings patch wrote ${key}`);
+      }
+      if (JSON.stringify(config.get().appPin) !== pinBefore) fail('adminpin', 'a settings patch changed the app PIN');
       if (await api.activateAdminMode('0000').then(() => true, () => false)) fail('adminpin', 'wrong PIN switched admin mode on');
       ctx.resetPinGuard();
       if (config.get().adminTools) fail('adminpin', 'admin mode on without the right PIN');
@@ -1136,16 +1172,16 @@ export async function featureChecks(ctx) {
       await sleep(400);
       const msJob = await ctx.signInFor('login.microsoftonline.com');
       if (msJob?.username !== msUser) fail('admin', 'Entra tile does not sign in with the entry');
-      // Azure portal family opens in the account's tenant: an account of another tenant in the browser is not taken silently.
-      if (ctx.lastAdminUrl() !== 'https://entra.microsoft.com/#@contoso.onmicrosoft.com') fail('admin', `Entra not opened in the account's tenant (${ctx.lastAdminUrl()})`);
-      const tenantUrls = {
-        pim: ctx.adminCenterUrl('https://portal.azure.com/#view/Pim/Blade', 'a@Contoso.com'),
-        intune: ctx.adminCenterUrl('https://intune.microsoft.com', 'admin@fabrikam.com'),
-        m365: ctx.adminCenterUrl('https://admin.microsoft.com', 'a@contoso.com'),
-        noDomain: ctx.adminCenterUrl('https://intune.microsoft.com', 'CONTOSO\\admin'),
-      };
-      if (tenantUrls.pim !== 'https://portal.azure.com/#@contoso.com/view/Pim/Blade' || tenantUrls.intune !== 'https://intune.microsoft.com/#@fabrikam.com'
-        || tenantUrls.m365 !== 'https://admin.microsoft.com' || tenantUrls.noDomain !== 'https://intune.microsoft.com') fail('admin', `tenant links: ${JSON.stringify(tenantUrls)}`);
+      // #457: the portal family starts the sign-in with the entry's account (loginHint) in its tenant, so another account of
+      // the same tenant in the browser is not taken silently; the Azure Portal tile (the report) and Entra both do.
+      const hint = 'signin/index/@contoso.onmicrosoft.com?loginHint=smoke-admin%40contoso.onmicrosoft.com';
+      if (ctx.lastAdminUrl() !== `https://entra.microsoft.com/${hint}`) fail('admin', `Entra not opened with the entry's account (${ctx.lastAdminUrl()})`);
+      await js('document.querySelector(".detail-pane [data-admin-link=azure]")?.click()'); await sleep(400);
+      if (ctx.lastAdminUrl() !== `https://portal.azure.com/${hint}` || (await ctx.signInFor('login.microsoftonline.com'))?.username !== msUser) fail('admin', `Azure Portal not opened with the entry's account (${ctx.lastAdminUrl()})`);
+      const tenantUrls = { pim: ctx.adminCenterUrl('https://portal.azure.com/#view/Pim/Blade', 'a@Contoso.com'), m365: ctx.adminCenterUrl('https://admin.microsoft.com', 'a@contoso.com'),
+        noDomain: ctx.adminCenterUrl('https://intune.microsoft.com', 'CONTOSO\\admin') };
+      if (tenantUrls.pim !== 'https://portal.azure.com/signin/index/@contoso.com?loginHint=a%40Contoso.com#@contoso.com/view/Pim/Blade'
+        || tenantUrls.m365 !== 'https://admin.microsoft.com/?login_hint=a%40contoso.com' || tenantUrls.noDomain !== 'https://intune.microsoft.com') fail('admin', `account links: ${JSON.stringify(tenantUrls)}`);
       // The extension prefers the passkey (and uses it without a click) when the job says the account has one.
       if (msJob?.passkey !== false) fail('admin', `job of an account without passkey says passkey=${msJob?.passkey}`);
       await vault.saveItem(kvc.id, { ...(await vault.getItem(kvc.id, msEntry.id)), passkeys: [{ credentialId: 'AQID', rpId: 'login.microsoft.com', userName: msUser, privateKey: 'x' }] });
@@ -1191,29 +1227,28 @@ export async function featureChecks(ctx) {
         if (typed !== 'ok') fail('devices', `auto-type on an asset does not use its RDP account (${typed})`);
       }
       // Credential Guard (#29): no saved credential for mstsc, the linked account's password goes to the clipboard.
-      process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD = '1';
-      const cg = await api.connectServer({ containerId: kvc.id, id: win1.id, method: 'rdp' }).catch((e) => ({ error: e.message }));
-      delete process.env.KVPWSAFE_TEST_CREDENTIAL_GUARD;
+      // A copy refused because this machine's clipboard is not usable right now is not judged (smoke-protected-clipboard.js).
+      const cg = await (await import('./smoke-protected-clipboard.js')).connectWithCredentialGuard({ api, containerId: kvc.id, id: win1.id, copyViaHelperExe: ctx.copyViaHelperExe, clipboardHas });
       // Windows' dialog takes no typed input (#336): the password is on the clipboard right away.
-      if (fw && (!cg.credentialGuard || !cg.copied)) fail('devices', `RDP with Credential Guard: password not on the clipboard: ${JSON.stringify(cg)}`);
-      if (fw && !(await clipboardHas((await vault.getItem(kvc.id, fw.id)).password))) fail('devices', 'RDP with Credential Guard: the clipboard does not hold the password');
+      if (fw && !cg.environment && (!cg.credentialGuard || !cg.copied)) fail('devices', `RDP with Credential Guard: password not on the clipboard: ${JSON.stringify(cg)}`);
+      if (fw && !cg.environment && !(await clipboardHas((await vault.getItem(kvc.id, fw.id)).password))) fail('devices', 'RDP with Credential Guard: the clipboard does not hold the password');
       // … and a window explains why there is no automatic sign-in and what to do (#338): the account, Ctrl+V.
       const rdpHint = ctx.hintsShown.find((h) => h.kind === 'rdp');
-      if (fw && (!rdpHint || rdpHint.user !== (await vault.getItem(kvc.id, fw.id)).username || !rdpHint.content.steps.some((x) => /Strg\+V/.test(x)) || !/Credential Guard/.test(rdpHint.content.why) || (/\d/.test(rdpHint.content.note) && !rdpHint.content.note.includes('120')))) fail('devices', `RDP with Credential Guard: no explanation window, or not the longer clearing time of #349 (${JSON.stringify(rdpHint?.content)})`);
+      if (fw && !cg.environment && (!rdpHint || rdpHint.user !== (await vault.getItem(kvc.id, fw.id)).username || !rdpHint.content.steps.some((x) => /Strg\+V/.test(x)) || !/Credential Guard/.test(rdpHint.content.why) || (/\d/.test(rdpHint.content.note) && !rdpHint.content.note.includes('120')))) fail('devices', `RDP with Credential Guard: no explanation window, or not the longer clearing time of #349 (${JSON.stringify(rdpHint?.content)})`);
       // Auto-type into Windows' credential dialog: the same kind of window, naming the value that was copied.
       const secureHint = ctx.hintContent({ kind: 'secure', what: 'u' });
       if (!/Benutzername/.test(secureHint.title) || secureHint.steps.length !== 3 || !/Windows-Sicherheit/.test(secureHint.why)) fail('devices', `auto-type hint for the credential dialog: ${JSON.stringify(secureHint)}`);
       // The extension's copies go through the app's protected clipboard (#337).
-      if (!(await ctx.browserCopy('kv-smoke-ext-copy')) || !(await clipboardHas('kv-smoke-ext-copy'))) fail('devices', 'extension copy not on the protected clipboard');
-      await versionMixCheck(ctx, fail, clipboardHas); // #347
+      if (!cg.environment && (!(await ctx.browserCopy('kv-smoke-ext-copy')) || !(await clipboardHas('kv-smoke-ext-copy')))) fail('devices', 'extension copy not on the protected clipboard');
+      if (!cg.environment) await versionMixCheck(ctx, fail, clipboardHas); // #347
       if (!(await methods(lnx.id)).includes('ssh') || (await methods(lnx.id)).includes('rdp')) fail('devices', 'Linux server: SSH instead of RDP expected');
       if (!(await methods(vmw.id)).includes('mgmt')) fail('devices', 'VMware VM without vSphere client');
       if ((await vault.getItem(kvc.id, lnx.id)).server.port !== 22) fail('devices', 'Linux server: default port not 22');
       const conn = (id, method) => api.connectServer({ containerId: kvc.id, id, method });
       if ((await conn(win1.id, 'rdp')).method !== 'rdp') fail('devices', 'RDP failed');
-      if (!(await conn(lnx.id, 'ssh')).copied) fail('devices', 'SSH: password not handed over');
+      if (!cg.environment && !(await conn(lnx.id, 'ssh')).copied) fail('devices', 'SSH: password not handed over');
       const tv = await save({ type: 'server', title: 'Smoke TV', server: { kind: 'windows', host: 'tv', tvId: '123456789', tvPassword: 'tv-secret' } });
-      if (!(await conn(tv.id, 'teamviewer')).copied) fail('devices', 'TeamViewer: password not on the clipboard (#374)');
+      if (!cg.environment && !(await conn(tv.id, 'teamviewer')).copied) fail('devices', 'TeamViewer: password not on the clipboard (#374)');
       if ((await conn(vmw.id, 'mgmt')).method !== 'mgmt') fail('devices', 'management page failed');
       if ((await conn(az.id, 'bastion')).method !== 'bastion') fail('devices', 'Bastion failed');
       ctx.clearSignIns();
@@ -1358,9 +1393,15 @@ export async function featureChecks(ctx) {
       await js(`[...document.querySelectorAll(".sidebar .nav")].find((n) => n.textContent.includes(${JSON.stringify(kvc.name)}))?.click()`);
       await sleep(500);
     });
-
     // ---- release signing (#378, #417): refused in tests, the approval dialog with test files, counter-tests
     await step('releasesign', () => releaseSignCheck({ api, fail, sleep, release: ctx.release }));
+
+    // ---- version history (#450): "Last edited" unfolds into the timeline, an older version opens read-only
+    await step('versionhistory', () => versionHistoryCheck({ js, sleep, fail: (m) => fail('versionhistory', m), save, openItem }));
+    // ---- OTP secret (#469): never in the DOM, kept on save, "Erneuern" sets a new one and the code follows
+    await step('otpsecret', () => otpSecretCheck({ js, sleep, fail: (m) => fail('otpsecret', m), save, openItem, getItem: (id) => vault.getItem(kvc.id, id) }));
+    await step('fieldhover', async () => (await import('./smoke-field-hover.js')).fieldHoverCheck({ js, sleep, fail: (m) => fail('fieldhover', m), save, openItem, win, clipboardHas, setAdmin, isAdmin: () => !!config.get().adminTools })); // #458
+    await step('nurfuermich', async () => (await import('./smoke-private.js')).privateCheck({ js, sleep, fail: (m) => fail('nurfuermich', m), save, openItem, vault, api, kvc, config, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #476
 
     // ---- PIM on the unlock screen: off by default, switched on in Settings → View, then shown when locked
     // (last check: it locks the app and unlocks it again with the PIN)
@@ -1384,6 +1425,7 @@ export async function featureChecks(ctx) {
       changed();
       await sleep(800);
     });
+    await step('machinesetup', async () => (await import('./smoke-machine-setup.js')).machineSetupCheck({ api, fail })); // #395
   } finally {
     await cleanUp();
     config.update({ adminTools: false, theme: 'system', transparency: 'light' });

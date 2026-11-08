@@ -39,21 +39,9 @@ export async function signInFor(host, tab) {
 export const ADMIN_CENTER_HOSTS = ['admin.microsoft.com', 'entra.microsoft.com', 'intune.microsoft.com', 'security.microsoft.com', 'purview.microsoft.com',
   'admin.exchange.microsoft.com', 'admin.teams.microsoft.com', 'portal.azure.com'];
 
-/**
- * Azure portal, Entra and Intune open in the account's tenant (#@contoso.com): a browser signed in with an account of
- * another tenant then has to sign in again – otherwise Microsoft keeps that account silently and the extension never
- * gets to pick the chosen one.
- */
-const AZURE_PORTAL_HOSTS = ['portal.azure.com', 'entra.microsoft.com', 'intune.microsoft.com'];
+// The address for the entry's account: desktop/admin-center-url.js.
+export { adminCenterUrl } from '../admin-center-url.js';
 export let lastAdminUrl = '';
-export function adminCenterUrl(url, username) {
-  const domain = /^[^@\s]+@([a-z0-9-]+(?:\.[a-z0-9-]+)+)$/i.exec(String(username || '').trim())?.[1];
-  const u = new URL(url);
-  if (!domain || !AZURE_PORTAL_HOSTS.includes(u.hostname)) return url;
-  const view = u.hash.replace(/^#\/?/, '');
-  u.hash = `@${domain.toLowerCase()}${view ? `/${view}` : ''}`;
-  return u.toString();
-}
 
 // Other modules read these bindings directly and change them through the setters (imports are read-only).
 export function setSignInJobs(value) { signInJobs = value; return value; }

@@ -95,8 +95,8 @@ test('an invalid deadline value does not switch the deadline off', async () => {
   await guard.run(async () => {}); // clears the timer
 });
 
-test('#397: the deadline is 5 minutes, the slowest run on record ends in time and a hanging one does not', async (t) => {
-  assert.equal(SMOKE_DEADLINE_MS, 5 * 60_000);
+test('#397: the deadline is 8 minutes, the slowest run on record ends in time and a hanging one does not', async (t) => {
+  assert.equal(SMOKE_DEADLINE_MS, 8 * 60_000);
   assert.ok(SLOWEST_RUN_ON_RECORD_MS < SMOKE_DEADLINE_MS);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const slow = inProcess();
@@ -109,7 +109,7 @@ test('#397: the deadline is 5 minutes, the slowest run on record ends in time an
   hanging.guard.note('features/x');
   t.mock.timers.tick(SMOKE_DEADLINE_MS);
   assert.deepEqual(hanging.exits, [1]);
-  assert.match(hanging.lines[0], /^SMOKE FAIL\nrun did not finish within 300 s, last stage: features\/x/);
+  assert.match(hanging.lines[0], /^SMOKE FAIL\nrun did not finish within 480 s, last stage: features\/x/);
 });
 
 test('#397: a partial run never says SMOKE OK, a failed one says what it was', async () => {

@@ -108,7 +108,7 @@ export async function finishKeyChange(s, c, ck) {
         const aad = `${c.id}/${CONTAINER_SECRET}/logo`;
         const r = await open(meta.logo.sealed, aad);
         if (r.done) return;
-        await s.writeContainerMeta(kv, { logo: { sealed: await ck.encrypt(r.plain, aad) }, name: c.name });
+        await s.writeContainerMeta(kv, { logo: { sealed: await ck.encrypt(r.plain, aad) } });
         return;
       }
       const itemSecret = isItemSecret(secret);

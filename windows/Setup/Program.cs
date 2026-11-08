@@ -899,14 +899,14 @@ namespace Keevault.Setup
                 case ButtonKind.Primary:
                     normal = Theme.B(Owner(owner).Accent); hover = Theme.B(Owner(owner).AccentHover);
                     label.Foreground = Theme.B(Owner(owner).OnAccent);
-                    CornerRadius = new CornerRadius(8); Padding = new Thickness(26, 10, 26, 11); MinWidth = 160;
+                    CornerRadius = new CornerRadius(10); Padding = new Thickness(26, 10, 26, 11); MinWidth = 160;
                     label.HorizontalAlignment = HorizontalAlignment.Center;
                     break;
                 case ButtonKind.Secondary:
                     normal = Theme.B(Owner(owner).Surface); hover = Theme.B(Owner(owner).Surface2);
                     label.Foreground = Theme.B(Owner(owner).Text);
                     BorderBrush = Theme.B(Owner(owner).Border); BorderThickness = new Thickness(1);
-                    CornerRadius = new CornerRadius(8); Padding = new Thickness(20, 9, 20, 10); MinWidth = 120;
+                    CornerRadius = new CornerRadius(10); Padding = new Thickness(20, 9, 20, 10); MinWidth = 120;
                     label.HorizontalAlignment = HorizontalAlignment.Center;
                     break;
                 case ButtonKind.Ghost:

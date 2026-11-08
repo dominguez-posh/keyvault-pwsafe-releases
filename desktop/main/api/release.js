@@ -1,11 +1,12 @@
 // API: release signing (#378). The only place that imports the signing module (npm run check): no MCP tool, bridge
 // command or Windows-provider message leads here. The menu entries exist only when the app is allowed to sign.
 
-import { app, clipboard, dialog } from 'electron';
+import { app, clipboard, dialog, screen } from 'electron';
 import { smokeTest } from '../boot.js';
 import { win } from '../state.js';
 import { requireOpen } from '../guards.js';
-import { createReleaseSetup, createReleaseSigning, keyStore, openApprovalDialog, refusal, releaseApprovers, setupReleaseKey, signReleaseFolder, testKeyStore } from '../release-sign.js';
+import { cardPlacement, confirmInCard } from '../confirm-card.js';
+import { createReleaseRemoval, createReleaseSetup, createReleaseSigning, keyStore, openApprovalDialog, refusal, releaseApprovers, removeReleaseApprover, setupReleaseKey, signReleaseFolder, testKeyStore } from '../release-sign.js';
 
 export const releaseApi = {
   async releaseSigningStatus() {
@@ -51,6 +52,31 @@ export const releaseApi = {
     if (response === 0) clipboard.writeText(text);
     return { count: approvers.length };
   },
+  /**
+   * Menu "Release-Freigeber entfernen" (#437, lost key): the key to remove is picked here, in the main process (nothing
+   * comes from the window); another registered key confirms in the waiting-time dialog. → { count } | null
+   */
+  async removeReleaseApprover() {
+    requireOpen();
+    const why = refusal();
+    if (why) throw new Error(why);
+    const { approvers } = await releaseApprovers(keyStore());
+    if (approvers.length < 2) {
+      await dialog.showMessageBox(win, { type: 'info', message: 'Kein Freigeber entfernbar', detail: `Eingetragen: ${approvers.length}. Der letzte Freigeber lässt sich nicht entfernen; erst einen weiteren Sicherheitsschlüssel eintragen.`, buttons: ['OK'] });
+      return { count: approvers.length };
+    }
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'question', message: 'Welchen Release-Freigeber entfernen?',
+      detail: 'Danach bestätigt ein anderer eingetragener Sicherheitsschlüssel das Entfernen.',
+      buttons: [...approvers.map((a) => `${a.id} (${a.credentialId.slice(0, 12)}…)`), 'Abbrechen'], defaultId: approvers.length, cancelId: approvers.length,
+    });
+    const target = approvers[response];
+    if (!target) return null;
+    const done = await removeReleaseApprover(target.credentialId, win);
+    if (!done) return null; // cancelled in the dialog: nothing was changed
+    await dialog.showMessageBox(win, { type: 'info', message: `Release-Freigeber ${target.id} entfernt`, detail: `Eingetragene Sicherheitsschlüssel: ${done.approvers.length}.\n\nSein Element in UPDATE_KEYS (desktop/update-verify.js) gilt in ausgelieferten Versionen weiter: in der nächsten Version entfernen.`, buttons: ['OK'] });
+    return { count: done.approvers.length };
+  },
 };
 
 /**
@@ -60,5 +86,7 @@ export const releaseApi = {
 export function smokeRelease(deps) {
   if (!smokeTest || app.isPackaged) throw new Error('smokeRelease nur im Testlauf');
   return { sign: (extra) => createReleaseSigning({ refusal: () => null, ...deps, ...extra }),
-    setup: (extra) => createReleaseSetup({ refusal: () => null, ...deps, ...extra }), openApprovalDialog, testKeyStore };
+    setup: (extra) => createReleaseSetup({ refusal: () => null, ...deps, ...extra }),
+    remove: (extra) => createReleaseRemoval({ refusal: () => null, ...deps, ...extra }),
+    openApprovalDialog, testKeyStore, confirmInCard, cardPlacement, workAreas: () => screen.getAllDisplays().map((d) => d.workArea) };
 }

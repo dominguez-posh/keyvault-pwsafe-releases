@@ -1,6 +1,6 @@
-// Desktop only (#449): field rows of the detail view that act like in a password manager – the row is shaded on hover,
+// Desktop app and extension popup (#449, #464): field rows of the detail view that act like in a password manager – the row is shaded on hover,
 // the action stands as text on the right, an arrow button opens a menu. Everything calls existing paths
-// (ctx.copy, ctx.openUrl, ctx.typeInto); nothing new happens here.
+// (ctx.copy, ctx.openUrl, ctx.typeInto); nothing new happens here. ctx.fieldMenu (else ctx.menu) opens the arrow menu.
 
 import { h, icon, modal } from './dom.js';
 import { t } from './i18n.js';
@@ -18,17 +18,40 @@ export function actionRow(value, { ctx, label, action, run, menu }) {
       'aria-label': `${t('Weitere Aktionen')}: ${label}`,
       onclick: (e) => {
         e.stopPropagation();
-        ctx.menu(more, menu(), { below: true });
+        (ctx.fieldMenu || ctx.menu)(more, menu(), { below: true });
       },
     }, icon('chevronDown', 16));
   }
   const row = h('div', { class: 'field-row act-row' }, value, act, more);
+  row.actionRun = run;
   row.addEventListener('click', (e) => {
     if (e.target.closest('.act-more')) return;
     e.preventDefault();
     run();
   });
   return row;
+}
+
+/**
+ * #458: the whole field card is the click target. A click on the label or the empty space runs the action of the card's
+ * only row (several rows, e.g. more addresses, keep their own click); the row, the action text and the arrow button
+ * handle themselves. The card is focusable and Enter runs the action. A card with one row is marked `single`: its action
+ * text and arrow show as soon as the mouse is anywhere on the card; with several rows each row shows its own on hover.
+ */
+export function actionCard(label, ...rows) {
+  const only = rows.length === 1 ? rows[0] : null;
+  const card = h('div', { class: only ? 'field act-card single' : 'field act-card', tabindex: '0' }, h('label', {}, label), ...rows);
+  card.addEventListener('click', (e) => {
+    if (!only || e.target.closest('.act-row, button, a')) return;
+    e.preventDefault();
+    only.actionRun();
+  });
+  card.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || e.target !== card || !only) return;
+    e.preventDefault();
+    only.actionRun();
+  });
+  return card;
 }
 
 /** Large display of a value (display only): digits, letters and symbols in different tones, monospace. */
@@ -41,7 +64,7 @@ export function bigView(label, value) {
 /** Menu entry for typing into the previous window, only where the app offers it. */
 export const typeEntry = (ctx, what) => (ctx.typeInto ? [{ action: 'type', icon: 'fill', label: t('In Fenster eingeben'), onClick: () => ctx.typeInto(what) }] : []);
 
-/** Password and other hidden values: "Copy securely"; menu: show/hide, large display, type into a window. */
+/** Password and other hidden values: "Copy securely" (ctx.secureCopy === false: plain "Copy", the browser clipboard); menu: show/hide, large display, type into a window. */
 export function secretRow(label, value, ctx, { masked, copyValue, typeWhat }) {
   const span = h('span', { class: 'value secret' }, masked);
   let shown = false;
@@ -51,7 +74,7 @@ export function secretRow(label, value, ctx, { masked, copyValue, typeWhat }) {
     span.classList.toggle('revealed', shown);
   };
   return actionRow(span, {
-    ctx, label, action: t('Sicher kopieren'), run: () => ctx.copy(copyValue, label),
+    ctx, label, action: ctx.secureCopy === false ? t('Kopieren') : t('Sicher kopieren'), run: () => ctx.copy(copyValue, label),
     menu: () => [
       { action: 'reveal', icon: shown ? 'eyeOff' : 'eye', label: shown ? t('Ausblenden') : t('Anzeigen'), onClick: toggle },
       { action: 'big', icon: 'type', label: t('In großer Schrift anzeigen'), onClick: () => bigView(label, value) },
@@ -71,7 +94,7 @@ export function userRow(label, value, ctx, { typeWhat } = {}) {
 /** Address: "Open and fill"; menu: copy the address. */
 export function urlRow(url, ctx) {
   return actionRow(h('a', { href: '#', class: 'url' }, url), {
-    ctx, label: url, action: t('Öffnen und ausfüllen'), run: () => ctx.openUrl(url),
+    ctx, label: url, action: ctx.openLabel || t('Öffnen und ausfüllen'), run: () => ctx.openUrl(url),
     menu: () => [{ action: 'copy-url', icon: 'copy', label: t('Adresse kopieren'), onClick: () => ctx.copy(url, t('Adresse')) }],
   });
 }

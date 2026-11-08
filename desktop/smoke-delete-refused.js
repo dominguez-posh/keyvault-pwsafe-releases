@@ -3,6 +3,7 @@
 // reason. Part of the feature checks (desktop/smoke-features.js), which have reached their size limit.
 
 import { until } from './smoke-wait.js';
+import { internalSecretsCheck } from './smoke-internal-secrets.js';
 
 const AREA = 'deleterefused';
 const ASSET = 'Smoke Linked Asset';
@@ -10,6 +11,7 @@ const LOGIN = 'Smoke Linked';
 const SPARE = 'Smoke Spare';
 
 export async function deleteRefusedCheck({ js, fail, vault, changed, kvc }) {
+  await internalSecretsCheck({ fail, vault, kvc });
   const row = (title) => `[...document.querySelectorAll(".list li.row-item")].find((r) => r.querySelector(".row-title")?.firstChild?.textContent === ${JSON.stringify(title)})`;
   const present = async (id) => (await vault.summaries()).some((x) => x.containerId === kvc.id && x.id === id);
   const clearToast = () => js('document.getElementById("toast")?.classList.remove("show"); true');
@@ -63,3 +65,6 @@ export async function deleteRefusedCheck({ js, fail, vault, changed, kvc }) {
   }
   return undefined;
 }
+
+export { folderFirstCheck } from './smoke-folder-order.js';
+export { renameCheck } from './smoke-rename.js';

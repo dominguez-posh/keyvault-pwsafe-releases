@@ -69,7 +69,7 @@ const QUESTION = 'dialog[open] .question.agent-passkey';
 const CONFIRM_WAIT = 2500; // longer than the delay before "Allow" works (CONFIRM_DELAY_MS in renderer/app/requests.js)
 
 /** AI agent (MCP sign_in_with_passkey): the PIN is typed in the question in the app; the agent never types it. */
-export async function passkeyPinAgentCheck({ js, sleep, fail, config, changed, confirmAgentPasskey, ensurePin, resetPinGuard, openQuestionIds, api }) {
+export async function passkeyPinAgentCheck({ js, sleep, fail, config, changed, confirmAgentPasskey, ensurePin, resetPinGuard, openQuestionIds, api, win }) {
   const area = 'passkeypinagent';
   const pin = await ensurePin();
   const settle = (promise, ms = 700) => Promise.race([promise, sleep(ms).then(() => 'open')]);
@@ -95,6 +95,8 @@ export async function passkeyPinAgentCheck({ js, sleep, fail, config, changed, c
     const asked = confirmAgentPasskey(ASK);
     if (!(await until(() => js(`!!document.querySelector("${QUESTION}")`), 3000))) return fail(area, 'question did not open');
     if (!(await js(`!!document.querySelector("${QUESTION} .q-pin-input")`))) return fail(area, 'question without the PIN field');
+    // #468: the PIN field has the keyboard at once, no click needed (and no button has it).
+    if (!(await until(() => js('document.activeElement === document.querySelector("' + QUESTION + ' .q-pin-input")'), 1500))) fail(area, 'the PIN field of the question has no focus');
     const id = openQuestionIds().at(-1);
     // The window's answer needs the PIN too, an answer without it (any other caller of the IPC) is refused.
     if (await api.answerQuestion(id, 'allow', '').then(() => 'answered', (e) => e.name) !== 'PinRequired') fail(area, 'an answer without PIN was not refused');
@@ -121,6 +123,82 @@ export async function passkeyPinAgentCheck({ js, sleep, fail, config, changed, c
     if ((await settle(again)) !== 'open') fail(area, 'a second use went through without a PIN');
     await deny();
     if ((await settle(again, 3000)) !== false) fail(area, 'deny did not refuse the passkey use');
+    await questionsGone(js);
+
+    // 3b. #472: Enter in the PIN field confirms a PIN typed there after the dialog appeared (real key events through
+    // sendInputEvent), without waiting for the button's delay. Prefilled, too short or Enter outside the field: nothing.
+    const FIELD = `${QUESTION} .q-pin-input`;
+    const keys = async (text) => {
+      win.focus();
+      for (const ch of text) win.webContents.sendInputEvent({ type: 'char', keyCode: ch });
+      await sleep(150);
+    };
+    const enter = async () => {
+      win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+      win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+      await sleep(150);
+    };
+    const byEnter = confirmAgentPasskey(ASK);
+    if (!(await until(() => js(`!!document.querySelector("${FIELD}")`), 3000))) return fail(area, 'Enter: question did not open');
+    await js(`document.querySelector("${FIELD}").focus(); true`);
+    // Prefilled by a script, then Enter: stays open.
+    await js(`document.querySelector("${FIELD}").value = ${JSON.stringify(pin)}; true`);
+    await enter();
+    if ((await settle(byEnter)) !== 'open') fail(area, 'Enter confirmed a prefilled PIN');
+    // Prefilled except the last key, which is typed: still not typed in full.
+    await js(`document.querySelector("${FIELD}").value = ${JSON.stringify(pin.slice(0, -1))}; true`);
+    await keys(pin.slice(-1));
+    await enter();
+    if ((await settle(byEnter)) !== 'open') fail(area, 'Enter confirmed a PIN that was only partly typed');
+    await js(`document.querySelector("${FIELD}").value = ""; document.querySelector("${FIELD}").dispatchEvent(new InputEvent("input", { inputType: "deleteContentBackward" })); true`);
+    // Too short (typed, 5 of the 6 characters the rule needs, #475): stays open, and no wrong attempt is counted.
+    await keys(pin.slice(0, 5));
+    await enter();
+    if ((await settle(byEnter)) !== 'open') fail(area, 'Enter confirmed an incomplete PIN');
+    if (config.get().pinGuard) fail(area, `Enter on an incomplete PIN counted a wrong attempt: ${JSON.stringify(config.get().pinGuard)}`);
+    // Enter outside the field (on the dialog) does not confirm either.
+    await keys(pin.slice(5));
+    await js(`document.querySelector("${QUESTION}").focus(); true`);
+    await enter();
+    if ((await settle(byEnter)) !== 'open') fail(area, 'Enter outside the PIN field confirmed the request');
+    // Typed in full, Enter in the field: allowed, at once.
+    await js(`document.querySelector("${FIELD}").value = ""; document.querySelector("${FIELD}").dispatchEvent(new InputEvent("input", { inputType: "deleteContentBackward" })); document.querySelector("${FIELD}").focus(); true`);
+    await keys(pin);
+    const typed = await js(`document.querySelector("${FIELD}")?.value.length`);
+    if (typed !== pin.length) fail(area, `Enter: typing reached the PIN field with ${typed} of ${pin.length} characters`);
+    await enter();
+    if ((await settle(byEnter, 3000)) !== true) fail(area, 'Enter after typing the PIN did not allow the request');
+    await deny().catch(() => {});
+    await questionsGone(js);
+
+    // 3c. #472 (review): two requests open – Enter confirms neither, both show the hint, only a click works. When the
+    // dialogs shown change, the keys typed so far lapse: after the second request is gone, Enter on the PIN typed before
+    // does nothing until the PIN is typed again.
+    const nth = (i, sel = '') => `document.querySelectorAll("${QUESTION}")[${i}]${sel ? `?.querySelector("${sel}")` : ''}`;
+    const clearField = (i) => js(`(() => { const f = ${nth(i, '.q-pin-input')}; f.value = ""; f.dispatchEvent(new InputEvent("input", { inputType: "deleteContentBackward" })); f.focus(); return true; })()`);
+    const first = confirmAgentPasskey(ASK);
+    if (!(await until(() => js(`document.querySelectorAll("${QUESTION}").length === 1`), 3000))) return fail(area, 'two requests: first question did not open');
+    if (await js(`!!${nth(0, '.q-pin-multi:not([hidden])')}`)) fail(area, 'one request open, but the dialog asks for a click');
+    await js(`${nth(0, '.q-pin-input')}.focus(); true`);
+    await keys(pin);
+    const second = confirmAgentPasskey(ASK);
+    if (!(await until(() => js(`document.querySelectorAll("${QUESTION}").length === 2`), 3000))) return fail(area, 'two requests: second question did not open');
+    if (!(await js(`document.querySelectorAll("${QUESTION} .q-pin-multi:not([hidden])").length === 2`))) fail(area, 'two requests open: the dialogs do not say a click is needed');
+    await clearField(1);
+    await keys(pin);
+    await enter();
+    if ((await settle(second)) !== 'open' || (await settle(first, 100)) !== 'open') fail(area, 'Enter confirmed a request while two were open');
+    await js(`[...${nth(1)}.querySelectorAll(".q-actions .btn")].find((b) => /Ablehnen|Deny/.test(b.textContent))?.click(); true`);
+    if ((await settle(second, 3000)) !== false) fail(area, 'two requests: deny on the second did not refuse it');
+    if (!(await until(() => js(`document.querySelectorAll("${QUESTION}").length === 1 && !${nth(0, '.q-pin-multi:not([hidden])')}`), 2000))) fail(area, 'one request left: the click hint stays');
+    await js(`${nth(0, '.q-pin-input')}.focus(); true`);
+    await enter();
+    if ((await settle(first)) !== 'open') fail(area, 'Enter confirmed a PIN typed before the dialogs changed');
+    await clearField(0);
+    await keys(pin);
+    await enter();
+    if ((await settle(first, 3000)) !== true) fail(area, 'one request left: Enter after typing the PIN again did not allow it');
+    await deny().catch(() => {});
     await questionsGone(js);
 
     // 4. Switched off by the user: the dialog has no PIN field and "Allow" is enough, as before.
@@ -171,6 +249,8 @@ export async function passkeyPinWindowsCheck({ js, sleep, fail, config, changed,
     const a = await ask();
     if (!(await js(`!!document.querySelector("${DIALOG}")`))) return fail(area, 'confirmation dialog missing');
     if (!(await js('!!document.querySelector("dialog[open] .win-pin-input")'))) return fail(area, 'confirmation without the PIN field');
+    // #468: the PIN field has the keyboard at once, no click needed.
+    if (!(await until(() => js('document.activeElement === document.querySelector("dialog[open] .win-pin-input")'), 1500))) fail(area, 'the PIN field of the confirmation has no focus');
     await choose('');
     if ((await settle(a.answer)) !== 'open') fail(area, 'empty PIN signed');
     await choose('0000');
@@ -255,7 +335,9 @@ export async function passkeyPinBrowserCheck({ fail, config, changed, vault, ens
     // The item for the browser carries no private key; saving it from the browser keeps the stored one.
     const seen = await browserItem({ containerId: target.id, itemId: entry.id });
     if (!seen.passkeys?.length || seen.passkeys.some((k) => k.privateKey)) fail(area, 'the item for the browser carries the private key');
-    await browserSave({ containerId: target.id, item: { ...seen, title: 'Smoke PIN Browser (edited)' }, expectedVersion: seen.version });
+    const savedSeen = await browserSave({ containerId: target.id, item: { ...seen, title: 'Smoke PIN Browser (edited)' }, expectedVersion: seen.version });
+    // #466: the answer to save carries no private key either.
+    if (!savedSeen?.passkeys?.length || JSON.stringify(savedSeen).includes(passkey.privateKey)) fail(area, 'the save answer for the browser carries the private key');
     if ((await outcome(browserPasskeySign(msg({ pin })))) !== 'signed') fail(area, 'after saving from the browser the passkey no longer signs');
     // No PIN set: nothing is signed, whatever is sent.
     config.update({ appPin: null });

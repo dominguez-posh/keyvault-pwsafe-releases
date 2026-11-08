@@ -6,7 +6,7 @@
 
 import { KeyVaultClient, KV_SCOPE, normalizeVaultUrl, vaultHost } from './keyvault.js';
 import { AzureClient, ARM_SCOPE, GRAPH_SCOPE } from './azure.js';
-import { serializeItem, summaryFromSecret, parseItem, isItemSecret, newItemId } from './model.js';
+import { serializeItem, summaryFromSecret, parseItem, isItemSecret, newItemId, requireItemId } from './model.js';
 import { itemMatchesHost } from './match.js';
 import { filterPasskeys } from './webauthn.js';
 import { mapLimit, sleep, truncateBytes } from './util.js';
@@ -18,11 +18,13 @@ import { normalizeFolderIcon } from './folder-icons.js';
 import {
   ContainerKey, ContainerLockedError, setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries, mergeKeyrings,
 } from './protect.js';
+import { writeMeta, rememberMetaName, cleanVaultName } from './session-meta.js';
 import { rekeyKeyvault, finishKeyChange, dropStaleKey, currentKey } from './session-rekey.js';
+import { HiddenEntryError, requirePrivateRoot, requireVisible, visibleSummaries, visibleTo, withPrivacy } from './private.js';
 
 export const KEYRING_SECRET = 'pws-keyring';
 const KEYRING_TYPE = 'application/vnd.kvpwsafe.keyring+json; v=1';
-const SEALED_TAGS = ['n', 'u', 'h', 'rp', 'f', 'fav', 'otp', 'ic'];
+const SEALED_TAGS = ['n', 'u', 'h', 'rp', 'f', 'fav', 'otp', 'ic', 'po'];
 import { INDEX_SECRET, INDEX_TYPE, INDEX_TAG, shardName, isIndexSecret, encodeIndex, decodeIndex, sameSummaries } from './fastindex.js';
 
 const SEALED = 'kvpwsafe-sealed';
@@ -92,12 +94,14 @@ const isSealedValue = (value) => typeof value === 'string' && value.startsWith(`
 
 export class VaultSession {
   /**
-   * @param {{ getToken, store, fetch?, actor, adapters?: Record<string, object> }} options
+   * @param {{ getToken, store, fetch?, actor, viewer?, adapters?: Record<string, object> }} options – viewer(): object ID of
+   *   the signed-in person; "Nur für mich" entries of others are left out of summaries/getItem (#476, core/private.js).
    * adapters (per kind): containers(), summaries(id), getItem(id, itemId), saveItem(id, item, opts), deleteItem(id, itemId),
    * trash(id), restore(id, itemId), purge(id, itemId), history(id, itemId), getVersion(id, itemId, v),
    * passkeyCandidates(rpId), protectionInfo(id, rpId), unlock(id, params), lock(id), updateKeyring(id, op)
    */
-  constructor({ getToken, store, fetch: fetchImpl, actor, adapters = {}, multiTenant = false, onBusy = null, onProgress = null }) {
+  constructor({ getToken, store, fetch: fetchImpl, actor, viewer = () => '', adapters = {}, multiTenant = false, onBusy = null, onProgress = null }) {
+    this.viewer = async () => String((await viewer()) || '');
     // onProgress(containerId, done, total): listing progress of a full refresh (total = size of the last index,
     // 0 when unknown) – the desktop shows it as a progress card for big vaults.
     this.onProgress = onProgress;
@@ -258,10 +262,12 @@ export class VaultSession {
       const id = vaultHost(vaultUrl);
       const prev = map.get(id);
       const old = known.get(id);
+      const metaName = cleanVaultName(old?.metaName);
       map.set(id, {
         id,
         vaultUrl,
-        name: prev?.sources.includes('manual') && prev.name ? prev.name : c.name || prev?.name || id.split('.')[0],
+        metaName,
+        name: metaName || (prev?.sources.includes('manual') && prev.name ? prev.name : c.name || prev?.name || id.split('.')[0]),
         resourceId: c.resourceId || prev?.resourceId || old?.resourceId || null,
         tenantId: c.tenantId || prev?.tenantId || old?.tenantId || learned[id] || null,
         rbac: c.rbac ?? prev?.rbac ?? old?.rbac ?? null,
@@ -353,12 +359,8 @@ export class VaultSession {
     }
   }
 
-  async writeContainerMeta(client, patch) {
-    const current = (await this.readContainerMeta(client).catch(() => null))
-      || { format: CONTAINER_FORMAT, v: 1, id: crypto.randomUUID(), created: new Date().toISOString() };
-    const next = { ...current, ...patch, updated: new Date().toISOString() };
-    await client.setSecret(CONTAINER_SECRET, JSON.stringify(next), { contentType: CONTAINER_TYPE, tags: { kvpwsafe: 'container' } });
-    return next;
+  writeContainerMeta(client, patch) {
+    return writeMeta(this, client, patch, { secret: CONTAINER_SECRET, format: CONTAINER_FORMAT, type: CONTAINER_TYPE });
   }
 
   /** Key Vault client for a vault that is not (yet) a container of this session; silent tokens only. */
@@ -423,7 +425,8 @@ export class VaultSession {
     if (dataUrl && !isImageDataUrl(dataUrl)) throw new Error(t('Das Bild ist zu groß'));
     let logo = dataUrl || null;
     if (logo && (await this.readKeyring(c))) logo = { sealed: await (await currentKey(this, containerId)).encrypt(logo, `${containerId}/${CONTAINER_SECRET}/logo`) };
-    await this.writeContainerMeta(this.kv(c), { logo, name: c.name });
+    // Only the logo: the shared name is the managers' (renameInVault), not part of a logo change.
+    await this.writeContainerMeta(this.kv(c), { logo });
     return null;
   }
 
@@ -620,7 +623,7 @@ export class VaultSession {
     let done = 0;
     await mapLimit(items, 3, async (item) => {
       try {
-        await this.saveItem(containerId, { ...item, id: '' });
+        await this.saveItem(containerId, { ...item, id: '' }, { privacy: { owner: item.privateOwner, name: item.privateOwnerName } });
         await kv.deleteSecret(item.id);
         await this.purgeWhenDeleted(kv, item.id);
       } catch (e) {
@@ -725,6 +728,7 @@ export class VaultSession {
         const expected = sizes[c.id]?.items?.length || 0;
         const secrets = await this.kv(c).listSecrets(this.onProgress ? (n, pages) => this.onProgress(c.id, n, Math.max(expected, n), pages) : null);
         if (!secrets.some((s) => s.name === CONTAINER_SECRET)) this.writeContainerMeta(this.kv(c), { name: c.name }).catch(() => {});
+        else this.readContainerMeta(this.kv(c)).then((m) => m?.name && rememberMetaName(this, c.id, String(m.name))).catch(() => {});
         const isProtected = secrets.some((s) => s.name === KEYRING_SECRET);
         const key = isProtected ? await this.containerKey(c.id) : null;
         const items = [];
@@ -950,8 +954,13 @@ export class VaultSession {
     this.scheduleFastIndex(containerId, { own: true });
   }
 
+  /** The summaries the signed-in person sees (#476): `others` (see core/private.js) shows other people's private ones. */
+  async summaries({ maxAgeMs = 5 * 60_000, others = null } = {}) {
+    return visibleSummaries(await this.allSummaries({ maxAgeMs }), await this.viewer(), others);
+  }
+
   /** All item summaries; Key Vault indexes older than maxAgeMs are reloaded, adapters are asked live. */
-  async summaries({ maxAgeMs = 5 * 60_000 } = {}) {
+  async allSummaries({ maxAgeMs = 5 * 60_000 } = {}) {
     let index = await this.index();
     const kv = await this.kvContainers();
     const stale = kv.filter((c) => !index[c.id] || Date.now() - index[c.id].loadedAt > maxAgeMs).map((c) => c.id);
@@ -979,10 +988,14 @@ export class VaultSession {
     return parseItem({ ...bundle, value }, container.id);
   }
 
-  async getItem(containerId, id, { fresh = false } = {}) {
+  async getItem(containerId, id, { fresh = false, others = null } = {}) {
+    return requireVisible(await this.readItem(containerId, id, { fresh }), await this.viewer(), others);
+  }
+
+  async readItem(containerId, id, { fresh = false } = {}) {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).getItem(containerId, id);
-    const key = `item:${containerId}/${id}`;
+    const key = `item:${containerId}/${requireItemId(id)}`;
     const summary = await this.summary(containerId, id);
     if (!fresh) {
       const cached = await this.store.get(key);
@@ -1029,7 +1042,7 @@ export class VaultSession {
     if (c.personal) return { licensed: true, personal: true, code: '', vault: c.id, count: 0, limit: FREE_LIMIT, to: '', issued: '', reason: null };
     const key = await this.containerLicenseKey(c).catch(() => null);
     const check = key ? await verifyLicense(key, c.id) : { valid: false };
-    const count = (await this.summaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === containerId).length;
+    const count = (await this.allSummaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === containerId).length;
     return {
       licensed: check.valid, code: await requestCode(c.id), vault: c.id, count, limit: FREE_LIMIT,
       to: check.payload?.to || '', issued: check.payload?.issued || '', reason: key && !check.valid ? check.reason : null,
@@ -1056,34 +1069,51 @@ export class VaultSession {
   async requireLicenseForNew(c) {
     if (c.kind === 'remote') return; // the desktop app checks
     if (c.personal) return; // the personal vault is free
-    const count = (await this.summaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === c.id).length;
+    const count = (await this.allSummaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === c.id).length;
     if (count < FREE_LIMIT) return;
     const key = await this.containerLicenseKey(c).catch(() => null);
     if (!key || !(await verifyLicense(key, c.id)).valid) throw new LicenseLimitError();
   }
 
-  async saveItem(containerId, item, { expectedVersion } = {}) {
+  /** The stored entry's "Nur für mich" (tag po) and creator (document) – null parts when they cannot be read. */
+  async storedState(c, id, bundle) {
+    const sealed = bundle.tags?.e === '1';
+    const tags = sealed ? await this.openTags(await this.requireKey(c.id), `${c.id}/${id}`, bundle.tags) : bundle.tags || {};
+    const { privateOwner, privateOwnerName } = summaryFromSecret({ name: id, tags }, c.id);
+    const createdBy = await this.decodeBundle(c, { ...bundle, name: id }).then((i) => i.createdBy, () => '');
+    return { privateOwner, privateOwnerName, createdBy };
+  }
+
+  /** `privacy` ({ owner, name } or null) changes "Nur für mich" (#476); without it the stored entry's stays as it is. */
+  async saveItem(containerId, input, { expectedVersion, privacy } = {}) {
     const c = await this.container(containerId);
-    requireFolderDepth(item.folder);
+    requireFolderDepth(input.folder);
     const actor = await this.actor();
-    if (!item.id) await this.requireLicenseForNew(c);
+    if (!input.id) await this.requireLicenseForNew(c);
+    const known = input.id ? (await this.allSummaries()).find((s) => s.containerId === containerId && s.id === input.id) : null;
     // An existing entry keeps its type (#263): another type would drop its fields.
-    if (item.id) {
-      const known = (await this.summaries()).find((s) => s.containerId === containerId && s.id === item.id);
-      if (known && known.type !== (item.type || 'login')) throw new Error(t('Der Typ lässt sich nach dem Anlegen nicht mehr ändern.'));
+    if (known && known.type !== (input.type || 'login')) throw new Error(t('Der Typ lässt sich nach dem Anlegen nicht mehr ändern.'));
+    if (c.kind !== 'keyvault') {
+      const item = withPrivacy(input, known, privacy);
+      requirePrivateRoot(item);
+      return this.adapter(c).saveItem(containerId, item, { expectedVersion, actor });
     }
-    if (c.kind !== 'keyvault') return this.adapter(c).saveItem(containerId, item, { expectedVersion, actor });
     const kv = this.kv(c);
-    const id = item.id || newItemId();
-    if (item.id && expectedVersion) {
-      let current = null;
+    const id = input.id ? requireItemId(input.id) : newItemId();
+    let current = null;
+    if (input.id) {
       try {
         current = await kv.getSecret(id);
       } catch (e) {
         if (e.status !== 404) throw e;
       }
-      if (current && current.version !== expectedVersion) throw new ConflictError();
     }
+    if (current && expectedVersion && current.version !== expectedVersion) throw new ConflictError();
+    // #476 review: the flag and the creator from the stored entry as it is now – the index can be minutes old, and a save
+    // without expectedVersion (bridge, passkey signCount) must not drop a flag that was just set.
+    const stored = current ? await this.storedState(c, id, current) : null;
+    const item = withPrivacy(stored ? { ...input, createdBy: stored.createdBy || input.createdBy } : input, stored || known, privacy);
+    requirePrivateRoot(item);
     const plain = serializeItem({ ...item, id }, actor);
     let { value, contentType, tags } = plain;
     if (await this.isProtected(c)) {
@@ -1112,14 +1142,17 @@ export class VaultSession {
     }
     let room = items.length;
     if (!c.personal && c.kind !== 'remote') {
-      const count = (await this.summaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === c.id).length;
+      const count = (await this.allSummaries({ maxAgeMs: 60_000 })).filter((s) => s.containerId === c.id).length;
       const key = count + items.length > FREE_LIMIT ? await this.containerLicenseKey(c).catch(() => null) : null;
       if (count + items.length > FREE_LIMIT && !(key && (await verifyLicense(key, c.id)).valid)) room = Math.max(0, FREE_LIMIT - count);
     }
     const ok = [];
+    // #476 review: new entries never bring "Nur für mich" along (as in saveItem).
+    items = items.map((item) => withPrivacy({ ...item, id: '' }, null, undefined));
     const out = items.map((item, i) => {
       try {
         requireFolderDepth(item.folder);
+        requirePrivateRoot(item);
         if (i >= room) throw new LicenseLimitError();
         ok.push(i);
         return null;
@@ -1143,22 +1176,24 @@ export class VaultSession {
   /** The entries using this one (see linkedFrom) with how: [{ key, containerId, id, title, type, uses: ['rdp', …] }] (#307). */
   async linkedEntries(containerId, id) {
     const key = `${containerId}/${id}`;
-    const candidates = (await this.summaries()).filter((s) => s.containerId === containerId && s.id !== id && (s.type === 'server' || s.loginLinked));
+    // Every entry counts, also other people's "Nur für mich" ones (#476): an asset must not lose its account; their titles stay hidden.
+    const candidates = (await this.allSummaries()).filter((s) => s.containerId === containerId && s.id !== id && (s.type === 'server' || s.loginLinked));
     const out = [];
+    const me = await this.viewer();
     for (const s of candidates) {
-      const it = await this.getItem(containerId, s.id).catch(() => null);
+      const it = await this.readItem(containerId, s.id).catch(() => null);
       if (!it) continue;
       const sv = it.server || {};
       const uses = Object.entries({ rdp: sv.rdpLink, teamviewer: sv.tvLink, bastionLogin: sv.bastionLoginLink, bastionVm: sv.bastionVmLink, login: it.loginLink })
         .filter(([, v]) => v === key).map(([k]) => k);
-      if (uses.length) out.push({ key: `${containerId}/${s.id}`, containerId, id: s.id, title: it.title, type: it.type, uses });
+      if (uses.length) out.push({ key: `${containerId}/${s.id}`, containerId, id: s.id, title: visibleTo(s, me) ? it.title : t('Privater Eintrag eines anderen Mitglieds'), type: it.type, uses });
     }
     return out.sort((a, b) => a.title.localeCompare(b.title));
   }
 
   /** Refuses while other entries use this login (see linkedFrom). */
   async requireUnlinked(containerId, id) {
-    const s = (await this.summaries()).find((x) => x.containerId === containerId && x.id === id);
+    const s = (await this.allSummaries()).find((x) => x.containerId === containerId && x.id === id);
     if (s && s.type !== 'login') return;
     const users = await this.linkedFrom(containerId, id);
     if (users.length) {
@@ -1171,7 +1206,7 @@ export class VaultSession {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).deleteItem(containerId, id, await this.actor());
     // Already gone from the vault (another app): what is left is the entry in the list (#408).
-    await this.kv(c).deleteSecret(id).catch((e) => { if (e.status !== 404) throw e; });
+    await this.kv(c).deleteSecret(requireItemId(id)).catch((e) => { if (e.status !== 404) throw e; });
     await this.updateIndex(containerId, (list) => list.filter((i) => i.id !== id));
     await this.store.remove(`item:${containerId}/${id}`);
     return undefined;
@@ -1200,7 +1235,7 @@ export class VaultSession {
     // A linked login has no sign-in of its own – without its link it would be empty, a copy would carry the other entry's
     // password into the target vault.
     if (fromId !== toId && item.loginLink) throw new Error(t('„{title}“ nutzt die Anmeldung eines anderen Eintrags und lässt sich deshalb nicht in einen anderen Tresor verschieben. Erst die Verknüpfung lösen.', { title: item.title }));
-    const saved = await this.saveItem(toId, { ...item, id: '', folder: folder ?? item.folder, ...(server ? { server } : {}) });
+    const saved = await this.saveItem(toId, { ...item, id: '', folder: folder ?? item.folder, ...(server ? { server } : {}) }, { privacy: { owner: item.privateOwner, name: item.privateOwnerName } });
     await this.deleteItem(fromId, id);
     return dropped.length ? { ...saved, droppedLinks: dropped } : saved;
   }
@@ -1210,7 +1245,7 @@ export class VaultSession {
     const item = await this.getItem(containerId, id, { fresh: true });
     return this.saveItem(containerId, {
       ...item, id: '', title: t('{title} (Kopie)', { title: item.title }), passkeys: [], favorite: false, created: '', createdBy: '',
-    });
+    }, { privacy: { owner: item.privateOwner, name: item.privateOwnerName } });
   }
 
   // ---------------------------------------------------------------- backup (Key Vault containers, raw secrets)
@@ -1322,9 +1357,10 @@ export class VaultSession {
     return out;
   }
 
-  async trash(containerId) {
+  async trash(containerId, { others = null } = {}) {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).trash(containerId);
+    const me = await this.viewer();
     const deleted = await this.kv(c).listDeletedSecrets();
     const key = await this.containerKey(containerId);
     const out = [];
@@ -1334,6 +1370,7 @@ export class VaultSession {
         if (!key) continue;
         tags = await this.openTags(key, `${containerId}/${s.name}`, tags).catch(() => ({ n: s.name }));
       }
+      if (!visibleTo(summaryFromSecret({ ...s, tags }, containerId), me, others)) continue;
       out.push({
         id: s.name,
         title: tags.n || s.name,
@@ -1349,7 +1386,7 @@ export class VaultSession {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).restore(containerId, id, await this.actor());
     const kv = this.kv(c);
-    await kv.recoverDeletedSecret(id);
+    await kv.recoverDeletedSecret(requireItemId(id));
     // Recovery is asynchronous in Key Vault; wait until the secret is readable again.
     for (let i = 0; i < 15; i++) {
       try {
@@ -1367,22 +1404,28 @@ export class VaultSession {
   async purge(containerId, id) {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).purge(containerId, id);
-    return this.kv(c).purgeDeletedSecret(id);
+    return this.kv(c).purgeDeletedSecret(requireItemId(id));
   }
 
   async history(containerId, id) {
     const c = await this.container(containerId);
     if (c.kind !== 'keyvault') return this.adapter(c).history(containerId, id);
-    const versions = await this.kv(c).listSecretVersions(id);
-    return versions
+    const versions = await this.kv(c).listSecretVersions(requireItemId(id));
+    // Timestamps are whole seconds: equal ones keep the reverse of the list's order (it lists oldest first), so the newest stays on top.
+    return [...versions].reverse()
       .map((v) => ({ version: v.version, updated: (v.attributes?.updated || 0) * 1000, enabled: v.attributes?.enabled !== false }))
       .sort((a, b) => b.updated - a.updated);
   }
 
-  async getVersion(containerId, id, version) {
+  async getVersion(containerId, id, version, { others = null } = {}) {
     const c = await this.container(containerId);
+    // #476 review: an entry the index does not know counts as not visible (fail-closed), after one fresh look.
+    const find = async (maxAgeMs) => (await this.allSummaries({ maxAgeMs })).find((x) => x.containerId === containerId && x.id === id);
+    const summary = (await find()) || (await find(0));
+    if (!summary) throw new HiddenEntryError();
+    requireVisible(summary, await this.viewer(), others);
     if (c.kind !== 'keyvault') return this.adapter(c).getVersion(containerId, id, version);
-    return this.decodeBundle(c, await this.kv(c).getSecret(id, version));
+    return this.decodeBundle(c, await this.kv(c).getSecret(requireItemId(id), version));
   }
 
   async restoreVersion(containerId, id, version) {

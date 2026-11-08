@@ -73,3 +73,27 @@ export async function checkForeignRedirect(h) {
   h.check(JSON.stringify(await h.evaluate(portal.sessionId, 'signedIn')) === '{}', '#429 Weiterleitung über fremde Seite: gemerktes Konto meldet sich ohne Klick an');
   h.pageErrors(portal.sessionId, 'ms-foreign-redirect');
 }
+
+/** #460: the search of the account list finds the vault name too (demo: Persönlich has Microsoft 365, Team Infrastruktur the emergency account). */
+export async function checkVaultSearch({ send, sleep, check, sessionId, findNode, findAll, attrsOf, barPoint, firstAccount }) {
+  const searchBox = (n) => n.nodeName === 'INPUT' && attrsOf(n).type === 'search';
+  const tree0 = await send('DOM.getDocument', { depth: -1, pierce: true }, sessionId);
+  check(attrsOf(findNode(tree0.root, searchBox) || { attributes: [] }).placeholder === 'Konto oder Tresor suchen …', 'Microsoft-Leiste: Platzhalter der Suche passt nicht');
+  const visible = async () => {
+    const tree = await send('DOM.getDocument', { depth: -1, pierce: true }, sessionId);
+    return findAll(tree.root, (n) => firstAccount(n) && attrsOf(n).hidden === undefined).length;
+  };
+  const all = await visible();
+  const point = await barPoint(sessionId, searchBox);
+  if (!point || all < 2) { check(false, 'Microsoft-Leiste: Suchfeld nicht anklickbar oder nur ein Konto'); return; }
+  for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 }, sessionId);
+  const term = 'team infra';
+  await send('Input.insertText', { text: term }, sessionId);
+  await sleep(300);
+  check(await visible() === 1, 'Microsoft-Leiste: Suche nach dem Tresornamen zeigt nicht genau dessen Konto');
+  for (let i = 0; i < term.length; i++) {
+    for (const type of ['rawKeyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 }, sessionId);
+  }
+  await sleep(300);
+  check(await visible() === all, 'Microsoft-Leiste: Suche geleert, aber nicht alle Konten wieder sichtbar');
+}

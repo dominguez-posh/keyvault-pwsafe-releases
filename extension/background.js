@@ -5,6 +5,7 @@
 // always scoped to the sender's own origin (taken from the browser, never from the message).
 
 import { VaultSession } from './core/session.js';
+import { vaultChoices } from './core/session-meta.js';
 import { createCredential, getAssertion, effectiveRpId, supportsAlgorithms } from './core/webauthn.js';
 import { hostFromUrl, itemMatchesHost, rankCandidates, bastionFrameAllowed, confirmedOriginFits } from './core/match.js';
 import { watchTabs, mayStartSignIn, tabKey } from './lib/tabs.js';
@@ -19,7 +20,9 @@ import { setLanguage, t } from './core/i18n.js';
 import { createDemoBackend } from './core/demo.js';
 import * as auth from './lib/auth.js';
 import { getSettings, updateSettings } from './lib/settings.js';
-import { app, connect as connectApp, onEvent as onAppEvent, snapshot, status as appStatus } from './lib/desktop.js';
+import { app, appFeatures, connect as connectApp, onEvent as onAppEvent, snapshot, status as appStatus } from './lib/desktop.js';
+import { pinFrameCommands, pinPageCommand } from './lib/pin-frame.js';
+import { moveHandlers } from './lib/popup-moves.js';
 
 const PAGE_ORIGIN = chrome.runtime.getURL('').replace(/\/$/, '');
 const VS = 'vs:';
@@ -58,7 +61,7 @@ const ready = (async () => {
       getToken: auth.getToken,
       store: sessionStore,
       fetch: (url, init) => demo.fetch(url, init),
-      actor: async () => (await auth.account())?.username || '',
+      actor: async () => (await auth.account())?.username || '', viewer: async () => (await auth.account())?.localAccountId || '', // viewer: #476
     });
   } else {
     connectApp();
@@ -102,8 +105,11 @@ async function state() {
   const settings = await getSettings();
   const desktop = demo ? { connected: false } : await appStatus();
   const open = await isOpen();
+  const features = demo ? { history: true, assets: true, move: true, passkeyMove: true } : appFeatures();
   return {
     demo: !!demo,
+    // #464: history, linked assets, moving: in the demo always, with the app only when it reports the capability (else the popup hides them).
+    canHistory: features.history, canAssets: features.assets, canMove: features.move, canMovePasskey: features.passkeyMove,
     desktop,
     open,
     containers: open ? await containerList() : [],
@@ -238,7 +244,7 @@ function contentStrings() {
     lockedSub: t('Masterpasswort oder Passkey'),
     menuRefused: t('Nichts eingefügt: Das Menü war verdeckt, verschoben oder gerade erst erschienen. Bitte erneut klicken. Klappt das auf dieser Seite nie, füllt Strg+Umschalt+L die Anmeldung ein.'),
     passkey: t('Passkey'),
-    passkeyWait: t('Keevault bestätigt den Passkey …'),
+    passkeyWait: t('Keevault bestätigt den Passkey …'), pinLoading: t('PIN-Feld wird geladen …'),
     passkeyOk: t('Mit Passkey angemeldet'),
     passkeyCreated: t('Passkey in Keevault gespeichert'),
     usePasskey: t('Passkey verwenden'),
@@ -257,7 +263,7 @@ function contentStrings() {
     msSigningIn: t('Anmeldung als {name} …'),
     msOther: t('Anderes Konto'),
     msForget: t('Nicht mehr automatisch'),
-    msSearch: t('Konto suchen …'),
+    msSearch: t('Konto oder Tresor suchen …'),
     msNone: t('Kein Konto gefunden'),
     noUser: t('(ohne Benutzername)'),
     updateTitle: t('Passwort aktualisieren?'),
@@ -329,9 +335,8 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 
 const captureKey = (tabId) => `capture:${tabId}`;
 
-async function writableContainers() {
-  return (await vault.containers()).filter((c) => c.access?.write !== false && !c.locked && !c.error).map((c) => ({ id: c.id, name: c.name }));
-}
+// Names with the host where needed (#479).
+const writableContainers = async () => vaultChoices(await vault.containers(), (c) => c.access?.write !== false && !c.locked && !c.error);
 
 // Bastion: its sign-in form lives on these hosts (portal blade or shareable link); the VM comes from the tab's address.
 const BASTION_HOSTS = /(^|\.)(bastion\.azure\.com|reactblade\.portal\.azure\.net|portal\.azure\.net|portal\.azure\.com)$/i;
@@ -492,14 +497,15 @@ async function publicCandidates(list, pageUrl = '', preferUser = '') {
 }
 
 async function openPrompt(hash, tab, request) {
-  const width = 440;
-  const height = 600;
+  const width = 400;
+  const height = 360; // the card reports its real height after rendering (prompt:fit)
   let left;
   let top;
   try {
     const w = await chrome.windows.get(tab.windowId);
-    left = Math.max(0, w.left + w.width - width - 24);
-    top = w.top + 80;
+    // #459: top centre above the active browser window, where the page's badge sits.
+    left = Math.max(0, Math.round(w.left + (w.width - width) / 2));
+    top = w.top + 48;
   } catch {
     // Default position.
   }
@@ -557,12 +563,16 @@ async function webauthnRequest({ kind, options, mediation }, sender) {
   // A one-click sign-in (admin tile, Bastion, account chosen in the Microsoft bar) is running on this sign-in page:
   // its account's passkey comes first – and is used without a further click (the user started this sign-in).
   if (kind === 'get' && open) request.preferUser = await signInUser(sender);
-  // #439: with the PIN before every passkey use, the PIN is typed in this extension's own window: never the bar or the
-  // field menu in the page (a page can read keystrokes) – so the window opens for every sign-in.
+  // #439/#465: with the PIN before every passkey use, the PIN is typed in the extension's own frame inside the tag at the
+  // top of the page (lib/pin-frame.js), never in the page or the field menu (a page reads keystrokes). The window only
+  // without a passkey to offer there, or when the frame does not load.
   if (kind === 'get' && open && (await passkeyPinState()).required) {
     const found = await vault.passkeyCandidates(rpId, options.allowCredentials);
     if ((!found.length && !(await lockedProtected())) || request.conditional) return { fallback: true };
+    request.pinBar = found.length > 0;
     await saveRequest(request);
+    const bar = request.pinBar && (await inlineFor(request));
+    if (bar) return { inline: { ...bar, pin: true } };
     await openPrompt(`${kind}:${request.id}`, sender.tab, request);
     return { pending: request.id };
   }
@@ -845,6 +855,10 @@ const pageCommands = {
     return vault.summaries();
   },
   item: async ({ containerId, id, fresh }) => vault.getItem(containerId, id, { fresh }),
+  // Version history and one older version (#464): only where the vault object can read them (developer demo).
+  history: ({ containerId, id }) => (vault.history ? vault.history(containerId, id) : Promise.reject(new Error('history unavailable'))),
+  version: ({ containerId, id, version }) => (vault.getVersion ? vault.getVersion(containerId, id, version) : Promise.reject(new Error('history unavailable'))),
+  ...moveHandlers({ getVault: () => vault, app, isDemo: () => !!demo }), // linked assets and moving (#464)
   save: async ({ containerId, item, expectedVersion }) => vault.saveItem(containerId, item, { expectedVersion }),
   delete: ({ containerId, id }) => vault.deleteItem(containerId, id),
   tabContext: async ({ tabId }) => {
@@ -862,12 +876,18 @@ const pageCommands = {
   },
   /** Copy from an extension page (popup): protected through the app (#337). */
   copy: ({ text }) => secureCopy(String(text ?? '')),
+  /** The prompt window (passkey/PIN card) sizes itself to its content; nothing else may resize windows through here. */
+  'prompt:fit': async ({ height }, sender) => {
+    if (!sender.tab || !String(sender.url || '').startsWith(chrome.runtime.getURL('prompt/prompt.html'))) return;
+    await chrome.windows.update(sender.tab.windowId, { height: Math.round(Math.min(Math.max(Number(height) || 0, 220), 720)) });
+  },
   openPrompt: async ({ hash }) => openPrompt(hash, (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0] || {}),
   desktopStatus: () => appStatus(),
   desktopFocus: () => showApp(),
   import: (msg) => importItems(msg),
   'webauthn:details': (msg) => webauthnDetails(msg),
   'webauthn:approve': (msg) => webauthnApprove(msg),
+  ...pinFrameCommands({ loadRequest, saveRequest, approve: (msg) => webauthnApprove(msg), pinState: () => passkeyPinState() }),
   'webauthn:fallback': ({ requestId }) => finishRequest(requestId, { fallback: true }),
   'webauthn:cancel': ({ requestId }) => finishRequest(requestId, { error: { name: 'NotAllowedError', message: t('Vom Benutzer abgebrochen') } }),
 };
@@ -1078,7 +1098,7 @@ const contentCommands = {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !msg?.cmd) return undefined;
-  const fromPage = (sender.origin || new URL(sender.url).origin) === PAGE_ORIGIN;
+  const fromPage = (sender.origin || new URL(sender.url).origin) === PAGE_ORIGIN || pinPageCommand(sender, msg.cmd); // #465: dynamic origin
   const handler = fromPage ? pageCommands[msg.cmd] : contentCommands[msg.cmd];
   if (!handler || (!fromPage && !sender.tab)) return undefined;
   ready

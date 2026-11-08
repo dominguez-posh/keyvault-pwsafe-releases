@@ -1,6 +1,7 @@
 // Windows passkey provider: requests from Windows shown in the window, and its registration.
 
 import { app, shell, dialog } from 'electron';
+import { confirmInCard } from './confirm-card.js';
 import { t } from '../../extension/core/i18n.js';
 import { providerStatus, ensureProvider, machineSetupStatus } from '../windows-provider.js';
 import { smokeTest } from './boot.js';
@@ -43,19 +44,17 @@ export async function setupWindowsProvider() {
   const missing = [
     status?.installError || (config.get().windowsProvider && !machine.certTrusted)
       ? t('Passkey-Anbieter: Windows vertraut dem Zertifikat des Pakets noch nicht.') : null,
-    config.get().browserIntegration && !machine.edgePolicy ? t('Browser-Erweiterung: Die Richtlinie zur Installation in Edge/Chrome fehlt.') : null,
+    // #455: where the company sets the Edge policy, nothing is missing for Keevault: the IT distributes the extension.
+    config.get().browserIntegration && !machine.edgePolicy && !machine.policyBlocked && !machine.edgeCompany ? t('Browser-Erweiterung: Die Richtlinie zur Installation in Edge/Chrome fehlt.') : null,
   ].filter(Boolean);
   if (missing.length && config.get().machineSetupHint !== app.getVersion()) {
     config.update({ machineSetupHint: app.getVersion() });
-    const r = await dialog.showMessageBox(win, {
-      type: 'warning',
-      buttons: [t('Mit Administratorrechten einrichten'), t('Später')],
-      defaultId: 0,
-      cancelId: 1,
-      message: t('Für Keevault fehlt noch eine Einrichtung auf diesem Gerät.'),
-      detail: `${missing.join('\n')}\n\n${t('Das richtet eure IT einmal pro Gerät ein (Intune-Skript „Keevault-Geraet-Einrichten.ps1“) – oder du machst es jetzt mit Administratorrechten. Alles andere funktioniert schon.')}`,
-    });
-    if (r.response === 0) {
+    const setupNow = await confirmInCard({
+      title: t('Für Keevault fehlt noch eine Einrichtung auf diesem Gerät.'),
+      detail: `${missing.join('\n')}${config.get().browserIntegration && !machine.policyBlocked && (machine.edgeCompany || machine.chromeCompany) ? `\n${t('Browser-Erweiterung: Die Richtlinien setzt eure IT, Keevault legt dafür keine an.')}` : ''}\n\n${t('Das richtet eure IT einmal pro Gerät ein (Intune-Skript „Keevault-Geraet-Einrichten.ps1“) – oder du machst es jetzt mit Administratorrechten. Alles andere funktioniert schon.')}`,
+      go: t('Mit Administratorrechten einrichten'), cancel: t('Später'),
+    }, { parent: win });
+    if (setupNow) {
       await api.runMachineSetup().catch((e) => dialog.showErrorBox(t('Einrichtung fehlgeschlagen'), e.message));
       if (config.get().windowsProvider) status = await ensureProvider(`${app.getVersion()}.0`);
     }
@@ -65,15 +64,12 @@ export async function setupWindowsProvider() {
   if (status.migrated) config.update({ windowsProviderHint: false });
   if (!status.registered || status.enabled || config.get().windowsProviderHint) return;
   config.update({ windowsProviderHint: true });
-  const r = await dialog.showMessageBox(win, {
-    type: 'info',
-    buttons: [t('Windows-Einstellungen öffnen'), t('Später')],
-    defaultId: 0,
-    cancelId: 1,
-    message: t('Keevault ist als Passkey-Anbieter eingerichtet.'),
+  const openSettings = await confirmInCard({
+    title: t('Keevault ist als Passkey-Anbieter eingerichtet.'),
     detail: t('Schalte ihn einmal in Windows ein: Einstellungen → Konten → Passkeys → Erweiterte Optionen → „Keevault“. Danach steht er auch in anderen Browsern und Apps zur Verfügung.'),
-  });
-  if (r.response === 0) shell.openExternal('ms-settings:savedpasskeys');
+    go: t('Windows-Einstellungen öffnen'), cancel: t('Später'),
+  }, { parent: win });
+  if (openSettings) shell.openExternal('ms-settings:savedpasskeys');
 }
 
 // Other modules read these bindings directly and change them through the setters (imports are read-only).

@@ -27,6 +27,7 @@ import { applyBrowserIntegration } from './main/browser.js';
 import { excludeFromErrorReporting } from './main/clipboard.js';
 import { passkeyPin, pinGuard } from './main/guards.js';
 import { serve } from './main/passkey-window.js';
+import { bringToFront } from './main/focus.js';
 import { fileLocations, personalPaths, rebindPersonalKey, refreshFileLocations } from './main/personal.js';
 import { DemoAuth, actor, applyLanguage, changed, lockIfWindowsLocked, lockNow, newSession, offlineMode, send } from './main/session.js';
 import { scheduleSettingsSync } from './main/settings-sync.js';
@@ -111,7 +112,7 @@ app.whenReady().then(async () => {
       if (win.isMinimized()) win.restore();
       win.show();
       win.setAlwaysOnTop(true);
-      win.focus();
+      bringToFront(win);
     },
     notify: () => {
       send({ type: 'windows-request' });

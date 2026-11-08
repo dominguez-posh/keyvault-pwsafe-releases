@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Keevault",
   "short_name": "Keevault",
-  "version": "0.9.29",
+  "version": "0.9.30",
   "update_url": "https://github.com/dominguez-posh/keyvault-pwsafe-releases/releases/latest/download/update.xml",
   "description": "__MSG_extDescription__",
   "minimum_chrome_version": "116",
@@ -66,6 +66,19 @@
       ],
       "run_at": "document_start",
       "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "pin/pin.html"
+      ],
+      "matches": [
+        "https://*/*",
+        "http://localhost/*",
+        "http://*.localhost/*"
+      ],
+      "use_dynamic_url": true
     }
   ],
   "commands": {

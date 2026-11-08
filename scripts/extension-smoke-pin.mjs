@@ -3,7 +3,12 @@
 // the old path was closed to it, so this runs without the demo against an imitated app. It must run before the demo starts:
 // the worker's restart for the demo removes the imitation.
 
-/** What the service worker gets instead of the native port: an app that runs, is locked and has a PIN. */
+import { checkPinInBar } from './extension-smoke-pinbar.mjs';
+
+/**
+ * What the service worker gets instead of the native port: an app that runs, is locked and has a PIN. Kept in
+ * globalThis.__kvApp, so later checks can change its answers (a function answer gets the request's arguments).
+ */
 export const lockedAppWithPin = `(() => {
   chrome.runtime.connectNative = () => {
     const listeners = [];
@@ -11,19 +16,27 @@ export const lockedAppWithPin = `(() => {
       hello: { version: '0.0.0', opened: false },
       snapshot: { version: '0.0.0', opened: false, pinSet: true, containers: [], summaries: [] },
     };
+    globalThis.__kvApp = { answers, listeners };
     return {
       onMessage: { addListener: (fn) => listeners.push(fn) },
       onDisconnect: { addListener: () => {} },
-      postMessage: ({ id, cmd }) => setTimeout(() => {
-        const known = cmd in answers;
-        for (const fn of listeners) fn(known ? { id, ok: true, result: answers[cmd] } : { id, ok: false, error: { message: 'Unknown command' } });
+      postMessage: ({ id, cmd, ...args }) => setTimeout(() => {
+        let reply = { id, ok: false, error: { message: 'Unknown command' } };
+        if (cmd in answers) {
+          try {
+            reply = { id, ok: true, result: typeof answers[cmd] === 'function' ? answers[cmd](args) : answers[cmd] };
+          } catch (e) {
+            reply = { id, ok: false, error: { message: e.message } };
+          }
+        }
+        for (const fn of listeners) fn(reply);
       }, 0),
     };
   };
   return true;
 })()`;
 
-export async function checkNoPinInPage({ send, evaluate, attach, open, shadowNode, waitFor, findTarget, check, ext, origin, workerSession }) {
+export async function checkNoPinInPage({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession, settle }) {
   await evaluate(workerSession, lockedAppWithPin);
   // The first attempt found no native host; the client tries again after 2 s.
   await new Promise((r) => setTimeout(r, 2200));
@@ -39,4 +52,6 @@ export async function checkNoPinInPage({ send, evaluate, attach, open, shadowNod
     await send('Target.closeTarget', { targetId: prompt.targetId }).catch(() => {});
   }
   await send('Target.closeTarget', { targetId: tab.targetId }).catch(() => {});
+  // #465: the same imitated app, now open – the PIN in the Keevault tag at the top of the page.
+  await checkPinInBar({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession, settle });
 }

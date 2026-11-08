@@ -17,6 +17,7 @@ let online = null; // null: not known yet, false: app not running, true: app rea
 let hostError = '';
 let lastAttempt = 0;
 let hello = null;
+let helloInfo = null; // the last answer to hello, read without waiting
 let snap = null;
 let snapAt = 0;
 const pending = new Map();
@@ -38,6 +39,7 @@ function offlineError() {
 
 function forget() {
   hello = null;
+  helloInfo = null;
   snap = null;
 }
 
@@ -103,9 +105,23 @@ const MIN_APP_VERSION = '0.9.29';
 
 function ready() {
   // The first hello may wait for the approval in the desktop app.
-  if (!hello) hello = request('hello', { extVersion: chrome.runtime.getManifest().version, minApp: MIN_APP_VERSION }, 120_000).catch((e) => { hello = null; throw e; });
+  if (!hello) {
+    hello = request('hello', { extVersion: chrome.runtime.getManifest().version, minApp: MIN_APP_VERSION }, 120_000).catch((e) => { hello = null; throw e; });
+    hello.then((h) => { helloInfo = h; }, () => {});
+  }
   return hello;
 }
+
+/** #464: what the connected app can do for the popup (history, assets, moving, moving a passkey). An app without the
+ * capability, or none connected, simply has none of them: the popup hides the function, no error. */
+export function appFeatures() {
+  const caps = helloInfo?.caps || [];
+  return { history: caps.includes('history'), assets: caps.includes('linkedEntries'), move: caps.includes('move'), passkeyMove: caps.includes('movePasskey') };
+}
+
+const needCap = async (cap) => {
+  if (!(await ready()).caps?.includes(cap)) throw new Error(t('Die Keevault-App ist zu alt für diese Funktion – bitte die App aktualisieren'));
+};
 
 const call = async (cmd, args, timeout) => {
   await ready();
@@ -166,6 +182,17 @@ export const app = {
   },
   getItem: (containerId, itemId) => call('item', { containerId, itemId }),
   /** Admin tools: the account of a sign-in the user just started in the app, only for this host (else null). */
+  // #464: history, linked assets and moving, through the app (older apps lack the capability: the popup hides these).
+  history: async (containerId, itemId) => { await needCap('history'); return call('history', { containerId, itemId }); },
+  getVersion: async (containerId, itemId, version) => { await needCap('history'); return call('version', { containerId, itemId, version }); },
+  linkedEntries: async (containerId, itemId) => { await needCap('linkedEntries'); return call('linkedEntries', { containerId, itemId }); },
+  planMove: async (fromId, toId, itemId) => { await needCap('move'); return call('planMove', { fromId, toId, itemId }); },
+  moveItem: async (fromId, toId, itemId, { folder, expectedVersion } = {}) => { await needCap('move'); return changedHere(await call('move', { fromId, toId, itemId, folder, expectedVersion }, 120_000)); },
+  moveWithAssets: async (fromId, toId, itemId, { folder, expected } = {}) => {
+    await needCap('move');
+    return changedHere(await call('moveWithAssets', { fromId, toId, itemId, folder, expected }, 300_000));
+  },
+  movePasskey: async (args) => { await needCap('movePasskey'); return changedHere(await call('movePasskey', args, 120_000)); },
   signIn: (host, tab) => call('signIn', { host, tab }),
   signInDone: (host) => call('signInDone', { host }),
   saveItem: async (containerId, item, { expectedVersion } = {}) => changedHere(await call('save', { containerId, item, expectedVersion })),

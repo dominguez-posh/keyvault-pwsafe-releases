@@ -7,4 +7,6 @@ contextBridge.exposeInMainWorld('releaseDialog', {
   // The page reports once that it was built with content; the window is shown only then (and closed with a message if not).
   ready: (filled) => ipcRenderer.send(`release:ready:${channel}`, filled === true),
   decide: (yes) => ipcRenderer.send(`release:decide:${channel}`, yes === true),
+  // #459: the main process says when the window is shown and focused (true) or lost the focus (false).
+  onArmed: (cb) => { ipcRenderer.on(`release:armed:${channel}`, (_e, on) => cb(on === true)); },
 });

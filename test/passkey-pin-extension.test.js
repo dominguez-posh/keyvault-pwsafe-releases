@@ -8,7 +8,7 @@ const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
 const bg = read('extension/background.js');
 const part = (from, to) => bg.slice(bg.indexOf(from), bg.indexOf(to));
 
-test('extension: with the PIN on, a sign-in opens the extension window, not the bar or the field menu in the page', () => {
+test('extension: with the PIN on, a sign-in asks in the extension (its frame in the tag, #465, or the window), never the page or the field menu', () => {
   const req = part('async function webauthnRequest', 'async function inlineFor');
   const routed = req.indexOf('passkeyPinState()).required');
   assert.ok(routed > 0, 'the request checks whether the PIN is needed');

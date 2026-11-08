@@ -7,11 +7,15 @@ import { providerStatus, registerProvider } from '../../windows-provider.js';
 import { config, mcp, windows } from '../state.js';
 import { answerQuestionFromWindow, mcpScriptPath, mcpTrusted } from '../agents.js';
 import { currentExtensionStatus } from '../browser.js';
+import { applyExtensionChannel, extensionFixState } from '../extension-channel.js';
 import { restoreAfterWindowsRequest } from '../windows-passkeys.js';
 
 export const integrationsApi = {
   // #454: browser extension status for the hint at the bottom right
   extensionStatus: () => currentExtensionStatus(),
+  // #455: what the hint may offer, and "Fix now" (UAC) – the policies are pointed to the feed of the app's update channel
+  extensionFixState: () => extensionFixState(),
+  extensionFix: () => applyExtensionChannel({ reason: 'fix' }),
   // Windows passkey provider
   windowsRequests: () => windows.list(),
   windowsDecision: async (id, decision) => {

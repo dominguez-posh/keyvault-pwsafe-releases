@@ -137,11 +137,15 @@ export function settingsDialog() {
   const drawMachine = (x) => {
     if (!x?.supported) return machine.replaceChildren();
     const yes = (v) => (v ? t('ja') : t('nein'));
+    // #455: where the company sets the browser policies, Keevault creates none and says so.
+    const policy = (v, company) => (company && !x.policyBlocked ? t('von der IT verwaltet') : yes(v));
+    const company = !x.policyBlocked && (x.edgeCompany || x.chromeCompany);
     const button = h('button', { type: 'button', class: 'btn small', onclick: async () => {
       button.disabled = true;
       try {
-        drawMachine((await call('runMachineSetup')).machine);
-        toast(t('Gerät eingerichtet – Edge/Chrome ggf. neu starten'));
+        const r = await call('runMachineSetup');
+        drawMachine(r.machine);
+        toast(r.company?.length ? t('Gerät eingerichtet. Die Browser-Erweiterung verteilt eure IT, dafür hat Keevault keine Richtlinie angelegt.') : t('Gerät eingerichtet – Edge/Chrome ggf. neu starten'));
       } catch (e) {
         toast(e.message, 'error');
         button.disabled = false;
@@ -150,8 +154,9 @@ export function settingsDialog() {
     // h() skips null children, replaceChildren() would print "null".
     return machine.replaceChildren(h('div', {},
       h('div', {}, t('Zertifikat des Passkey-Anbieters vertraut: {v}', { v: yes(x.certTrusted) })),
-      h('div', {}, t('Erweiterungs-Richtlinie Edge: {edge} · Chrome: {chrome}', { edge: yes(x.edgePolicy), chrome: yes(x.chromePolicy) })),
-      (!x.certTrusted || !x.edgePolicy) && x.canRunSetup ? button : null));
+      h('div', {}, t('Erweiterungs-Richtlinie Edge: {edge} · Chrome: {chrome}', { edge: policy(x.edgePolicy, x.edgeCompany), chrome: policy(x.chromePolicy, x.chromeCompany) })),
+      company ? h('div', { id: 'machine-company' }, t('Die Browser-Richtlinien setzt auf diesem Gerät eure IT. Keevault legt dort keine Richtlinie an – die Erweiterung verteilt die IT.')) : null,
+      x.canRunSetup ? button : null));
   };
   call('machineSetupStatus').then(drawMachine, () => {});
   const section = (title, ...children) => h('div', { class: 'settings-section' }, h('h3', {}, title), ...children);
@@ -186,7 +191,8 @@ export function settingsDialog() {
           ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.')
           : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
         st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
-          : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.'))),
+          : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
+        st.pinShort ? h('div', { class: 'notice warn pin-short' }, t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern')) : null),
       section(t('Passkeys'),
         h('label', { class: 'inline' }, passkeyPin, t('PIN vor jeder Passkey-Nutzung')),
         h('p', { class: 'muted small' }, st.passkeyPinFixed

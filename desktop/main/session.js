@@ -14,6 +14,7 @@ import { lastBackup, pendingRestore, setLastBackup, setPendingRestore } from './
 import { busySince, diag, timedFetch, timedToken } from './diag.js';
 import { scheduleSettingsSync } from './settings-sync.js';
 import { applyShortcuts, selectedKey, setSelectedKey } from './typing.js';
+import { viewerId } from './private.js';
 
 export class DemoAuth {
   account = null;
@@ -75,6 +76,8 @@ export function newSession() {
     // In-memory session: Key Vault responses never reach a disk cache – except the encrypted offline mirror.
     fetch: demo?.fetch || (offlineMode ? offlineMirror().replay : mirrorWanted() ? offlineMirror().record(timedFetch) : timedFetch),
     actor,
+    // #476: "Nur für mich" entries of other people stay out of every list (window, extension, MCP, bridge).
+    viewer: viewerId,
     adapters: { file: files },
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.
     multiTenant: true,

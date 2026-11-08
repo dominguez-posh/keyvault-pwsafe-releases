@@ -62,3 +62,15 @@ test('self-hosted extension carries the update URL (otherwise Edge/Chrome look f
   const manifest = JSON.parse(readFileSync(new URL('../extension/manifest.json', import.meta.url), 'utf8'));
   assert.equal(manifest.update_url, EXTENSION_UPDATE.manifest);
 });
+
+test('#455: Early Access update.xml points to the CRX of its own tag, Prod to latest; pack-crx.mjs and release.mjs pass the flag on', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { extensionCodebase, EXTENSION_UPDATE, RELEASE_REPO } = await import('../scripts/release-urls.mjs');
+  assert.equal(extensionCodebase('0.9.30', false), EXTENSION_UPDATE.crx);
+  assert.match(EXTENSION_UPDATE.crx, /\/releases\/latest\/download\//);
+  assert.equal(extensionCodebase('0.9.30', true), `https://github.com/${RELEASE_REPO}/releases/download/v0.9.30/kvpwsafe-extension.crx`);
+  const pack = readFileSync(new URL('../scripts/pack-crx.mjs', import.meta.url), 'utf8');
+  assert.match(pack, /extensionCodebase\(version, process\.argv\.includes\('--early-access'\)\)/);
+  const release = readFileSync(new URL('../scripts/release.mjs', import.meta.url), 'utf8');
+  assert.match(release, /pack-crx\.mjs'\), \.\.\.\(earlyAccess \? \['--early-access'\] : \[\]\)\]/);
+});

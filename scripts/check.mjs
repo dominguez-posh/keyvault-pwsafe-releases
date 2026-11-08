@@ -67,14 +67,14 @@ const LINE_LIMITS = {
   'desktop/renderer/app.js': 60, // start only – features go into desktop/renderer/app/
   'extension/lib/jsqr.js': Infinity, // third-party library
   'extension/core/i18n-en.js': Infinity, // translations
-  'extension/core/session.js': 1400,
+  'extension/core/session.js': 1445,
   'extension/content/content.js': 1300,
-  'desktop/smoke-features.js': 1393,
-  'extension/background.js': 1100,
-  'desktop/main/smoke.js': 930,
+  'desktop/smoke-features.js': 1435, // #469 + #464 + #471 + #472 + #458 + #476 combined (measured)
+  'extension/background.js': 1111, // #462/#467/#464 + #468 + #459 combined (measured)
+  'desktop/main/smoke.js': 933, // measured after merging main into #455 (#470/#471/#472)
   'extension/core/ui-item.js': 900,
   'extension/core/filevault.js': 800,
-  'scripts/extension-smoke.mjs': 820,
+  'scripts/extension-smoke.mjs': 841, // #458 + #476 + popup-url + #459 combined (measured)
 };
 const posixRel = (p) => relative(root, p).replace(/\\/g, '/');
 const under = (rel, prefix) => (prefix.endsWith('/') ? rel.startsWith(prefix) : rel === prefix);

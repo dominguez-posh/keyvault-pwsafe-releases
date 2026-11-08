@@ -83,6 +83,15 @@ export const updateKeyLine = (approver, number) => {
 /** The bytes an existing approver signs to let a new one in: bound to exactly this credential and key. */
 export const addApproverBytes = ({ credentialId, publicKey }) => Buffer.from(`add-approver|${credentialId}|${publicKey}`);
 
+/** The bytes another approver signs to take this one out (#437, lost key): bound to exactly this credential and key. */
+export const removeApproverBytes = ({ credentialId, publicKey }) => Buffer.from(`remove-approver|${credentialId}|${publicKey}`);
+
+/**
+ * The number of an approver (approver-N, release-N in UPDATE_KEYS). It stays the same when another one is removed, and a
+ * new one gets the next free number, so an element already in UPDATE_KEYS keeps its id (#437).
+ */
+export const approverNumber = (approver, index) => Number(/^approver-(\d+)$/.exec(approver?.id || '')?.[1]) || index + 1;
+
 export function createKeyStore({ file, encrypt, decrypt }) {
   // encrypt/decrypt may be asynchronous (Electron's async safeStorage); both return the plain value.
   const load = async () => {
@@ -150,11 +159,31 @@ export function createKeyStore({ file, encrypt, decrypt }) {
         }
         pkcs8 = unwrap(existing.wrapped, proof.prfOutput, existing.credentialId);
       }
-      const entry = approverEntry(credential, r.approvers.length + 1, pkcs8);
+      const entry = approverEntry(credential, Math.max(0, ...r.approvers.map(approverNumber)) + 1, pkcs8);
       // The wrapped copy must open again with the same secret before the plain copy goes (C2).
       if (!unwrap(entry.wrapped, credential.prfOutput, credential.credentialId).equals(pkcs8)) throw new Error('Der Schlüssel lässt sich nicht wieder öffnen – nichts gespeichert.');
       r.approvers.push(entry);
       delete r.pkcs8; // from now on only the wrapped copies exist
+      await save(r);
+    },
+    /**
+     * Takes an approver out (#437, lost key) together with its wrapped copy of the key, so it opens nothing here any more.
+     * proof: { assertion, credentialId, prfOutput } of another registered approver over removeApproverBytes(target); the
+     * one being removed cannot vouch for itself, and the last approver always stays (else the key could not be opened).
+     * The approver who confirms must still open the key with its secret before anything is saved.
+     */
+    async removeApprover(credentialId, proof, origin) {
+      const r = await load();
+      if (!r) throw new Error('Kein Signierschlüssel vorhanden.');
+      const target = sameSite(r, credentialId);
+      if (!target) throw new Error('Dieser Sicherheitsschlüssel ist nicht als Freigeber eingetragen.');
+      if (r.approvers.length < 2) throw new Error('Der letzte Freigeber lässt sich nicht entfernen – ohne ihn ließe sich der Signierschlüssel nicht mehr öffnen.');
+      const other = proof?.credentialId && proof.credentialId !== credentialId ? sameSite(r, proof.credentialId) : null;
+      if (!other || !proof.assertion || !verifyManifest(removeApproverBytes(target), proof.assertion, [other], origin)) {
+        throw new Error('Einen Freigeber entfernt nur ein anderer eingetragener Freigeber: Berührung eines anderen Schlüssels fehlt.');
+      }
+      unwrap(other.wrapped, proof.prfOutput, other.credentialId);
+      r.approvers = r.approvers.filter((a) => a !== target);
       await save(r);
     },
     /**

@@ -12,6 +12,8 @@ import { demo } from '../boot.js';
 import { auth, config, files, opened, vault, win } from '../state.js';
 import { api } from './index.js';
 import { diag } from '../diag.js';
+import { cleanVaultName, renameInVault } from '../../../extension/core/session-meta.js';
+import { uiMessage } from '../../../extension/core/azure-errors.js';
 import { requireFeature, requireOpen } from '../guards.js';
 import { changed, cleanEmail, containerResource, refreshAll, refreshing, send, signedIn } from '../session.js';
 
@@ -106,10 +108,12 @@ export const vaultsApi = {
   machineSetupStatus: () => machineSetupStatus(),
   /** Elevated device setup (UAC), then retry the per-user provider installation. */
   async runMachineSetup() {
-    const code = await runMachineSetup();
-    if (code) throw new Error(t('Die Einrichtung meldet Fehler (Code {code}) – Details im Protokoll setup.log unter ProgramData › Keevault', { code }));
+    // Success only counts when the registry shows it afterwards (a declined UAC prompt changes nothing).
+    const r = await runMachineSetup();
+    if (r.declined) throw new Error(t('Die Abfrage der Administratorrechte wurde abgelehnt oder abgebrochen – es wurde nichts geändert.'));
+    if (!r.ok) throw new Error(t('Die Einrichtung wurde nicht abgeschlossen. Bitte eure IT bitten, das Intune-Skript „Keevault-Geraet-Einrichten.ps1“ auszuführen.'));
     const status = config.get().windowsProvider ? await ensureProvider(`${app.getVersion()}.0`) : null;
-    return { status, machine: await machineSetupStatus() };
+    return { status, machine: await machineSetupStatus(), company: r.company || [] }; // #455: browsers the company manages, nothing created there
   },
   vaultTenantCheck: async (containerId) => vault.azure.vaultTenantCheck(await containerResource(containerId)),
   async fixVaultTenant(containerId) {
@@ -207,7 +211,7 @@ export const vaultsApi = {
       await mapLimit(list, 8, async (v) => {
         v.meta = v.added ? { name: v.name } : await vault.probeVault(v);
       });
-      list = list.filter((v) => v.meta).map(({ meta, ...v }) => ({ ...v, name: meta.name || v.name, container: true }));
+      list = list.filter((v) => v.meta).map(({ meta, ...v }) => ({ ...v, name: cleanVaultName(meta.name) || cleanVaultName(v.name) || v.name, container: true }));
     }
     return list.sort((a, b) => a.name.localeCompare(b.name));
   },
@@ -275,13 +279,13 @@ export const vaultsApi = {
     const warnings = [];
     await azure.setVaultDisplayName(opts.resourceId, opts.displayName).catch(() => {});
     for (const m of opts.members || []) {
-      await azure.addMember(opts.resourceId, m.principal, m.level).catch((e) => warnings.push(t('{who}: {message}', { who: m.principal.displayName, message: e.message })));
+      await azure.addMember(opts.resourceId, m.principal, m.level).catch((e) => warnings.push(t('{who}: {message}', { who: m.principal.displayName, message: uiMessage(e) })));
     }
     for (const g of opts.guests || []) {
       try {
         await azure.addMember(opts.resourceId, await azure.inviteGuest(cleanEmail(g.email)), g.level);
       } catch (e) {
-        warnings.push(t('{who}: {message}', { who: g.email, message: e.message }));
+        warnings.push(t('{who}: {message}', { who: g.email, message: uiMessage(e) }));
       }
     }
     const s = config.get();
@@ -313,14 +317,14 @@ export const vaultsApi = {
       try {
         await azure.addMember(result.container.resourceId, m.principal, m.level);
       } catch (e) {
-        warnings.push(t('{who}: {message}', { who: m.principal.displayName, message: e.message }));
+        warnings.push(t('{who}: {message}', { who: m.principal.displayName, message: uiMessage(e) }));
       }
     }
     for (const g of opts.guests || []) {
       try {
         await azure.addMember(result.container.resourceId, await azure.inviteGuest(cleanEmail(g.email)), g.level);
       } catch (e) {
-        warnings.push(t('{who}: {message}', { who: g.email, message: e.message }));
+        warnings.push(t('{who}: {message}', { who: g.email, message: uiMessage(e) }));
       }
     }
     const s = config.get();
@@ -351,23 +355,15 @@ export const vaultsApi = {
     const clean = String(name || '').trim();
     if (!clean) throw new Error(t('Bitte einen Namen eingeben'));
     const c = await vault.container(containerId);
-    let warning = null;
     if (c.kind === 'file') {
       await files.rename(containerId, clean);
     } else {
-      try {
-        await vault.azureFor(c).setVaultDisplayName(await containerResource(containerId), clean);
-      } catch (e) {
-        warning = t('Nur für dich umbenannt – für alle bräuchte es Schreibrechte auf der Key-Vault-Ressource ({message})', { message: e.message });
-      }
-      const s = config.get();
-      const others = s.containers.filter((x) => vaultHost(x.vaultUrl) !== containerId);
-      const own = s.containers.find((x) => vaultHost(x.vaultUrl) === containerId);
-      config.update({ containers: [...others, { ...(own || {}), name: clean, vaultUrl: c.vaultUrl, ...(c.tenantId ? { tenantId: c.tenantId } : {}) }] });
+      // Shared name in the vault's metadata secret; only managers may (checked in the session, not only in the UI).
+      await renameInVault(vault, containerId, clean);
       await refreshAll();
     }
     changed();
-    return { warning };
+    return {};
   },
 
   licenseState: (containerId) => vault.licenseState(containerId),

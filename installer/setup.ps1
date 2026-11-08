@@ -26,6 +26,9 @@ $EmbeddedCertificate = '__CERTIFICATE_BASE64__'
 $ExtensionId = 'pbkjijhihclckeeefbepoedgdmajioip'
 $UpdateUrl = 'https://github.com/dominguez-posh/keyvault-pwsafe-releases/releases/latest/download/update.xml'
 # Package with external location since 0.9.1; the stand-alone package of earlier versions is removed as well.
+$OwnSource = 'https://github.com/dominguez-posh/'
+$NoPolicyKey = 'HKLM:\SOFTWARE\Keevault'
+$NoPolicyValue = 'NoExtensionPolicy'
 $PackageName = 'Keevault.Passkeys'
 $OldPackageName = 'KvPwSafe.PasskeyProvider'
 $HostName = 'com.kvpwsafe.desktop'
@@ -71,20 +74,33 @@ if ($Scope -eq 'Machine') {
     if ($Action -eq 'Install') {
         if ($cert) {
             Step 'Zertifikat des Passkey-Anbieters vertrauen' {
+                # Not on every run: what is already trusted stays as it is.
+                $have = Get-ChildItem Cert:\LocalMachine\TrustedPeople, Cert:\LocalMachine\Root | Where-Object Thumbprint -eq $cert.Thumbprint
+                if ($have) { return }
                 $store = New-Object System.Security.Cryptography.X509Certificates.X509Store 'TrustedPeople', 'LocalMachine'
                 $store.Open('ReadWrite')
                 $store.Add($cert)
                 $store.Close()
             }
         }
-        foreach ($key in $(if ($SkipExtensionPolicy) { @() } else { $Policies })) {
+        # KV_NO_POLICY / -SkipExtensionPolicy is remembered: later runs without the switch (an update, the Intune
+        # script) leave the browser policy alone as well. Remove the value to switch it on again.
+        if ($SkipExtensionPolicy) {
+            Step 'Verzicht auf die Browser-Richtlinie merken' {
+                if (-not (Test-Path $NoPolicyKey)) { New-Item -Path $NoPolicyKey -Force | Out-Null }
+                New-ItemProperty -Path $NoPolicyKey -Name $NoPolicyValue -Value 1 -PropertyType DWord -Force | Out-Null
+            }
+        }
+        $policyOff = $SkipExtensionPolicy -or ((Get-ItemProperty -Path $NoPolicyKey -Name $NoPolicyValue -ErrorAction SilentlyContinue).$NoPolicyValue -eq 1)
+        foreach ($key in $(if ($policyOff) { @() } else { $Policies })) {
             Step "Erweiterung per Richtlinie ($key)" {
                 if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
                 $entries = Get-ForcelistEntries $key
                 $existing = $entries | Where-Object { $_.Value -like "$ExtensionId*" } | Select-Object -First 1
                 if ($existing) {
-                    # Outdated source (e.g. old update URL): replace it in place.
-                    if ($existing.Value -ne "$ExtensionId;$UpdateUrl") { Set-ItemProperty -Path $key -Name $existing.Name -Value "$ExtensionId;$UpdateUrl" }
+                    # Only an older entry of ours (old update address) is replaced in place. An entry of someone else
+                    # (company policy with its own source) is never overwritten.
+                    if ($existing.Value -ne "$ExtensionId;$UpdateUrl" -and $existing.Value -like "$ExtensionId;$OwnSource*") { Set-ItemProperty -Path $key -Name $existing.Name -Value "$ExtensionId;$UpdateUrl" }
                     return
                 }
                 # Values are a list named 1, 2, 3, … – take the first free number.
@@ -97,7 +113,8 @@ if ($Scope -eq 'Machine') {
     else {
         foreach ($key in $(if ($SkipExtensionPolicy) { @() } else { $Policies })) {
             Step "Richtlinie entfernen ($key)" {
-                foreach ($e in (Get-ForcelistEntries $key | Where-Object { $_.Value -like "$ExtensionId*" })) { Remove-ItemProperty -Path $key -Name $e.Name }
+                # Only our own entries; a foreign one with our ID stays.
+                foreach ($e in (Get-ForcelistEntries $key | Where-Object { $_.Value -like "$ExtensionId;$OwnSource*" })) { Remove-ItemProperty -Path $key -Name $e.Name }
             }
         }
         if ($cert) {

@@ -1,6 +1,6 @@
 // Checks the packed app against the commit (used by scripts/release.mjs, tested in test/release-verify.test.js).
 import { execFileSync, execSync } from 'node:child_process';
-import { readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -19,6 +19,8 @@ export async function verifyPackage(asarPath, root, tmp = join(root, "release", 
   for (const file of walk(dir)) {
     const rel = file.slice(dir.length + 1).split('\\').join('/');
     // A file of the app's own code that git does not know (ignored by .gitignore, #378 B4) is not in the commit: stop.
+    // desktop/cert-pin.json is written at build time (scripts/before-pack.cjs, #395) and deliberately not tracked.
+    if (rel === 'desktop/cert-pin.json') continue;
     if (!tracked.has(rel) && /^(desktop|extension)\//.test(rel)) { problems.push(`${rel}: im Paket, aber nicht im Commit (git kennt die Datei nicht)`); continue; }
     if (!tracked.has(rel) || rel === 'package.json') continue;
     checked++;
@@ -27,6 +29,12 @@ export async function verifyPackage(asarPath, root, tmp = join(root, "release", 
     else if (/\.(m?js|cjs)$/.test(rel)) {
       try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); } catch (e) { problems.push(`${rel}: Syntaxfehler ${String(e.stderr || '').split('\n').find((l) => /Error/.test(l)) || ''}`); }
     }
+  }
+  // The device setup trusts only the pinned provider certificate (#395): without the pin it would never trust it.
+  if (existsSync(join(root, 'windows', 'out', 'KvPwSafe-Test.cer'))) {
+    let pin = '';
+    try { pin = JSON.parse(readFileSync(join(dir, 'desktop', 'cert-pin.json'), 'utf8')).sha256; } catch { /* missing */ }
+    if (!/^[0-9a-f]{64}$/.test(pin)) problems.push('desktop/cert-pin.json fehlt oder ist leer (Zertifikat-Fingerabdruck, scripts/before-pack.cjs)');
   }
   rmSync(dir, { recursive: true, force: true });
   if (!checked) throw new Error('app.asar enthält keine bekannten Dateien');

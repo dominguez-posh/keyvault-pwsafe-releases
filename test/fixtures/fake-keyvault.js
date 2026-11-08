@@ -7,7 +7,7 @@ export function fakeKeyVault(host) {
   const deleted = new Map();
   let versionSeq = 0;
   const calls = [];
-  const json = (status, body) => new Response(body === undefined ? '' : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  const json = (status, body) => new Response(body === undefined && status === 204 ? null : body === undefined ? '' : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const bundle = (name, v) => ({ id: `https://${host}/secrets/${name}/${v.version}`, value: v.value, tags: v.tags, contentType: v.contentType, attributes: v.attributes });
   const item = (name, v) => ({ id: `https://${host}/secrets/${name}`, tags: v.tags, contentType: v.contentType, attributes: v.attributes });
   const page = (url, all) => {

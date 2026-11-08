@@ -8,7 +8,27 @@ import { promisify } from 'node:util';
 const pbkdf2 = promisify(crypto.pbkdf2);
 const ITERATIONS = 310_000;
 
-export const MIN_PIN_LENGTH = 4;
+// #475: 6 since 2026-11-08 (before 4). Shorter PINs set earlier keep working; verifying one marks the record `short`
+// so settings and the lock screen ask to change it.
+export const MIN_PIN_LENGTH = 6;
+
+export const isShortPin = (pin) => String(pin ?? '').length < MIN_PIN_LENGTH;
+
+// #472 (review): settings that only the PIN functions write (setPin, verifyPin, the PIN guard, binding the personal
+// vault). A settings patch from the window must not set, clear or replace them, not even with null.
+export const PIN_ONLY_SETTINGS = Object.freeze(['appPin', 'pinGuard', 'personalDeviceKeys']);
+
+/** The PIN-only keys a settings patch tries to write (empty: the patch may go through). */
+export const pinOnlyKeys = (patch) => (patch && typeof patch === 'object'
+  ? PIN_ONLY_SETTINGS.filter((k) => Object.prototype.hasOwnProperty.call(patch, k)) : []);
+
+/** #475: the record after `pin` verified against it – marked `short` or not; null when nothing changes. */
+export function markShort(record, pin) {
+  const short = isShortPin(pin);
+  if (!!record?.short === short) return null;
+  const { short: _, ...rest } = record;
+  return short ? { ...rest, short: true } : rest;
+}
 
 export async function hashPin(pin) {
   const salt = crypto.randomBytes(16);

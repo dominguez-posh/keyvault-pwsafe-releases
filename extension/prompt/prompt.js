@@ -220,6 +220,22 @@ async function renderGet() {
   return undefined;
 }
 
+// #459: Enter confirms (the primary button of the card, unless a choice list needs a pick), Esc cancels (below).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing || !e.isTrusted || e.target.closest?.('button, select, textarea, a, input.pin')) return;
+  const go = footer.querySelector('.btn.primary:not(:disabled)');
+  if (go) { e.preventDefault(); go.click(); }
+});
+
+// The window fits its card: the service worker sets the height (only for this prompt window, it checks the sender).
+let fitted = 0;
+new ResizeObserver(() => {
+  const need = Math.ceil(document.getElementById('card').getBoundingClientRect().height) + 20 + (window.outerHeight - window.innerHeight);
+  if (Math.abs(need - fitted) < 4) return;
+  fitted = need;
+  call('prompt:fit', { height: need }).catch(() => {});
+}).observe(document.getElementById('card'));
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (mode === 'unlock' || mode === 'containers') window.close();

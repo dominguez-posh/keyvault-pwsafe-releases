@@ -12,6 +12,7 @@ import { renderList } from './list.js';
 import { folderList, modeItems, nsFolder } from './modes.js';
 import { reloadAll } from './shell.js';
 import { deleteNotice } from './trash.js';
+import { cutItems } from './cut-paste.js';
 
 /** Clears the selection of entries and folders. */
 export function clearSelection() {
@@ -63,6 +64,7 @@ export function multiActions() {
   return [
     { action: 'multi-folder', icon: 'folder', label: t('{n} Einträge in Ordner verschieben …', { n: list.length }), disabled: !oneVault || !canWrite, onClick: () => folderPickDialog(containerIds[0], list.map((i) => i.key)) },
     { action: 'multi-move', icon: 'move', label: t('{n} Einträge in anderen Tresor verschieben …', { n: list.length }), disabled: !canWrite, onClick: () => moveManyDialog(list) },
+    { action: 'multi-cut', icon: 'move', label: t('{n} Einträge ausschneiden', { n: list.length }), disabled: !canWrite, onClick: () => cutItems(list) },
     '-',
     { action: 'multi-delete', icon: 'trash', label: t('{n} Einträge löschen', { n: list.length }), danger: true, disabled: !canWrite, onClick: () => deleteManyDialog(list) },
     '-',
@@ -213,18 +215,56 @@ export function droppedLinksText(saved) {
   return t('„{title}“ verschoben – verknüpfte Konten bleiben im alten Tresor. Im Asset neu auswählen.', { title: saved.title });
 }
 
-/** Moves entries into another vault one by one (each is re-created there and deleted in the source); returns the failures. */
+/**
+ * #462: the plan of one entry for another vault, with the question when it takes linked assets along (or cannot move).
+ * → null (stop: refused or declined, the reason was shown) or { ids, extras } – the entry alone has no extras.
+ */
+async function askMovePlan(i, targetId) {
+  let plan;
+  try {
+    plan = await call('planMove', i.containerId, targetId, i.id);
+  } catch (e) {
+    toast(`${i.title}: ${e.message}`, 'error');
+    return null;
+  }
+  if (plan.refused) {
+    toast(`${i.title}: ${plan.refused}`, 'error');
+    return null;
+  }
+  const extras = plan.members.filter((m) => m.role !== 'selected');
+  if (!extras.length && !plan.blocked.length) return { extras: [], expected: null };
+  const text = [
+    extras.length ? t('Diese verknüpften Einträge werden mitverschoben: {list}.', { list: extras.map((m) => m.title).join(', ') }) : '',
+    plan.blocked.length ? t('Diese verknüpften Einträge werden nicht verschoben: {list}.', { list: plan.blocked.map((b) => `${b.title} (${b.reason})`).join('; ') }) : '',
+    t('Alles oder nichts: Schlägt ein Eintrag fehl, bleibt im Quelltresor alles unverändert.'),
+  ].filter(Boolean).join(' ');
+  if (!(await confirmDialog(t('„{title}“ mit verknüpften Assets verschieben?', { title: i.title }), text, { confirmLabel: extras.length ? t('Alle verschieben') : t('Verschieben') }))) return null;
+  return { extras, expected: plan.members.map((m) => m.id) };
+}
+
+/** Moves entries into another vault (each is re-created there and deleted in the source); returns the failures. */
 export async function moveItemsTo(list, targetId, folderOf = null) {
   let moved = 0;
   let failed = 0;
   let last = null;
   let dropped = null;
+  const gone = new Set(); // entries that went along with an earlier one
   for (const i of list) {
-    if (i.containerId === targetId) continue;
+    if (i.containerId === targetId || gone.has(i.id)) continue;
     try {
-      last = await call('move', i.containerId, targetId, i.id, folderOf ? { folder: folderOf(i) } : undefined);
-      moved++;
-      if (last.droppedLinks?.length) dropped = last;
+      const ask = await askMovePlan(i, targetId);
+      if (!ask) { failed++; continue; }
+      if (ask.expected) {
+        const res = await call('moveWithAssets', i.containerId, targetId, i.id, { expected: ask.expected, ...(folderOf ? { folder: folderOf(i) } : {}) });
+        for (const m of ask.expected) gone.add(m);
+        last = res.saved;
+        moved += res.moved?.length || 1;
+        if (res.dropped?.length) dropped = res.saved;
+      } else {
+        last = await call('move', i.containerId, targetId, i.id, folderOf ? { folder: folderOf(i) } : undefined);
+        moved++;
+        if (last.droppedLinks?.length) dropped = last;
+      }
     } catch (e) {
       failed++;
       toast(`${i.title}: ${e.message}`, 'error');

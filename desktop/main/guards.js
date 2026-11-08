@@ -3,6 +3,7 @@
 import { LockedError } from '../auth.js';
 import { PinGuard } from '../pin.js';
 import { PasskeyPinGate } from '../passkey-pin.js';
+import { ExportPinGate } from '../export-pin.js';
 import { POLICY_LABELS } from '../../extension/core/session.js';
 import { t } from '../../extension/core/i18n.js';
 import { config, opened, vault } from './state.js';
@@ -33,6 +34,9 @@ export const passkeyPin = new PasskeyPinGate({
   guard: pinGuard,
   save: (state) => { if (state || config.get().pinGuard) config.update({ pinGuard: state }); },
 });
+
+/** #473: a plaintext export asks for the app PIN (see ../export-pin.js); the same counter as unlocking. */
+export const exportPin = new ExportPinGate({ settings: () => config.get(), guard: pinGuard, save: passkeyPin.save });
 
 /** Unlocking needs a freshly verified PIN once one is set. */
 export function requirePin() {

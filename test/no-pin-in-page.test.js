@@ -14,7 +14,7 @@ test('content script: no PIN field, no unlock command to the background', () => 
   assert.ok(!/kind === 'unlock' \? 'get'/.test(content));
 });
 
-test('background: a locked app with a PIN opens the prompt window, the bar never asks for the PIN', () => {
+test('background: a locked app with a PIN opens the prompt window, the page never asks for the PIN (#465: only the extension frame in the tag)', () => {
   const bg = read('background.js');
   assert.ok(!/webauthnUnlock|inlineUnlock|kind: 'unlock'/.test(bg));
   const req = bg.slice(bg.indexOf('async function webauthnRequest'), bg.indexOf('async function inlineFor'));

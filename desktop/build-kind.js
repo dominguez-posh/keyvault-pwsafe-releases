@@ -21,6 +21,9 @@ export function kindFrom(kvBuild, { packaged, git }) {
   return { developer: true, commit };
 }
 
+/** Whether a module directory lies inside app.asar; Windows paths use "\", macOS and Linux "/" (#461). */
+export const isPackagedDir = (dir) => /[\\/]app\.asar(?:[\\/]|$)/i.test(String(dir));
+
 /** Smoke only: pretends the build is a release (or, with null, undoes it), so the Stable/Early Access label can be checked. */
 export function overrideBuildKindForSmoke(kind) {
   cached = kind;
@@ -33,7 +36,7 @@ export function buildKind() {
   try {
     kvBuild = JSON.parse(fs.readFileSync(path.join(dir, '..', 'package.json'), 'utf8')).kvBuild;
   } catch { /* no package.json */ }
-  const packaged = /[\/]app\.asar(?:[\/]|$)/i.test(dir);
+  const packaged = isPackagedDir(dir);
   const git = () => {
     try {
       return execFileSync('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();

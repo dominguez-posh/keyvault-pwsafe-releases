@@ -1,10 +1,12 @@
 // When the app may sign a release at all (#378). Pure and without Electron imports: the menu asks it (api/app.js) and the
-// signing module asks it again right before the dialog. Refused: an app that is not installed (a development copy is
+// signing module asks it again right before the dialog. Refused: a release build (#445: only a Developer build signs), an app that is not installed (a development copy is
 // changed by whoever started it), demo and smoke runs, and every start with a debugging or injection switch – through
 // those a process of the same account could read the key from memory or click the dialog.
 //
 // Chromium reads a switch as -name, --name and /name in any letter case (B3), so the command line is matched that way
 // and, in the app, additionally asked through app.commandLine.hasSwitch(name), which is what Chromium itself decides on.
+
+import { buildKind } from '../build-kind.js';
 
 export const BLOCKED_SWITCHES = [
   'remote-debugging-port', 'remote-debugging-pipe', 'remote-allow-origins', 'inspect', 'inspect-brk', 'inspect-port', 'inspect-wait',
@@ -16,7 +18,8 @@ const ENGINE_SWITCHES = BLOCKED_SWITCHES.filter((n) => !['enable-features', 'dis
 const BLOCKED = new RegExp(`^(--|-|/)(${BLOCKED_SWITCHES.join('|')})(=|$)`, 'i');
 
 /** → null when signing is allowed, otherwise the reason (German, shown to the person). hasSwitch: app.commandLine.hasSwitch. */
-export function signingRefusal({ packaged, argv, demo, smoke, hasSwitch }) {
+export function signingRefusal({ developer, packaged, argv, demo, smoke, hasSwitch }) {
+  if (developer !== true) return 'Release-Signatur gibt es nur im Developer-Build. Signiert wird in einem lokal installierten Developer-Build, nicht in dieser Version.';
   if (smoke) return 'Im Testlauf signiert Keevault nichts.';
   if (demo) return 'Im Demo-Modus signiert Keevault nichts.';
   if (!packaged) return 'Release signieren gibt es nur in der installierten App.';
@@ -27,5 +30,5 @@ export function signingRefusal({ packaged, argv, demo, smoke, hasSwitch }) {
 
 /** The same for the running app: electronApp is Electron's `app`. */
 export const appSigningRefusal = (electronApp, { demo, smoke }) => signingRefusal({
-  packaged: electronApp.isPackaged, argv: process.argv, demo: !!demo, smoke: !!smoke, hasSwitch: (n) => electronApp.commandLine.hasSwitch(n),
+  developer: buildKind().developer, packaged: electronApp.isPackaged, argv: process.argv, demo: !!demo, smoke: !!smoke, hasSwitch: (n) => electronApp.commandLine.hasSwitch(n),
 });

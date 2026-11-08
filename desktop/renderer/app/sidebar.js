@@ -2,6 +2,7 @@
 
 import { h, icon, iconButton, setChildren, toast, formatDateTime } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
+import { sharedNames, shownVaultHost } from '../../../extension/core/session-meta.js';
 import { call } from './ipc.js';
 import { panes } from './layout.js';
 import { busyContainers, items, logos, st, ui } from './state.js';
@@ -155,6 +156,7 @@ export function renderSidebar() {
     onclick: () => select({ view, containerId: null }),
   }, icon(iconName), h('span', { class: 'nav-label' }, label), h('span', { class: 'count' }, count));
   // The personal vault has its own place right below the views; the vault list shows the others.
+  const sameName = sharedNames(st.containers);
   const vaultRow = (c) => {
     const refresh = iconButton('refresh', t('Aktualisieren'), (e) => {
       e.stopPropagation();
@@ -177,7 +179,9 @@ export function renderSidebar() {
         title: [c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
         onclick: () => select({ view: 'container', containerId: c.id }),
       // Personal vault: the person first, then where it lives (OneDrive, iCloud, Dropbox …); other vaults the other way round.
-      }, ...(c.personal ? [containerIcon(c), sourceBadge(c)] : [sourceBadge(c), containerIcon(c)]), h('span', { class: 'nav-label' }, c.name),
+      }, ...(c.personal ? [containerIcon(c), sourceBadge(c)] : [sourceBadge(c), containerIcon(c)]), h('span', { class: 'nav-label' }, c.name,
+        // Name from the vault itself, or two vaults with the same name (#479): the host tells them apart.
+        shownVaultHost(c, sameName) ? h('span', { class: 'nav-host' }, shownVaultHost(c, sameName)) : null),
       c.error ? h('span', { class: 'badge danger' }, '!') : c.locked ? icon('lock', 13) : h('span', { class: 'count' }, c.count ?? '')),
       refresh);
   };

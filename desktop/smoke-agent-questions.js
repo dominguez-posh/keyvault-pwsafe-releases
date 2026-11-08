@@ -277,3 +277,34 @@ export async function deliberateAnswerCheck({ js, sleep, fail, win, confirmAgent
   const { options, box } = nativeQuestion({ title: 'Smoke', allow: 'OK', cancel: 'deny', choices: [{ value: 'once', label: 'Once' }] });
   if (box.defaultId !== options.length || box.cancelId !== options.length) fail(area, `native dialog: default button ${box.defaultId} is not "Deny" (${options.length})`);
 }
+
+/** #464: the card of a browser move into another vault names the entries (own list, titles as written), marks and names entries with passkeys, shortens long lists and keeps the total. */
+export async function browserMoveCardCheck({ js, sleep, fail, confirmBrowserMove, nativeQuestion }) {
+  const area = 'browsermove';
+  const entries = [{ title: 'Smoke Bank', passkey: false }, { title: 'Smoke <b>Mail</b>', passkey: true }, { title: 'Smoke Passkey zwei', passkey: true }];
+  for (let i = 0; i < 27; i++) entries.push({ title: `Smoke Eintrag ${i}`, passkey: false });
+  const request = confirmBrowserMove({ from: 'Smoke Quelle', to: 'Smoke Ziel', entries });
+  if (!(await until(() => js('!!document.querySelector("dialog[open] .browser-move .q-entries")')))) { fail(area, 'card has no entries list'); return; }
+  const seen = JSON.parse(await js(`JSON.stringify({
+    lead: document.querySelector("dialog[open] .browser-move .q-lead")?.textContent || "",
+    count: document.querySelector("dialog[open] .browser-move .q-entries-count")?.textContent || "",
+    rows: [...document.querySelectorAll("dialog[open] .browser-move .q-entry")].map((r) => [r.firstChild?.textContent, r.dataset.passkey]),
+    more: document.querySelector("dialog[open] .browser-move .q-entries-more")?.textContent || "",
+    markup: !!document.querySelector("dialog[open] .browser-move .q-entries b"),
+    chips: document.querySelectorAll("dialog[open] .browser-move .q-fields .q-chip").length,
+  })`));
+  if (!/Smoke Quelle/.test(seen.lead) || !/Smoke Ziel/.test(seen.lead)) fail(area, `source/target not named: "${seen.lead}"`);
+  if (!seen.count.includes('30')) fail(area, `total not shown: "${seen.count}"`);
+  if (seen.rows.length !== 20) fail(area, `expected 20 rows, shown ${seen.rows.length}`);
+  const titles = seen.rows.map((r) => r[0]);
+  for (const want of ['Smoke Bank', 'Smoke <b>Mail</b>', 'Smoke Passkey zwei']) if (!titles.includes(want)) fail(area, `entry not named: "${want}"`);
+  if (seen.rows.filter((r) => r[1] === '1').map((r) => r[0]).join('|') !== 'Smoke <b>Mail</b>|Smoke Passkey zwei') fail(area, `passkey entries not marked one by one: ${JSON.stringify(seen.rows.slice(0, 4))}`);
+  if (!/10/.test(seen.more)) fail(area, `shortening without "and 10 more": "${seen.more}"`);
+  if (seen.markup) fail(area, 'a title was shown as markup');
+  if (seen.chips) fail(area, 'titles are shown as field chips');
+  await js('document.querySelector("dialog[open] .browser-move .q-actions .btn:not(.primary)")?.click()');
+  if ((await Promise.race([request, sleep(3000).then(() => 'open')])) !== false) fail(area, 'deny did not answer the request');
+  await questionsGone(js);
+  const detail = nativeQuestion({ title: 'Smoke', allow: 'OK', cancel: 'deny', entries: { total: 30, rows: [{ title: 'Smoke Bank', passkey: true }] } }).box.detail;
+  if (!detail.includes('Smoke Bank') || !/30/.test(detail)) fail(area, `native dialog does not name the entries: "${detail}"`);
+}

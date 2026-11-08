@@ -1,4 +1,4 @@
-import { h, icon, iconButton, setChildren, toast, avatar, confirmDialog } from '../core/dom.js';
+import { h, icon, iconButton, setChildren, toast, avatar, confirmDialog, modal, formatDateTime } from '../core/dom.js';
 import { itemDetail, itemForm, generatorPanel } from '../core/ui-item.js';
 import { DEFAULT_OPTIONS } from '../core/generator.js';
 import { itemMatchesHost, urlScore, pageOrigin } from '../core/match.js';
@@ -7,6 +7,12 @@ import { itemHosts, resolveLogin } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call, copy } from '../lib/api.js';
 import { buildItemLink } from '../core/links.js';
+import { sharedNames, vaultChoiceLabel } from '../core/session-meta.js';
+import { linkedAssetsDialog, moveDialog, movePasskeyDialog } from './item-move.js';
+import { openWebUrl } from './open-url.js';
+
+/** Links from an entry: only http(s), anything else is refused with a message (open-url.js). */
+const openEntryUrl = (url) => openWebUrl(url, { open: (u) => chrome.tabs.create({ url: u }), notify: (m) => toast(m, 'error') });
 
 /** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
 const usableItem = async (containerId, id) => resolveLogin(await call('item', { containerId, id }), (c, i) => call('item', { containerId: c, id: i }));
@@ -25,7 +31,9 @@ const siteScores = new Map();
 const scoreKey = (s) => `${s.containerId}/${s.id}`;
 
 const containerName = (id) => st?.containers.find((c) => c.id === id)?.name || '';
-const writableContainers = () => st.containers.filter((c) => c.access?.write !== false && !c.error && !c.locked).map((c) => ({ id: c.id, name: c.name }));
+// Names in the selects to save or move: with the host when the name comes from the vault or is taken twice (#479).
+const choiceName = (c) => vaultChoiceLabel(c, sharedNames(st.containers));
+const writableContainers = () => st.containers.filter((c) => c.access?.write !== false && !c.error && !c.locked).map((c) => ({ id: c.id, name: choiceName(c) }));
 
 function setView(...children) {
   view.className = 'view';
@@ -145,6 +153,17 @@ function renderList() {
     renderList();
   } }, label)));
   const listEl = h('ul', { class: 'list' });
+  // Right-click on the empty part of the list: "Paste" when an entry is marked.
+  listEl.addEventListener('contextmenu', (e) => {
+    if (!cutEntry || e.target.closest('li.row-item')) return;
+    e.preventDefault();
+    closeMenu();
+    const menu = h('div', { class: 'context-menu', role: 'menu' }, h('button', { type: 'button', onclick: (ev) => { ev.stopPropagation(); closeMenu(); pasteNow(); } }, icon('move', 15), t('1 Eintrag einfügen')));
+    document.body.append(menu);
+    menu.style.left = `${Math.max(4, Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 4))}px`;
+    menu.style.top = `${Math.max(4, Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 4))}px`;
+    openMenu = menu;
+  });
 
   function renderRows() {
     const rows = filtered();
@@ -220,6 +239,31 @@ function closeMenu() {
 }
 document.addEventListener('click', closeMenu);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+
+// #467: Ctrl+X marks an entry for moving, Ctrl+V (or "Paste" in the list's menu) opens the move dialog for it (the popup
+// has no vault tree to paste into, so the target is chosen there, with the same plan for linked assets). Nothing goes
+// to the system clipboard. Typing in a field keeps cutting and pasting text.
+let cutEntry = null;
+const typingNow = () => ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) || !!document.activeElement?.isContentEditable || !!window.getSelection()?.toString();
+function cutNow(s) {
+  if (!st?.canMove || !writableContainers().some((c) => c.id === s.containerId)) return toast(t('Zuerst einen Eintrag auswählen, den du ändern darfst'), 'error');
+  cutEntry = { containerId: s.containerId, id: s.id, title: s.title };
+  return toast(t('„{title}“ zum Verschieben vorgemerkt', { title: s.title }));
+}
+function pasteNow() {
+  const marked = cutEntry;
+  if (!marked) return toast(t('Nichts zum Einfügen vorgemerkt'), 'error');
+  cutEntry = null;
+  return moveDialog(marked, moveCtx());
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && cutEntry && !document.querySelector('dialog[open]')) cutEntry = null;
+  if (!e.ctrlKey || e.shiftKey || e.altKey || (e.key.toLowerCase() !== 'x' && e.key.toLowerCase() !== 'v') || typingNow() || document.querySelector('dialog[open]') || !st) return;
+  e.preventDefault();
+  if (e.key.toLowerCase() === 'v') pasteNow();
+  else if (selectedSummary) cutNow(selectedSummary);
+  else toast(t('Zuerst einen Eintrag auswählen, den du ändern darfst'), 'error');
+});
 /** Web link to the entry for colleagues (only Key Vault entries; the vault URL falls back to the container id, its host). */
 function itemLinkFor(s) {
   const c = st?.containers.find((x) => x.id === s.containerId);
@@ -247,6 +291,7 @@ function entryMenu(e, s) {
       if (item?.password) copy(item.password, t('Passwort'));
       else toast(t('Kein Passwort gespeichert'));
     }) : null,
+    st.canMove ? entry('move', t('Ausschneiden'), () => cutNow(s)) : null,
     itemLinkFor(s) ? entry('link', t('Link kopieren'), () => {
       copy(itemLinkFor(s), t('Link zum Eintrag'));
     }) : null,
@@ -270,7 +315,9 @@ function entryMenu(e, s) {
   menu.querySelector('button')?.focus();
 }
 
+let selectedSummary = null;
 async function renderDetail(s, fresh = false) {
+  selectedSummary = s;
   setView(h('div', { class: 'center' }, h('span', { class: 'spinner' })));
   let item;
   try {
@@ -282,9 +329,13 @@ async function renderDetail(s, fresh = false) {
   const canFill = tab && item.type === 'login' && host && itemMatchesHost(itemHosts(item), host);
   // Linked login: shown and copied with the linked entry's values; edited as stored.
   const shown = await resolveLogin(item, (c, i) => call('item', { containerId: c, id: i }));
+  // Assets that use this login (#464): the button only when there are some, like in the app.
+  const hasAssets = st.canAssets && item.type === 'login' && (await call('linkedEntries', { containerId: item.containerId, id: item.id }).then((e) => e.length > 0, () => false));
+  const mayWrite = writableContainers().some((c) => c.id === item.containerId);
   const detail = itemDetail(shown, {
     copy,
-    openUrl: (url) => chrome.tabs.create({ url }),
+    ...hoverCtx(item, hasAssets, mayWrite),
+    openUrl: openEntryUrl,
     // Attachments and certificates: saved through the browser's download (base64 → file).
     saveFile: (name, data) => {
       const a = document.createElement('a');
@@ -297,6 +348,7 @@ async function renderDetail(s, fresh = false) {
     actions: [
       canFill ? { icon: 'fill', label: t('Ausfüllen'), primary: true, onClick: () => fillItem(s) } : null,
       { icon: 'edit', label: t('Bearbeiten'), onClick: () => renderEdit(item) },
+      st.canMove && mayWrite ? { icon: 'move', label: t('Verschieben'), onClick: () => moveDialog(item, moveCtx()) } : null,
       { icon: 'trash', label: t('Löschen'), danger: true, onClick: async () => {
         if (!(await confirmDialog(t('Eintrag löschen'), t('„{title}“ in den Papierkorb des Tresors verschieben? Wiederherstellen ist in der Desktop-App möglich.', { title: item.title }), { confirmLabel: t('Löschen'), danger: true }))) return;
         try {
@@ -312,6 +364,61 @@ async function renderDetail(s, fresh = false) {
   setView(backButton(), detail);
   view.classList.add('detail');
   return undefined;
+}
+
+/**
+ * What the entry view shares with the app (#464): field cards with click, arrow menu and frame, the version history.
+ * Also with the app's capabilities: linked assets, moving a passkey (moving the entry is an action of the detail view).
+ * Not here: typing into a window – the browser has no counterpart.
+ * Copies go through the app (kept out of Windows' clipboard history); only the developer demo uses the browser's clipboard.
+ */
+function hoverCtx(item, hasAssets, mayWrite) {
+  return {
+    showLinkedAssets: hasAssets ? (it) => linkedAssetsDialog(it, moveCtx()) : null,
+    onMovePasskey: st.canMovePasskey && mayWrite ? (passkey) => movePasskeyDialog(item, passkey, moveCtx()) : null,
+    hoverActions: true,
+    fieldMenu,
+    secureCopy: !st.demo,
+    openLabel: t('Öffnen'),
+    history: st.canHistory ? { load: () => call('history', { containerId: item.containerId, id: item.id }), open: (v) => showVersion(item, v) } : null,
+  };
+}
+
+/** What the dialogs of item-move.js need from the popup. */
+const moveCtx = () => ({
+  writableContainers, containerName, items: () => items, reload,
+  open: (summary) => renderDetail(summary),
+});
+
+/** The arrow menu of a field row: the same look as the entry's right-click menu, below the arrow. */
+function fieldMenu(anchor, items) {
+  closeMenu();
+  const menu = h('div', { class: 'context-menu', role: 'menu' }, ...items.map((m) => (m === '-' ? h('hr') : h('button', {
+    type: 'button', role: 'menuitem', class: m.danger ? 'danger' : '',
+    onclick: (ev) => { ev.stopPropagation(); closeMenu(); m.onClick(); },
+  }, icon(m.icon, 15), m.label))));
+  document.body.append(menu);
+  const a = anchor.getBoundingClientRect();
+  const r = menu.getBoundingClientRect();
+  const below = a.bottom + 6 + r.height <= window.innerHeight - 4;
+  menu.style.left = `${Math.max(4, Math.min(a.right - r.width, window.innerWidth - r.width - 4))}px`;
+  menu.style.top = `${Math.max(4, below ? a.bottom + 6 : a.top - r.height - 6)}px`;
+  openMenu = menu;
+  menu.querySelector('button')?.focus();
+}
+
+/** One older version, read-only (#450, #464): shown like an entry, passwords stay hidden until shown. */
+async function showVersion(item, v) {
+  const title = t('Version vom {date}', { date: formatDateTime(v.updated) });
+  let old;
+  try {
+    if (v.enabled === false) throw new Error('disabled');
+    old = await call('version', { containerId: item.containerId, id: item.id, version: v.version });
+  } catch {
+    modal(title, h('p', { class: 'muted' }, t('Diese Version ist nicht mehr lesbar: Ein Schlüsselwechsel hat ältere Versionen gesperrt. Sie bleibt nur für das Protokoll erhalten.')), [{ label: t('Schließen') }]);
+    return;
+  }
+  modal(title, itemDetail(old, { copy, containerName, openUrl: openEntryUrl }), [{ label: t('Schließen') }]);
 }
 
 function backButton(onClick = () => renderList()) {
@@ -356,7 +463,9 @@ async function renderEdit(item) {
     isNew,
     siteIcon: onItsSite ? () => faviconToDataUrl(tab.favIconUrl) : null,
     scanQr: scanVisibleTab,
-    containers: isNew ? writable : st.containers.map((c) => ({ id: c.id, name: c.name })),
+    // Moving a passkey to another entry (#464): only for a saved entry in a vault with write access, and only with an app that can do it.
+    onMovePasskey: item && st.canMovePasskey && writable.some((c) => c.id === item.containerId) ? (passkey) => movePasskeyDialog(item, passkey, moveCtx()) : null,
+    containers: isNew ? writable : st.containers.map((c) => ({ id: c.id, name: choiceName(c) })),
     containerId: item?.containerId || (writable.some((c) => c.id === st.settings.defaultContainer) ? st.settings.defaultContainer : writable[0]?.id),
     onCancel: () => (item ? renderDetail(item) : renderList()),
     onSave: async (next, containerId) => {

@@ -5,9 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { inspectRelease } from '../desktop/release-files.js';
-import { createKeyStore, checkApproverCredential, addApproverBytes, updateKeyElement, updateKeyLine } from '../desktop/release-key.js';
+import { createKeyStore, checkApproverCredential, addApproverBytes, removeApproverBytes, approverNumber, updateKeyElement, updateKeyLine } from '../desktop/release-key.js';
 import { verifyManifest, releaseChallenge, encodeAssertion } from '../desktop/update-verify.js';
 import { AAGUID } from '../extension/core/webauthn.js';
+import { releaseDialogHtml } from '../desktop/release-dialog.js';
 import { signingRefusal } from '../desktop/main/release-gate.js';
 
 // Test keys and test files only – nothing here touches a real key.
@@ -159,16 +160,80 @@ test('B2: a further approver needs the touch of an existing one for exactly that
   }
 });
 
+test('#437: removing an approver needs the touch of another one, the last stays, the removed one opens nothing', async () => {
+  const file = keyFile();
+  const s = createKeyStore({ file, encrypt, decrypt });
+  const a = registration();
+  const b = registration();
+  const secretA = prf();
+  const secretB = prf();
+  await s.generate(asApprover(a, 'cred-a', secretA));
+  const second = asApprover(b, 'cred-b', secretB);
+  await s.addApprover(second, proof(addApproverBytes(second), a, 'cred-a', secretA));
+  const [, entryB] = await s.approvers();
+  const bytes = removeApproverBytes(entryB);
+  await assert.rejects(s.removeApprover('cred-b'), /anderer eingetragener Freigeber/, 'no proof');
+  await assert.rejects(s.removeApprover('cred-b', proof(bytes, b, 'cred-b', secretB)), /anderer eingetragener Freigeber/, 'the removed key cannot vouch for itself');
+  await assert.rejects(s.removeApprover('cred-b', proof(addApproverBytes(entryB), a, 'cred-a', secretA)), /anderer eingetragener Freigeber/, 'proof for other bytes (an add proof)');
+  await assert.rejects(s.removeApprover('cred-b', proof(bytes, a, 'cred-a', secretA, { flags: 0 })), /anderer eingetragener Freigeber/, 'not touched');
+  await assert.rejects(s.removeApprover('cred-b', proof(bytes, registration(), 'cred-a', secretA)), /anderer eingetragener Freigeber/, 'foreign key under the id of a');
+  await assert.rejects(s.removeApprover('cred-b', proof(bytes, a, 'cred-a', prf())), /nicht öffnen/, 'wrong secret of the confirming key');
+  await assert.rejects(s.removeApprover('cred-x', proof(bytes, a, 'cred-a', secretA)), /nicht als Freigeber/);
+  assert.equal((await s.approvers()).length, 2, 'nothing was removed by the refused attempts');
+
+  await s.removeApprover('cred-b', proof(bytes, a, 'cred-a', secretA));
+  assert.deepEqual((await s.approvers()).map((x) => x.credentialId), ['cred-a']);
+  assert.equal(JSON.stringify(rawRecord(file)).includes('cred-b'), false, 'its wrapped copy is gone from the record');
+  const manifest = Buffer.from('version: 9.9.9\n');
+  await assert.rejects(s.sign(manifest, proof(manifest, b, 'cred-b', secretB)), /Freigabe/, 'the removed key signs nothing');
+  await assert.rejects(s.attest(manifest, proof(manifest, b, 'cred-b', secretB)), /Freigabe/, 'the removed key attests nothing');
+  await assert.rejects(s.addApprover(asApprover(registration(), 'cred-c', prf()), proof(addApproverBytes(asApprover(registration(), 'cred-c', prf())), b, 'cred-b', secretB)), /vorhandener Freigeber/, 'the removed key lets nobody in');
+  assert.ok(await s.attest(manifest, proof(manifest, a, 'cred-a', secretA)), 'the one who stays still works');
+
+  await assert.rejects(s.removeApprover('cred-a', proof(removeApproverBytes((await s.approvers())[0]), a, 'cred-a', secretA)), /letzte Freigeber/, 'the last one stays');
+  assert.equal((await s.approvers()).length, 1);
+});
+
+test('#437: numbers stay stable after a removal, a new approver gets the next free number', async () => {
+  const s = createKeyStore({ file: keyFile(), encrypt, decrypt });
+  const keys = [registration(), registration(), registration()];
+  const secrets = keys.map(() => prf());
+  await s.generate(asApprover(keys[0], 'cred-1', secrets[0]));
+  for (const i of [1, 2]) {
+    const c = asApprover(keys[i], `cred-${i + 1}`, secrets[i]);
+    await s.addApprover(c, proof(addApproverBytes(c), keys[0], 'cred-1', secrets[0]));
+  }
+  await s.removeApprover('cred-2', proof(removeApproverBytes((await s.approvers())[1]), keys[0], 'cred-1', secrets[0]));
+  const fourth = asApprover(registration(), 'cred-4', prf());
+  await s.addApprover(fourth, proof(addApproverBytes(fourth), keys[2], 'cred-3', secrets[2]));
+  const list = await s.approvers();
+  assert.deepEqual(list.map((x) => x.id), ['approver-1', 'approver-3', 'approver-4']);
+  assert.deepEqual(list.map((x, i) => updateKeyElement(x, approverNumber(x, i)).id), ['release-1', 'release-3', 'release-4'], 'UPDATE_KEYS ids do not shift');
+});
+
+test('#437: the removal route picks the key in the main process, asks the gate first and is no agent or bridge command', () => {
+  const api = read('desktop/main/api/release.js');
+  assert.match(api, /async removeReleaseApprover\(\) \{\s*requireOpen\(\);\s*const why = refusal\(\);\s*if \(why\) throw new Error\(why\);/, 'no argument from the window, the Developer-build gate (#456) first');
+  assert.match(api, /const done = await removeReleaseApprover\(target\.credentialId, win\);\s*if \(!done\) return null;/, 'a cancel is checked before it is unpacked');
+  const flow = read('desktop/main/release-sign.js');
+  assert.match(flow, /if \(!\(await confirm\(info, \{ approverRequired: true \}\)\)\) return null;\s*const proof = await approve\(removeApproverBytes\(target\), list\.filter\(\(a\) => a !== target\)\);/, 'dialog before the touch, the ceremony offers only the keys that stay');
+  const dialog = releaseDialogHtml({ remove: true, id: 'release-2', credentialId: '<cred>', remaining: 1 }, { nonce: 'n' });
+  assert.match(dialog, /Release-Freigeber entfernen/);
+  assert.ok(dialog.includes('&lt;cred&gt;') && !dialog.includes('<cred>'), 'the credential id is escaped');
+});
+
 test('signing is refused when Chromium itself sees a debug switch, whatever the spelling', () => {
-  const base = { packaged: true, argv: ['Keevault.exe'], demo: false, smoke: false };
+  const base = { developer: true, packaged: true, argv: ['Keevault.exe'], demo: false, smoke: false };
   assert.match(signingRefusal({ ...base, hasSwitch: (n) => n === 'remote-debugging-port' }), /remote-debugging-port/);
   assert.equal(signingRefusal({ ...base, hasSwitch: (n) => n === 'disable-features' }), null, 'switches Electron may set itself are not asked');
 });
 
 test('signing is refused when not packaged, in demo and smoke runs and with debugging switches', () => {
-  const base = { packaged: true, argv: ['Keevault.exe'], demo: false, smoke: false };
+  const base = { developer: true, packaged: true, argv: ['Keevault.exe'], demo: false, smoke: false };
   assert.equal(signingRefusal(base), null);
   assert.match(signingRefusal({ ...base, packaged: false }), /installierten/);
+  assert.match(signingRefusal({ ...base, developer: false }), /Developer-Build/, 'a release build never signs');
+  assert.match(signingRefusal({ ...base, developer: undefined }), /Developer-Build/, 'unknown build kind counts as refused');
   assert.match(signingRefusal({ ...base, demo: true }), /Demo/);
   assert.match(signingRefusal({ ...base, smoke: true }), /Test/);
   for (const flag of ['-remote-debugging-port=9222', '/Remote-Debugging-Port=9222', '--REMOTE-DEBUGGING-PIPE', '--Inspect', '--remote-debugging-port=9222', '--remote-debugging-pipe', '--inspect', '--inspect-brk=9229', '--js-flags=--expose-gc', '--remote-allow-origins=*', '--enable-logging']) {

@@ -111,6 +111,18 @@ export class ItemTooLargeError extends Error {
 
 export const newItemId = () => ITEM_PREFIX + crypto.randomUUID().replace(/-/g, '');
 
+// The vault's own secrets share the prefix with the entries (#484): never an entry ID, whatever path asks.
+const INTERNAL_SECRETS = new Set(['pws-container', 'pws-keyring', 'pws-policy', 'pws-folders', 'pws-logo', 'pws-index']);
+export const isInternalSecretName = (id) => INTERNAL_SECRETS.has(id) || /^pws-index-\d+$/.test(id);
+
+/** Entry ID as the entry API takes it: the entry format (prefix, Key Vault name characters), no internal secret. → id */
+export function requireItemId(id) {
+  if (typeof id !== 'string' || !id.startsWith(ITEM_PREFIX) || !/^[0-9A-Za-z-]{5,127}$/.test(id) || isInternalSecretName(id.toLowerCase())) {
+    throw new Error(t('Ungültige Eintrags-ID'));
+  }
+  return id;
+}
+
 /**
  * Additional fields: { name, value, hidden, type }. type decides input and display; a file keeps its content as
  * base64 in value plus fileName/mime/size. Files are small on purpose: the whole entry has to fit into one Key Vault
@@ -221,6 +233,9 @@ export function normalizeItem(input = {}) {
     portals: normalizePortals(input.portals),
     created: input.created || '',
     createdBy: input.createdBy || '',
+    // "Nur für mich" (#476, core/private.js): Entra object ID of the owner and their name; '' = visible to everyone.
+    privateOwner: str(input.privateOwner).trim().slice(0, 64),
+    privateOwnerName: input.privateOwner ? str(input.privateOwnerName).trim().slice(0, 128) : '',
   };
 }
 
@@ -350,6 +365,8 @@ export function serializeItem(input, actor = '') {
     expires: item.expires || undefined,
     passwordChanged: item.passwordChanged || undefined,
     icon: item.icon || undefined,
+    privateOwner: item.privateOwner || undefined,
+    privateOwnerName: item.privateOwner && item.privateOwnerName ? item.privateOwnerName : undefined,
     created: item.created || now,
     createdBy: item.createdBy || actor,
     updated: now,
@@ -381,6 +398,8 @@ export function serializeItem(input, actor = '') {
   if (item.type === 'login' && item.sophos) tags.sop = '1';
   if (item.type === 'login' && item.loginLink) tags.ln = '1';
   if (item.type === 'server' && serverMethods(item).length) tags.sv = serverMethods(item).join(' ');
+  // One tag "objectId name" (Key Vault allows 15 tags per secret); sealed in protected vaults like the title.
+  if (item.privateOwner) tags.po = truncate([item.privateOwner, item.privateOwnerName].filter(Boolean).join(' '), 150);
   return { value, contentType: CONTENT_TYPE, tags, doc };
 }
 
@@ -407,6 +426,8 @@ export function summaryFromSecret(secret, containerId) {
     sophos: t.sop === '1',
     loginLinked: t.ln === '1',
     methods: split(t.sv),
+    privateOwner: t.po ? String(t.po).split(' ')[0] : '',
+    privateOwnerName: t.po ? String(t.po).split(' ').slice(1).join(' ') : '',
     updated: (secret.attributes?.updated || 0) * 1000,
   };
 }

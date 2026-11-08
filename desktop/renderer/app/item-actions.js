@@ -17,8 +17,11 @@ import { itemAvatar } from './icons.js';
 import { copyItemLink } from './item-links.js';
 import { renderList } from './list.js';
 import { droppedLinksText, multiActions, selectionSize } from './multi.js';
+import { movePlanPanel } from './move-plan.js';
+import { cutItems } from './cut-paste.js';
 import { reloadAll, render } from './shell.js';
 import { deleteNotice } from './trash.js';
+import { privacyActions } from './private.js';
 
 /** Stand-alone password generator: copy, type into another window or start a new entry with it. */
 export function generatorDialog() {
@@ -85,9 +88,11 @@ export function itemActions(i) {
       renderList();
       renderDetail();
     } },
+    { action: 'cut', icon: 'move', label: t('Ausschneiden'), disabled: !canWrite, onClick: () => cutItems([i]) },
     { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), disabled: !canWrite, onClick: () => duplicateItem(containerId, id) },
     { action: 'history', icon: 'history', label: t('Verlauf'), onClick: async () => historyDialog(await open()) },
     { action: 'copy-link', icon: 'link', label: t('Link kopieren'), disabled: !buildItemLink(c, id), onClick: () => copyItemLink(c, id) },
+    ...privacyActions(i, c, canWrite), // #476: admin mode only
     agentTrust.has(i.key) ? { action: 'agent-untrust', icon: 'shield', label: t('KI-Freigabe entziehen'), onClick: async () => {
       const agents = agentTrust.get(i.key).join(', ');
       if (!(await confirmDialog(t('KI-Freigabe entziehen'), t('„{agents}“ liest „{title}“ bisher ohne Rückfrage. Danach fragt Keevault wieder nach.', { agents, title: i.title }), { confirmLabel: t('Entziehen') }))) return;
@@ -188,22 +193,28 @@ export async function historyDialog(item) {
   [{ label: t('Schließen') }]);
 }
 
-async function showVersion(item, v) {
+/** One older version, read-only (#450): passwords stay hidden, show and copy work as in the entry itself. */
+export async function showVersion(item, v) {
   let old;
   try {
+    if (v.enabled === false) throw new Error('disabled');
     old = await call('version', item.containerId, item.id, v.version);
-  } catch (e) {
-    toast(e.message, 'error');
+  } catch {
+    // Unreadable (e.g. locked by a key change, #402) is a state, not an error: say so.
+    modal(t('Version vom {date}', { date: formatDateTime(v.updated) }),
+      h('p', { class: 'muted' }, t('Diese Version ist nicht mehr lesbar: Ein Schlüsselwechsel hat ältere Versionen gesperrt. Sie bleibt nur für das Protokoll erhalten.')),
+      [{ label: t('Schließen') }]);
     return;
   }
+  const canWrite = writable(st.containers.find((c) => c.id === item.containerId) || {});
   modal(t('Version vom {date}', { date: formatDateTime(v.updated) }), itemDetail(old, { copy, openUrl, containerName }), [
     { label: t('Schließen') },
-    { label: t('Diese Version wiederherstellen'), primary: true, onClick: async () => {
+    canWrite ? { label: t('Diese Version wiederherstellen'), primary: true, onClick: async () => {
       await call('restoreVersion', item.containerId, item.id, v.version);
       toast(t('Version wiederhergestellt'));
       await reloadAll();
-    } },
-  ]);
+    } } : null,
+  ].filter(Boolean));
 }
 
 export function moveDialog(item) {
@@ -213,15 +224,27 @@ export function moveDialog(item) {
     return;
   }
   const target = h('select', {}, ...targets.map((c) => h('option', { value: c.id }, c.name)));
+  const panel = movePlanPanel(item, target);
   modal(t('Eintrag verschieben'), h('div', {},
     field(t('„{title}“ verschieben nach', { title: item.title }), target),
-    h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle gelöscht. Der bisherige Verlauf bleibt bis zum Ende der Aufbewahrungsfrist in der Quelle.'))), [
+    h('p', { class: 'muted small' }, t('Der Eintrag wird im Ziel neu angelegt und in der Quelle gelöscht. Der bisherige Verlauf bleibt bis zum Ende der Aufbewahrungsfrist in der Quelle.')),
+    panel.node), [
     { label: t('Abbrechen') },
     { label: t('Verschieben'), primary: true, onClick: async () => {
-      const saved = await call('move', item.containerId, target.value, item.id);
-      ui.selected = saved.key;
-      toast(saved.droppedLinks?.length ? droppedLinksText(saved) : t('Verschoben'));
+      let res;
+      try {
+        res = await panel.run();
+      } catch (e) {
+        if (e.name !== 'MoveAssetsError') throw e;
+        // Partly done: the message says what lies where; the dialog closes and the list shows the real state.
+        toast(e.message, 'error');
+        await reloadAll();
+        return undefined;
+      }
+      ui.selected = res.saved.key;
+      toast(res.dropped.length ? droppedLinksText(res.saved) : res.moved?.length > 1 ? t('{n} Einträge verschoben', { n: res.moved.length }) : t('Verschoben'));
       await reloadAll();
+      return undefined;
     } },
   ]);
 }

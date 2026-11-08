@@ -7,11 +7,11 @@ export const FLOW_AREAS = ['shortcuts', 'protection', 'bridge', 'vaultsettings',
 
 /** The steps of the feature checks (desktop/smoke-features.js), in their order. A test keeps the two lists equal. */
 export const FEATURE_AREAS = [
-  'buildkind', 'clipboard', 'mainmenu', 'trash', 'vaultsearch', 'sharehint', 'exthint', 'vaultorder', 'newmenu', 'vaultmenu', 'kdbximport', 'loginlink',
+  'buildkind', 'clipboard', 'mainmenu', 'trash', 'vaultsearch', 'navheading', 'sharehint', 'exthint', 'vaultorder', 'newmenu', 'vaultmenu', 'kdbximport', 'loginlink',
   'browserimport', 'foldericons', 'vaultwizard', 'firstwizard', 'recoverykey', 'adminstart', 'narrowsidebar', 'sidebarfoot', 'version', 'versionchannel',
   'list', 'agentfront', 'agententer', 'agentrevoke', 'agentwrite', 'agentlock', 'agenttrust', 'passkeypin', 'passkeypinagent', 'passkeypinwindows', 'passkeypinbrowser', 'folderdrag', 'multidrag', 'multiclear',
-  'deleterefused', 'deleterace', 'mcpextra', 'helpfeedback', 'noscroll', 'passkeynarrow', 'listnarrow', 'passkeydrag', 'adminpin', 'admin', 'devices',
-  'bastionfqdn', 'adminpim', 'offlinedelete', 'winlock', 'releasesign', 'pimlock',
+  'deleterefused', 'deleterace', 'moveassets', 'cutpaste', 'mcpextra', 'helpfeedback', 'noscroll', 'passkeynarrow', 'listnarrow', 'passkeydrag', 'adminpin', 'admin', 'devices',
+  'bastionfqdn', 'adminpim', 'offlinedelete', 'winlock', 'releasesign', 'versionhistory', 'otpsecret', 'fieldhover', 'nurfuermich', 'pimlock', 'machinesetup',
 ];
 
 export const SMOKE_AREAS = [...FLOW_AREAS, ...FEATURE_AREAS];

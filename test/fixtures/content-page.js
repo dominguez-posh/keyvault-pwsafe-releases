@@ -13,6 +13,7 @@ function element(tag) {
     tagName: tag.toUpperCase(), children: [], style: {}, dataset: {}, isConnected: true, className: '', nodeType: 1, computed: {}, left: 0, top: 0, width: 100, height: 20,
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     append(...kids) { e.children.push(...kids); },
+    after(...kids) { e.next = kids; },
     replaceChildren(...kids) { e.children = kids; },
     remove() { e.isConnected = false; },
     setAttribute() {}, getAttribute: () => null, querySelector: () => null, querySelectorAll: () => [],
@@ -93,6 +94,9 @@ export function page({ host = 'shop.example', replies = {}, signIn = '' } = {}) 
     field, other, button, sent, document,
     // The background asks the page to show the save prompt (save:show).
     showSave: (info) => fromBackground({ type: 'save:show', info }, { id: 'test' }),
+    // Any other message of the service worker; returns what the content script answered right away.
+    fromWorker(msg) { let answer; fromBackground(msg, { id: 'test' }, (r) => { answer = r; }); return answer; },
+    created,
     // What the browser does for each way of reaching the field.
     scriptFocus(target = field) { document.activeElement = target; fire('focusin', { target, isTrusted: true }); },
     syntheticFocusin(target = field) { document.activeElement = target; fire('focusin', { target, isTrusted: false }); },

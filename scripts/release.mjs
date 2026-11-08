@@ -28,6 +28,7 @@ import { appSignsWith, signsOldWith, checkSignedRelease, distFiles, releaseAsset
 import { isReleaseRun } from './release-kind.mjs';
 import { verifyPackage as verifyAsar } from './verify-package.mjs';
 import { stampCommit } from '../desktop/build-kind.js';
+import { EARLY_ACCESS_FEED_FILE, earlyAccessFeedXml } from './release-urls.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const publishOnly = process.argv.includes('--publish-only');
@@ -181,7 +182,7 @@ buildStep('Update-Fenster (Keevault-Update.exe)', () => {
 
 // --- 2. Browser extension ---------------------------------------------------------------------------------------------
 buildStep('Erweiterung (ZIP)', () => run(process.execPath, [R('scripts/pack-extension.mjs')]));
-buildStep('Erweiterung (CRX + update.xml)', () => run(process.execPath, [R('scripts/pack-crx.mjs')]));
+buildStep('Erweiterung (CRX + update.xml)', () => run(process.execPath, [R('scripts/pack-crx.mjs'), ...(earlyAccess ? ['--early-access'] : [])]));
 
 // --- 3. Installers (EXE + MSIX) ---------------------------------------------------------------------------------------
 let unpacked = R('release/win-unpacked');
@@ -332,7 +333,12 @@ if (publish) {
     const remote = execFileSync('git', ['-C', pub, 'branch', '-r'], { encoding: 'utf8' });
     // early-access starts from main the first time; later it stays ahead of main (Prod moves main forward to it).
     run('git', ['-C', pub, 'checkout', '-B', branch, remote.includes(`origin/${branch}`) ? `origin/${branch}` : 'origin/main']);
+    // #455: the export empties the folder. The Early Access feed on this branch keeps its old content meanwhile (testers'
+    // browsers read it): it is only replaced after the release exists, see "Early-Access-Feed" below.
+    const feedFile = join(pub, EARLY_ACCESS_FEED_FILE);
+    const oldFeed = existsSync(feedFile) ? readFileSync(feedFile) : null;
     run(process.execPath, [R('scripts/export-public.mjs'), pub]);
+    if (oldFeed) writeFileSync(feedFile, oldFeed);
     run('git', ['-C', pub, 'add', '-A']);
     const changed = execFileSync('git', ['-C', pub, 'status', '--porcelain'], { encoding: 'utf8' }).trim() !== '';
     if (changed) run('git', ['-C', pub, 'commit', '-m', `Keevault ${version}${earlyAccess ? ' (Early Access)' : ''}`]);
@@ -355,5 +361,19 @@ if (publish) {
       '--title', `Keevault ${version}${earlyAccess ? ' (Early Access)' : ''}`, '--notes-file', notesFile,
       // Pre-release: only the Early Access update channel (keevault.de/update/beta) sees it; "Latest" stays.
       ...(earlyAccess ? ['--prerelease', '--latest=false'] : [])]);
+  });
+  // #455: the fixed Early Access extension feed moves to this version only now, when the release with its CRX exists (before,
+  // testers would be pointed to a file that is not there yet). A Prod hotfix pulls it along, so Early Access never stays behind Prod.
+  step('Early-Access-Feed (update-ea.xml)', () => {
+    const feed = earlyAccessFeedXml(readFileSync(R('dist', 'update.xml'), 'utf8'), version);
+    run('git', ['-C', pub, 'fetch', 'origin']);
+    const remote = execFileSync('git', ['-C', pub, 'branch', '-r'], { encoding: 'utf8' });
+    run('git', ['-C', pub, 'checkout', '-B', 'early-access', remote.includes('origin/early-access') ? 'origin/early-access' : 'origin/main']);
+    writeFileSync(join(pub, EARLY_ACCESS_FEED_FILE), feed);
+    run('git', ['-C', pub, 'add', EARLY_ACCESS_FEED_FILE]);
+    if (execFileSync('git', ['-C', pub, 'status', '--porcelain'], { encoding: 'utf8' }).trim() !== '') {
+      run('git', ['-C', pub, 'commit', '-m', `Early Access feed ${version}`]);
+      run('git', ['-C', pub, 'push', 'origin', 'HEAD:early-access']);
+    }
   });
 }

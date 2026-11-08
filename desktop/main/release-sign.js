@@ -12,12 +12,13 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { here, demo, smokeTest } from './boot.js';
-import { addApproverBytes, createKeyStore, updateKeyElement, updateKeyLine } from '../release-key.js';
+import { addApproverBytes, approverNumber, createKeyStore, removeApproverBytes, updateKeyElement, updateKeyLine } from '../release-key.js';
 import { inspectRelease } from '../release-files.js';
 import { CONFIRM_DELAY_MS, releaseDialogHtml } from '../release-dialog.js';
 import { releaseChallenge, encodeAssertion, verifyManifest } from '../update-verify.js';
 import { appSigningRefusal } from './release-gate.js';
 import { passkeyCeremony } from './passkey-window.js';
+import { cardPlacement, showCard } from './confirm-card.js';
 
 export const SIGNATURE_FILE = 'latest.yml.sig2';
 
@@ -44,12 +45,20 @@ export function keyStore() {
  * window is closed (a black window nobody can close is worse than no window).
  */
 export function openApprovalDialog(info, { approverRequired = false, delayMs = CONFIRM_DELAY_MS, parent, loadTimeoutMs = 10_000 } = {}) {
+  const [width, height] = [780, 660];
   const id = randomUUID();
   const nonce = randomBytes(16).toString('base64');
   const window = new BrowserWindow({
     parent: (!smokeTest && parent) || undefined,
-    width: 760,
-    height: 640,
+    // #459: a frameless, rounded card (no Windows title bar) at the top centre over the app window (or the screen).
+    width,
+    height,
+    ...cardPlacement(width, parent, height),
+    frame: false,
+    transparent: true,
+    resizable: false,
+    hasShadow: false,
+    skipTaskbar: true,
     minimizable: false,
     closable: true,
     alwaysOnTop: !smokeTest,
@@ -87,7 +96,7 @@ export function openApprovalDialog(info, { approverRequired = false, delayMs = C
         fail('Inhalt leer');
         return;
       }
-      if (!smokeTest && !window.isDestroyed()) { window.show(); window.focus(); }
+      showCard(window, id);
     };
     ipcMain.on(channel, onDecide);
     ipcMain.on(readyChannel, onReady);
@@ -197,10 +206,37 @@ export function createReleaseSetup({ keyStore: ks, confirm, register = registerW
  */
 export async function releaseApprovers(ks, addedCredentialId = null) {
   const list = ks.hasKey() ? await ks.approvers() : [];
-  const approvers = list.map((a, i) => ({ id: updateKeyElement(a, i + 1).id, credentialId: a.credentialId, line: updateKeyLine(a, i + 1) }));
+  const approvers = list.map((a, i) => ({ id: updateKeyElement(a, approverNumber(a, i)).id, credentialId: a.credentialId, line: updateKeyLine(a, approverNumber(a, i)) }));
   const added = approvers.find((a) => a.credentialId === addedCredentialId) || null;
   return { approvers, added, publicKey: added?.line || '' };
 }
+
+/**
+ * Removing an approver (#437, lost key). Goes through the waiting-time dialog; then another registered approver must
+ * touch its key over exactly the credential being removed (the ceremony offers only the others). The last one stays.
+ * → releaseApprovers of the remaining ones, or null when the person said no.
+ */
+export function createReleaseRemoval({ keyStore: ks, confirm, approve = approveWithKey, refusal: refused = refusal }) {
+  return async function removeApprover(credentialId) {
+    const why = refused();
+    if (why) throw new Error(why);
+    const list = ks.hasKey() ? await ks.approvers() : [];
+    const index = list.findIndex((a) => a.credentialId === credentialId);
+    if (index < 0) throw new Error('Dieser Sicherheitsschlüssel ist nicht als Freigeber eingetragen.');
+    if (list.length < 2) throw new Error('Der letzte Freigeber lässt sich nicht entfernen – ohne ihn ließe sich der Signierschlüssel nicht mehr öffnen.');
+    const target = list[index];
+    const info = { remove: true, id: updateKeyElement(target, approverNumber(target, index)).id, credentialId: target.credentialId, remaining: list.length - 1 };
+    if (!(await confirm(info, { approverRequired: true }))) return null;
+    const proof = await approve(removeApproverBytes(target), list.filter((a) => a !== target));
+    await ks.removeApprover(target.credentialId, proof);
+    return releaseApprovers(ks);
+  };
+}
+
+export const removeReleaseApprover = (credentialId, parent) => createReleaseRemoval({
+  keyStore: keyStore(),
+  confirm: (info, options) => openApprovalDialog(info, { ...options, parent }).result,
+})(credentialId);
 
 export const setupReleaseKey = (parent) => createReleaseSetup({
   keyStore: keyStore(),

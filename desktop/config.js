@@ -79,6 +79,8 @@ const DEFAULTS = {
   adminOffered: false,
   // View: admin tools top right – PIM, Microsoft 365 admin centers, servers (replaces the single PIM button).
   adminTools: false,
+  // #476: in admin mode, Verwalter see other people's "Nur für mich" entries – off by default, off again with admin mode.
+  showOthersPrivate: false,
   // Break-glass accounts per tenant ({ [tenantId]: [{ id, type, displayName, detail }] }): preset when creating a vault.
   breakGlass: {},
   // Second installation found (path|version) the user chose not to be told about again.

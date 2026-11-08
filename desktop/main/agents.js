@@ -8,6 +8,7 @@ import { demo } from './boot.js';
 import { config, mcp, opened, win } from './state.js';
 import { send } from './session.js';
 import { showWindow } from './window.js';
+import { bringToFront } from './focus.js';
 import { passkeyPin } from './guards.js';
 import { requireUsablePasskeyPin } from './passkey-use.js';
 // #381: the agent names itself (MCP client name), so its name is shown like every other value it sends.
@@ -184,6 +185,7 @@ export function nativeQuestion(spec) {
     box: {
       type: 'question', buttons: [...options.map((o) => o.label), t('Ablehnen')], defaultId: options.length, cancelId: options.length, noLink: true,
       message: spec.title, detail: [spec.lead, spec.entry && [spec.entry, spec.username, spec.vault].filter(Boolean).join(' · '), spec.fields?.join(', '),
+        spec.entries?.rows?.length && [t('{n} Einträge', { n: spec.entries.total }), ...spec.entries.rows.map((e) => `- ${e.title}${e.passkey ? ` (${t('Passkey')})` : ''}`), spec.entries.total > spec.entries.rows.length ? t('… und {n} weitere', { n: spec.entries.total - spec.entries.rows.length }) : ''].filter(Boolean).join('\n'),
         spec.changes?.map((c) => `${c.field}: ${c.from === undefined ? '' : `${c.from || t('(leer)')} → `}${c.to || t('(leer)')}${c.host ? `\n${t('Ziel: {host}', { host: c.host })}` : ''}`).join('\n'), spec.note].filter(Boolean).join('\n\n'),
     },
   };
@@ -212,6 +214,7 @@ export async function askInApp(spec) {
       refusals.set(id, spec.cancel);
       if (spec.pin) pinQuestions.add(id);
       send({ type: 'question', id, ...spec });
+      bringToFront(win); // #468: the PIN field in the question can be typed into at once
       // Nobody answers within 5 minutes: treated as the cancel choice (the agent gets a refusal, not a hang).
       setTimeout(() => {
         if (questions.delete(id)) {

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createPackage } from '@electron/asar';
 import { verifyPackage } from '../scripts/verify-package.mjs';
-import { kindFrom, stampCommit } from '../desktop/build-kind.js';
+import { kindFrom, stampCommit, isPackagedDir } from '../desktop/build-kind.js';
 
 const git = (cwd, ...a) => execFileSync('git', a, { cwd, stdio: 'pipe' });
 
@@ -40,4 +40,14 @@ test('build kind: packaged builds never call git, no stamp means Developer witho
   assert.deepEqual(kindFrom(undefined, { packaged: true, git: boom }), { developer: true, commit: '' });
   assert.deepEqual(kindFrom({ kind: 'developer', commit: stampCommit('abc1234def') }, { packaged: true, git: boom }), { developer: true, commit: 'abc1234' });
   assert.deepEqual(kindFrom(undefined, { packaged: false, git: () => 'f00ba12' }), { developer: true, commit: 'f00ba12' });
+});
+
+test('build kind: app.asar is recognised with Windows and POSIX separators (#461)', () => {
+  assert.equal(isPackagedDir('C:\\Program Files\\Keevault\\resources\\app.asar\\desktop'), true);
+  assert.equal(isPackagedDir('C:\\Program Files\\Keevault\\resources\\app.asar'), true);
+  assert.equal(isPackagedDir('/Applications/Keevault.app/Contents/Resources/app.asar/desktop'), true);
+  assert.equal(isPackagedDir('/opt/Keevault/resources/app.asar'), true);
+  assert.equal(isPackagedDir('C:\\git\\keyvault-pwsafe\\desktop'), false);
+  assert.equal(isPackagedDir('C:\\git\\app.asar.old\\desktop'), false);
+  assert.equal(isPackagedDir('/home/u/src/desktop'), false);
 });

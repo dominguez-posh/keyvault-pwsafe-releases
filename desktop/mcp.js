@@ -353,11 +353,12 @@ export class McpService {
           const { code, remaining } = await totpCode(item.totp);
           return { code, validForSeconds: remaining };
         }
-        // Never private key material: passkeys and certificate files stay in the vault.
+        // Never private key material: passkeys and certificate files stay in the vault. #469: no TOTP secret either
+        // (only whether one is set) – get_totp gives the current code.
         return {
           vaultId: c.id, entryId: item.id, type: item.type, title: item.title, username: item.username, password: item.password,
           urls: item.urls, notes: item.notes, folder: item.folder, hasTotp: !!item.totp,
-          fields: item.fields.map((f) => ({ name: f.name, value: f.value })),
+          fields: item.fields.map((f) => (f.type === 'totp' ? { name: f.name, type: 'totp', hasTotp: !!f.value } : { name: f.name, value: f.value })),
           ...(item.type === 'card' ? { card: item.card } : {}),
           ...(item.type === 'certificate' ? { certificate: { subject: item.cert?.subject, notAfter: item.cert?.notAfter, note: 'certificate file not exported' } } : {}),
           passkeys: item.passkeys.length,

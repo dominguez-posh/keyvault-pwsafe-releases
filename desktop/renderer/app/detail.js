@@ -8,17 +8,18 @@ import { buildItemLink } from '../../../extension/core/links.js';
 import { call } from './ipc.js';
 import { panes } from './layout.js';
 import { items, st, ui } from './state.js';
-import { containerName, copy, notice, openUrl, writable, writableContainers } from './helpers.js';
+import { choiceName, containerName, copy, notice, openUrl, writable, writableContainers } from './helpers.js';
 import { ADMIN_LINKS, connectServer, movePasskeyDialog, openAdminLink } from './admin-tools.js';
 import { DRAG_PASSKEY, draggedPasskey, setDraggedPasskey } from './dragdrop.js';
 import { changelogDialog } from './file-vaults.js';
 import { icons, isMicrosoftSummary, itemAvatar } from './icons.js';
-import { conflictDialog, duplicateItem, historyDialog, linkedAssetsDialog, moveDialog, toggleFavorite } from './item-actions.js';
+import { conflictDialog, duplicateItem, historyDialog, linkedAssetsDialog, moveDialog, showVersion, toggleFavorite } from './item-actions.js';
 import { copyItemLink } from './item-links.js';
 import { placeholderMark } from './main-menu.js';
 import { contextMenu } from './menus.js';
 import { adminMode, folderList, modeItems } from './modes.js';
 import { renderMultiSelection, selectionSize } from './multi.js';
+import { noteCreator } from './private.js';
 import { reloadAll } from './shell.js';
 import { deleteNotice } from './trash.js';
 import { licenses } from './vault-dialogs.js';
@@ -57,6 +58,7 @@ export async function renderDetail() {
   let item;
   try {
     item = await call('item', containerId, id);
+    noteCreator(item); // #476: "Nur für mich" only for own entries
   } catch (e) {
     pane.replaceChildren(notice(e.message));
     return undefined;
@@ -80,6 +82,8 @@ export async function renderDetail() {
     containerName,
     connect: (it, method) => connectServer(it.containerId, it.id, method),
     adminLinks: st.settings?.adminTools === true ? ADMIN_LINKS.map((l) => ({ ...l, open: (it) => openAdminLink(l, `${it.containerId}/${it.id}`) })) : null,
+    // Foot of the entry: "Last edited" unfolds into the version timeline (#450).
+    history: { load: () => call('history', containerId, id), open: (v) => showVersion(shown, v) },
     showLinkedAssets: hasLinkedAssets ? (it) => linkedAssetsDialog(it) : null,
     linkTitle,
     saveFile: async (name, data) => {
@@ -168,7 +172,7 @@ function renderEditor() {
     folderFree: !folderContainer || featureAllowed(folderContainer, 'folders'),
     typeFixed: isNew,
     defaultFolder: ui.containerId ? ui.folder : '',
-    containers: isNew ? targets : st.containers.map((c) => ({ id: c.id, name: c.name })),
+    containers: isNew ? targets : st.containers.map((c) => ({ id: c.id, name: choiceName(c) })),
     containerId: isNew
       ? [ui.containerId, st.settings.defaultContainer].find((id) => targets.some((c) => c.id === id)) || targets[0]?.id
       : item.containerId,

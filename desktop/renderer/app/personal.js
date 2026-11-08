@@ -11,6 +11,7 @@ import { protectCtx } from './protection.js';
 import { fetchState, reloadAll, render } from './shell.js';
 import { REMOTE_KINDS, select, syncState } from './sidebar.js';
 import { vaultWizard } from './vault-wizard.js';
+import { focusField } from './focus.js';
 
 // Asked for the unconfirmed recovery key once per unlock; afterwards the notice in the sidebar stays (#399).
 let recoveryAsked = false;
@@ -287,5 +288,5 @@ export function personalPinPrompt() {
     { label: t('Später') },
     { label: t('Übernehmen'), primary: true, onClick: async () => { await call('bindPersonalWithPin', pin.value); toast(t('Persönlicher Tresor mit PIN verbunden')); } },
   ]);
-  setTimeout(() => pin.focus(), 0);
+  focusField(pin);
 }

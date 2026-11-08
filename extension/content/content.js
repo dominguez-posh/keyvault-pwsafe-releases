@@ -110,7 +110,58 @@
     return b;
   };
 
+  // #465: with the app PIN on, "Use passkey" opens the PIN field inside the tag: a frame of the extension (pin/pin.html,
+  // lib/pin-frame.js), never a field in this page (#409). The frame talks to the service worker only; before the app
+  // checks a PIN the worker asks this tag whether the frame has been really visible long enough (#373/#401). The
+  // window stays the fallback: when the frame does not report back, or the page navigates it away. The frame stays
+  // hidden (the tag says "loading") until the worker reports our real page in it (pinframe:ready): whatever the page
+  // puts into the frame before that is never shown.
+  let pinBox = null; // { requestId, guard, loads, ready, show, timer }
+  const PIN_FRAME_WAIT = 4000;
+
+  function openPinFrame(use, sw, list) {
+    const cur = inline;
+    const c = cur?.choice;
+    if (!c || pinBox) return;
+    modalRequests.set(cur.requestId, cur.pageId); // the result arrives as webauthn:result, like from the window
+    pendingKinds.set(cur.requestId, 'get');
+    const frame = el('iframe', 'pinframe');
+    frame.title = 'Keevault';
+    frame.hidden = true;
+    const box = { requestId: cur.requestId, guard: null, loads: 0, ready: false, timer: setTimeout(() => pinFallback(box), PIN_FRAME_WAIT) };
+    box.show = () => {
+      box.ready = true;
+      clearTimeout(box.timer);
+      use.hidden = true;
+      frame.hidden = false;
+      box.guard = watch(frame); // visible from now on, not before
+      frame.focus(); // after the user's own click on the visible button (#405)
+    };
+    pinBox = box;
+    frame.addEventListener('load', () => {
+      if (++box.loads > 1) pinFallback(box); // only the one page put there counts
+    });
+    frame.src = chrome.runtime.getURL(`pin/pin.html#${[cur.requestId, [c.containerId, c.itemId, c.credentialId].join('|')].map((x) => encodeURIComponent(x)).join(':')}`);
+    use.disabled = true;
+    use.textContent = texts.pinLoading || '…';
+    sw.disabled = true;
+    list.hidden = true;
+    use.after(frame);
+  }
+
+  function pinFallback(box) {
+    if (pinBox === box) openPromptWindow();
+  }
+
+  function dropPinBox() {
+    if (!pinBox) return;
+    pinBox.guard?.stop();
+    clearTimeout(pinBox.timer);
+    pinBox = null;
+  }
+
   function hidePill() {
+    dropPinBox();
     if (!pill) return;
     const gone = pill;
     pill = null;
@@ -141,7 +192,7 @@
     const create = inline.kind === 'create';
     inline.choice = inline.candidates[0];
     // A sign-in the user started (app tile or Microsoft bar) and this is its account's passkey: used without a click.
-    if (!create && info.auto && inline.choice) return choosePasskey(inline.choice);
+    if (!create && info.auto && !info.pin && inline.choice) return choosePasskey(inline.choice); // with the PIN: never without it
     const tag = newTag(create ? (texts.saveQuestion || 'Passkey') : (texts.choosePasskey || 'Passkey'));
 
     // The switcher: the current account (sign-in) or vault (saving); a click opens the choices inside the tag.
@@ -194,7 +245,7 @@
 
     const use = el('button', 'primary', create ? (texts.savePasskey || 'Save') : (texts.usePasskey || 'Passkey'));
     use.type = 'button';
-    use.addEventListener('click', (e) => { if (trusted(e, pillGuard, tag)) (create ? savePasskey(inline.containerId) : choosePasskey(inline.choice)); });
+    use.addEventListener('click', (e) => { if (trusted(e, pillGuard, tag)) (create ? savePasskey(inline.containerId) : info.pin ? openPinFrame(use, sw, list) : choosePasskey(inline.choice)); });
     const head = create ? el('div', 'title', texts.saveQuestion || 'Passkey') : null;
     tag.append(shieldBadge(), ...(head ? [head] : []), sw, list, use, links());
     ui().append(tag);
@@ -296,10 +347,20 @@
       pendingKinds.delete(msg.requestId);
       if (pageId) {
         modalRequests.delete(msg.requestId);
+        if (pinBox?.requestId === msg.requestId) { // #465: signed in (the tag turns into the success), or cancelled
+          dropPinBox();
+          inline = null;
+          if (!msg.result) hidePill();
+        }
         if (msg.result) passkeyAnim('ok', kind === 'create' ? (texts.passkeyCreated || 'Passkey') : (texts.passkeyOk || 'Passkey'));
         else passkeyAnim('hide');
         toPage({ id: pageId, result: msg.result, error: msg.error, fallback: msg.fallback });
       }
+    } else if (msg.type === 'pinframe:ready') {
+      if (pinBox?.requestId === msg.requestId && !pinBox.ready && pinBox.loads <= 1) pinBox.show();
+    } else if (msg.type === 'pinframe:clear') {
+      // Only our own frame, reported by the worker, loaded once, seen by the browser without a break for a while.
+      sendResponse({ clear: !!pinBox && pinBox.requestId === msg.requestId && pinBox.ready && pinBox.loads === 1 && pinBox.guard?.clear() === true });
     } else if (msg.type === 'fill') {
       sendResponse({ filled: fill(msg, lastFocused) });
     } else if (msg.type === 'state:changed') {

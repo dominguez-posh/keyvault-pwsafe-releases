@@ -1,6 +1,6 @@
 // Browser extension through the desktop app: approval of a browser, the commands it may call, native messaging host.
 
-import { app, dialog } from 'electron';
+import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { BrowserBridge, launchPath, pipePath, registerNativeHost, unregisterNativeHost } from '../bridge.js';
@@ -10,16 +10,18 @@ import { t } from '../../extension/core/i18n.js';
 import { ORIGIN as WINDOWS_ORIGIN, rememberDesktopCommand } from '../windows-provider.js';
 import { appRoot, demo, devIsolated } from './boot.js';
 import { bridge, config, opened, setBridge, vault, win } from './state.js';
-import { approveAgent, mcpHandlers, mcpScriptPath } from './agents.js';
+import { approveAgent, askInApp, mcpHandlers, mcpScriptPath } from './agents.js';
 import { api } from './api/index.js';
 import { passkeyPin, requireOpen } from './guards.js';
 import { effectiveRpId, getAssertion } from '../../extension/core/webauthn.js';
 import { copyToClipboard } from './clipboard.js';
+import { confirmInCard } from './confirm-card.js';
 import { changed, lockNow, send } from './session.js';
 import { extensionOutdated, extensionStatus } from '../versions.js';
 import { restoreStoredKeys, withoutPasskeyKeys } from '../passkey-keys.js';
 import { hostIn, setSignInJobs, signInFor, signInJobs } from './signin.js';
 import { windowsHandlers } from './windows-passkeys.js';
+import { browserItemHandlers, ITEM_CAPS } from '../browser-items.js';
 
 async function approveBrowser(origin) {
   const s = config.get();
@@ -29,15 +31,13 @@ async function approveBrowser(origin) {
   if (s.approvedBrowsers.includes(origin)) return true;
   if (!win) return false;
   win.show();
-  const r = await dialog.showMessageBox(win, {
-    type: 'question',
-    buttons: [t('Erlauben'), t('Ablehnen')],
-    defaultId: 0,
-    cancelId: 1,
-    message: t('Die Browser-Erweiterung möchte auf deine Datei-Tresore zugreifen.'),
+  // #459: a Keevault card instead of the Windows message box; Enter confirms after the waiting time (not on "Ablehnen", Lucas 2026-11-08), Esc and closing refuse.
+  const ok = await confirmInCard({
+    title: t('Die Browser-Erweiterung möchte auf deine Datei-Tresore zugreifen.'),
     detail: t('{origin}\n\nErlaube das nur, wenn du die Erweiterung Keevault gerade nutzt.', { origin }),
-  });
-  if (r.response !== 0) return false;
+    go: t('Erlauben'), cancel: t('Ablehnen'),
+  }, { parent: win });
+  if (!ok) return false;
   config.update({ approvedBrowsers: [...s.approvedBrowsers, origin] });
   return true;
 }
@@ -47,6 +47,8 @@ async function approveBrowser(origin) {
 const forBrowser = (c) => ({
   id: c.id, name: c.name, source: c.kind, sources: ['file'], locked: !!c.locked, protected: !!c.protected,
   error: c.error ? { status: c.error.status || 0, message: c.error.message } : null, access: c.access || null,
+  // #479: lets the extension show the host next to a name that comes from the vault itself.
+  vaultUrl: c.vaultUrl || null, metaName: c.metaName || null,
 });
 const browserContainers = async () => (opened ? (await vault.containers()).map(forBrowser) : []);
 
@@ -62,7 +64,7 @@ export async function refreshStaleForBrowser() {
   staleRefresh = vault.summaries({ maxAgeMs: INDEX_MAX_AGE }).then(changed, () => {}).finally(() => { staleRefresh = null; });
 }
 
-export const APP_CAPS = ['passkeySign', 'copy']; // (not the other way round: the key scanner would read the pair as a text)
+export const APP_CAPS = ['passkeySign', 'copy', ...ITEM_CAPS]; // (not the other way round: the key scanner would read the pair as a text)
 
 /** An extension that reports no usable version or an old one gets one hint in the app (the claim is not trusted for
  * anything else; an old extension cannot show a hint itself). Returns whether the hint applies. */
@@ -88,7 +90,28 @@ export function currentExtensionStatus() {
 /** #439: an item saved by the browser gets the stored private keys of its passkeys back. */
 const withStoredPasskeyKeys = (containerId, item) => restoreStoredKeys(item, () => vault.getItem(containerId, item.id, { fresh: true }));
 
+/** #464: version history, linked assets and moving for the extension (logic and checks in browser-items.js). `vault` is replaced when the app locks, so it is looked up at each call. */
+const liveVault = new Proxy({}, { get: (_target, name) => (...args) => vault[name](...args) });
+/** A move into another vault, started by the browser, is confirmed in the app window (source, target, entries, passkeys). */
+export const MOVE_CARD_ROWS = 20;
+export const confirmBrowserMove = async ({ from, to, entries }) => (await askInApp({
+  kind: 'browser-move',
+  title: t('Die Browser-Erweiterung möchte Einträge in einen anderen Tresor verschieben'),
+  lead: t('Von „{from}“ nach „{to}“', { from, to }),
+  // Own list (the titles as written, not translated); entries with passkeys come first and are named one by one. The total stays visible.
+  entries: {
+    total: entries.length,
+    rows: [...entries.filter((e) => e.passkey), ...entries.filter((e) => !e.passkey)].slice(0, MOVE_CARD_ROWS).map((e) => ({ title: e.title, passkey: e.passkey })),
+  },
+  note: entries.some((e) => e.passkey) ? t('Passkeys bleiben in der App und wandern mit in den Zieltresor.') : '',
+  allow: t('Verschieben'),
+  cancel: 'deny',
+})) === 'allow';
+
+const itemHandlers = browserItemHandlers({ vault: liveVault, requireOpen, changed, movePasskey: (args) => api.movePasskey(args), confirm: confirmBrowserMove });
+
 export const browserHandlers = {
+  ...itemHandlers,
   // Admin tools: the account for a sign-in started in the app (only for the host it was started for, see signInFor).
   signIn: async ({ host, tab }) => (opened ? signInFor(host, tab) : null),
   /** The extension filled the last step: the job is used up – a second sign-in on the page (other admin center, other
@@ -155,11 +178,12 @@ export const browserHandlers = {
     return withoutPasskeyKeys(await vault.getItem(containerId, itemId, { fresh: true }));
   },
   // Changes from the browser show up in the app (and other browsers) at once.
+  // #466: the saved item has the stored keys back – the answer goes without them, like item.
   save: async ({ containerId, item, expectedVersion }) => {
     requireOpen();
     const saved = await vault.saveItem(containerId, await withStoredPasskeyKeys(containerId, item), { expectedVersion });
     changed();
-    return saved;
+    return withoutPasskeyKeys(saved);
   },
   delete: async ({ containerId, itemId }) => {
     requireOpen();

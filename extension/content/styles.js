@@ -74,6 +74,8 @@ globalThis.kvpwsafeCss = `
     .kvtag .primary:hover { background: color-mix(in srgb, var(--kv), #fff 10%); } /* no filter: with one IntersectionObserver v2 calls the button not visible (#373) */
     .kvtag .primary:disabled { opacity: .6; cursor: default; }
     .kvtag button:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15,108,189,.28); }
+    .kvtag .pinframe { display: block; width: 100%; height: 112px; border: 0; background: var(--surface); } /* #465: the PIN field, a frame of the extension */
+    .kvtag .switch:disabled { cursor: default; }
     .kvtag .links { display: flex; gap: 16px; justify-content: center; }
     .kvtag .link { border: 0; background: none; color: var(--muted); font: inherit; font-size: 12px; padding: 2px 4px; cursor: pointer; }
     .kvtag .link:hover { color: var(--kv); }

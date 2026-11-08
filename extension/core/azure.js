@@ -4,6 +4,7 @@
 import { sleep, mapLimit } from './util.js';
 import { normalizeVaultUrl } from './keyvault.js';
 import { t } from './i18n.js';
+import { cleanVaultName } from './session-meta.js';
 
 export const ARM_SCOPE = 'https://management.azure.com/user_impersonation';
 export const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
@@ -155,7 +156,7 @@ export class AzureClient {
       `displayName = tostring(tags['${CONTAINER_NAME_TAG}']), rbac = tobool(properties.enableRbacAuthorization), tenantId`,
     );
     return rows.map((r) => ({
-      name: r.displayName || r.name,
+      name: cleanVaultName(r.displayName) || r.name,
       vaultUrl: normalizeVaultUrl(r.vaultUri || r.name),
       resourceId: r.id,
       location: r.location,
@@ -172,7 +173,7 @@ export class AzureClient {
       `tagged = tostring(tags['${CONTAINER_TAG}']) =~ 'container', displayName = tostring(tags['${CONTAINER_NAME_TAG}']), tenantId | order by name asc`,
     );
     return rows.map((r) => ({
-      name: r.displayName || r.name,
+      name: cleanVaultName(r.displayName) || r.name,
       vaultUrl: normalizeVaultUrl(r.vaultUri || r.name),
       resourceId: r.id,
       resourceGroup: r.resourceGroup,

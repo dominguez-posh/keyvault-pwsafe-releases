@@ -6,12 +6,14 @@
 // KVPWSAFE_SMOKE_DEADLINE_MS replaces the deadline. It counts per process, and the demo process does nearly all the work.
 // Measured for #397: 40 CI runs of both processes together 117 to 200 s, local 185 to 195 s. The slowest step on record
 // (clipboard 41 s instead of 3.7 s) on top of the local maximum gives SLOWEST_RUN_ON_RECORD_MS.
+// 8 Nov 2026: the feature steps alone took 231 s locally and one full run hit the 300 s under load; 480 s since then.
+// Each area keeps its own limit of 45 s (desktop/smoke-features.js).
 //
 // A partial run (--only, #397) never says "SMOKE OK": it did not check what a full run checks.
 
 import { onlyAreas } from '../smoke-areas.js';
 
-export const SMOKE_DEADLINE_MS = 5 * 60_000;
+export const SMOKE_DEADLINE_MS = 8 * 60_000;
 export const SLOWEST_RUN_ON_RECORD_MS = 232_000;
 
 export function startSmokeGuard({ exit, log = console.log, env = process.env, on = (name, fn) => process.on(name, fn), argv = process.argv }) {

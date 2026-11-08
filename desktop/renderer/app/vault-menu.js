@@ -22,6 +22,7 @@ import { openFile } from './start.js';
 import { trashDialog } from './trash.js';
 import { exportDialog, licenseDialog, licenses, logoDialog, renameContainerDialog, vaultSettingsDialog } from './vault-dialogs.js';
 import { addContainerDialog, vaultWizard } from './vault-wizard.js';
+import { pasteAction } from './cut-paste.js';
 
 /** Problems with the access (shown as a tag right of the name); the regular levels are a symbol before it (roleMark). */
 export function accessBadge(c) {
@@ -113,6 +114,8 @@ async function infoDialog(c) {
  * Vault settings: Key Vault admins may use every function; everyone else only what an admin enabled (restrictive
  * default). File vaults have their own roles and are not affected. The desktop main process enforces the same.
  */
+/** Rename for everyone: Key Vault only for managers/admins (same rule as the session). */
+export const canRenameVault = (c) => c.kind !== 'keyvault' || !!(c.access?.manage || c.access?.admin);
 export const featureAllowed = (c, feature) => c.kind !== 'keyvault' || !!c.access?.admin || c.policy?.[feature] === true;
 
 // The vault menu keeps every function but folds the rarely used ones into two submenus.
@@ -158,6 +161,8 @@ function containerActionsFlat(c) {
   const settings = !isFile && (c.access?.admin || c.access?.manage)
     ? { action: 'vault-settings', icon: 'settings', label: t('Tresor-Einstellungen (Admin)'), disabled: !!c.error, onClick: () => vaultSettingsDialog(c) } : null;
   return [
+    may('folders') ? { action: 'folder', icon: 'folder-plus', label: t('Neuer Ordner'), disabled: !canWrite, onClick: () => newFolderDialog(c) } : null,
+    may('folders') ? '-' : null,
     { action: 'refresh', icon: 'refresh', label: t('Aktualisieren'), disabled: c.locked && !c.error, onClick: () => refreshContainer(c) },
     '-',
     isFile ? null : { action: 'share', icon: 'users', label: t('Freigeben'), onClick: () => shareDialog(c) },
@@ -169,11 +174,11 @@ function containerActionsFlat(c) {
     c.kind === 'keyvault' ? { action: 'info', icon: 'info', label: t('Infos'), disabled: !!c.error, onClick: () => infoDialog(c) } : null,
     c.kind === 'keyvault' || c.kind === 'file' ? { action: 'health', icon: 'shield', label: t('Passwort-Check'), disabled: !ready, onClick: () => healthDialog(reportCtx(c.id)) } : null,
     '-',
-    may('folders') ? { action: 'folder', icon: 'folder-plus', label: t('Neuer Ordner'), disabled: !canWrite, onClick: () => newFolderDialog(c) } : null,
+    pasteAction({ containerId: c.id }),
     may('logo') ? { action: 'logo', icon: 'image', label: t('Logo des Tresors'), disabled: !canWrite, onClick: () => logoDialog(c) } : null,
-    may('rename') ? { action: 'rename', icon: 'edit', label: t('Umbenennen'), disabled: !!c.error || (isFile && !ready), onClick: () => renameContainerDialog(c) } : null,
+    may('rename') ? { action: 'rename', icon: 'edit', label: t('Umbenennen'), disabled: !!c.error || (isFile && !ready) || !canRenameVault(c), title: canRenameVault(c) ? undefined : t('Du brauchst Verwaltungsrechte auf dem Tresor.'), onClick: () => renameContainerDialog(c) } : null,
     may('import') ? { action: 'import', icon: 'upload', label: t('Importieren'), disabled: !canWrite, onClick: () => openImport(c) } : null,
-    !isFile && may('export') ? { action: 'export', icon: 'download', label: t('Einträge exportieren (CSV)'), disabled: !ready, onClick: () => exportDialog(c) } : null,
+    (!isFile || c.personal) && may('export') ? { action: 'export', icon: 'download', label: t('Einträge exportieren (CSV)'), disabled: !ready, onClick: () => exportDialog(c) } : null,
     { action: 'trash', icon: 'trash', label: t('Papierkorb'), disabled: !ready, onClick: () => trashDialog(c) },
     { action: 'license', icon: 'key', label: t('Lizenz'), disabled: !ready, onClick: () => licenseDialog(c) },
     isFile ? null : { action: 'backup', icon: 'download', label: t('Backup erstellen (Owner)'), disabled: !!c.error, onClick: () => backupDialog(c) },

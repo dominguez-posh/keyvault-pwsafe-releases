@@ -2,6 +2,7 @@
 
 import { h, icon, toast } from '../../../extension/core/dom.js';
 import { t, locale } from '../../../extension/core/i18n.js';
+import { sharedNames, vaultChoiceLabel } from '../../../extension/core/session-meta.js';
 import { call } from './ipc.js';
 import { st } from './state.js';
 
@@ -38,4 +39,6 @@ export function tabbed(key, pages) {
 }
 export const notice = (text, kind = 'error') => h('div', { class: `notice ${kind}` }, text);
 export const writable = (c) => c.access?.write !== false && !c.error && !c.locked;
-export const writableContainers = () => st.containers.filter(writable).map((c) => ({ id: c.id, name: c.name, personal: !!c.personal }));
+/** Name of a vault in a select (save, move, new, import): with its host when the name comes from the vault or is taken twice (#479). */
+export const choiceName = (c) => vaultChoiceLabel(c, sharedNames(st.containers));
+export const writableContainers = () => st.containers.filter(writable).map((c) => ({ id: c.id, name: choiceName(c), personal: !!c.personal }));

@@ -54,6 +54,7 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `windows-passkeys.js` | Windows-Passkey-Anbieter: Anfragen und Registrierung |
 | `agents.js` | KI-Agenten (MCP): Freigabe, Bestätigungen, Protokoll |
 | `backup.js` | Verschlüsselte Backups: laufendes Backup/Restore, Druckblatt |
+| `private.js` | „Nur für mich“ (#476): angemeldete Entra-ID, Verwalter-Ansicht fremder privater Einträge, Setzen/Zurückstellen (Filter selbst in `extension/core/private.js`) |
 | `release-sign.js` | Release signieren (#378): Ordner prüfen, Freigabefenster, Hardware-Schlüssel, `latest.yml.sig2`. Nur `api/release.js` importiert es (`npm run check`); Schlüssel in `desktop/release-key.js`, Sperre in `release-gate.js` |
 | `diag.js` | Diagnoseprotokoll, Zeitmessung langsamer Netzwerkanfragen |
 | `install.js` | Erkennt eine zweite Installation |
@@ -92,6 +93,7 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `sidebar.js` | Seitenleiste: Ansichten, Tresorliste, Kennzeichen |
 | `main-menu.js` | Hauptmenü (☰) mit den Ansichtseinstellungen |
 | `list.js` | Liste in der Mitte: Kopf, Suche, Zeilen, „Neu“ |
+| `private.js` | „Nur für mich“ (#476): Menüpunkt im Admin-Modus, Hinweisfenster, Kennzeichen in der Liste |
 | `folders.js` | Ordner in der Liste: Zeilen, Menü, Symbole |
 | `dragdrop.js` | Ziehen und Ablegen von Einträgen, Ordnern, Passkeys und Tresoren |
 | `multi.js` | Mehrere Einträge auf einmal |

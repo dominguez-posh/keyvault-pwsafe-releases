@@ -4,6 +4,7 @@ import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { hashPin } from '../pin.js';
+import { pinLengthCheck } from '../smoke-pin-length.js';
 import { featureChecks } from '../smoke-features.js';
 import { smokeRelease } from './api/release.js';
 import { areaSelection } from '../smoke-areas.js';
@@ -15,7 +16,8 @@ import { config, files, mcp, opened, updater, vault, win, windows } from './stat
 import { hintContent, hintsShown } from './hint-window.js';
 import { askInApp, chooseAgentMicrosoft, questions, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, nativeQuestion, trustAgentEntry, waitForUnlock } from './agents.js';
 import { api } from './api/index.js';
-import { browserHandlers, noteExtension, simulateExtensionClients } from './browser.js';
+import { browserHandlers, confirmBrowserMove, noteExtension, simulateExtensionClients } from './browser.js';
+import { simulateExtensionPolicy } from './extension-channel.js';
 import { copyViaHelperExe } from './clipboard.js';
 import { pinGuard } from './guards.js';
 import { createPersonal, refreshFileLocations, usePersonal } from './personal.js';
@@ -146,12 +148,12 @@ export function runSmokeTest() {
         if ((await files.summaries(created.id)).length !== 261) errors.push('file: entries missing after passkey unlock');
         await api.lockContainer(created.id);
         await api.unlockContainer(created.id, { password: 'demo-passwort' }); await (await import('../smoke-password.js')).passwordCheck({ api, files, errors, id: created.id });
-        const kvId = (await vault.containers()).find((c) => c.kind === 'keyvault')?.id;
-        const r = await api.enableProtection(kvId, { password: 'kv-passwort-1' });
+        const kvId = (await vault.containers()).find((c) => c.kind === 'keyvault')?.id; const { KV_PROTECTION_PASSWORD: kvPassword } = await import('../smoke-second-vault.js'); // stays locked; the move checks open it
+        const r = await api.enableProtection(kvId, { password: kvPassword });
         if (!r.recoveryKey || r.failed.length) errors.push(`kv protection: ${r.failed.join(', ')}`);
         await api.lockContainer(kvId);
         await api.unlockContainerPasskey(kvId).then(() => errors.push('kv: unexpected passkey unlock'), () => {});
-        await api.unlockContainer(kvId, { password: 'kv-passwort-1' });
+        await api.unlockContainer(kvId, { password: kvPassword });
         await api.lockContainer(kvId);
       } catch (e) {
         errors.push(`protection flow: ${e.message}`);
@@ -212,14 +214,16 @@ export function runSmokeTest() {
       }
       // App PIN: unlocking needs it once set; wrong PIN is refused.
       if (areas.runs('pin')) try {
-        await api.setPin({ next: '2580' });
+        await api.setPin({ next: '258013' });
         await lockNow();
         await api.unlock({ entra: true }).then(() => errors.push('pin: unlock without PIN'), () => {});
         await api.verifyPin('0000').then(() => errors.push('pin: wrong PIN accepted'), () => {});
-        await api.verifyPin('2580');
+        await api.verifyPin('258013');
         await api.unlock({ entra: true });
         if (!opened) errors.push('pin: unlock with PIN failed');
-        await api.setPin({ current: '2580', next: null });
+        if ((await api.state()).pinShort) errors.push('pin: a 6-character PIN marked as short');
+        await api.setPin({ current: '258013', next: null });
+        await pinLengthCheck({ api, config, hashPin, lockNow, sleep, js, isOpened: () => opened, errors }); // #475
         if (config.get().appPin) errors.push('pin: not removed');
       } catch (e) {
         errors.push(`pin flow: ${e.message}`);
@@ -299,9 +303,9 @@ export function runSmokeTest() {
           // #439: no PIN set → nothing is signed; with the PIN the request goes through (more in the feature checks).
           const pinBefore = config.get().appPin;
           if (!pinBefore && (await api.windowsDecision('smoke-get', c).then(() => 'signed', (e) => e.name)) !== 'PinNotSet') errors.push('windows: signed although no PIN is set');
-          config.update({ appPin: await hashPin('2468'), pinGuard: null });
+          config.update({ appPin: await hashPin('246813'), pinGuard: null });
           pinGuard.restore(null);
-          await api.windowsDecision('smoke-get', { ...c, pin: '2468' });
+          await api.windowsDecision('smoke-get', { ...c, pin: '246813' });
           config.update({ appPin: pinBefore });
           const assertion = decode(Buffer.from((await got).response, 'base64'));
           if (!assertion.get(3) || assertion.get(4).get('name') !== 'win@example.com') errors.push('windows: bad getAssertion response');
@@ -626,12 +630,12 @@ export function runSmokeTest() {
           await fs.rm(dir, { recursive: true, force: true });
           await fs.mkdir(dir, { recursive: true });
           process.env.KVPWSAFE_TEST_REMOTE = dir;
-          config.update({ appPin: await hashPin('2468'), pinGuard: null, personalVaults: [], personalDeviceKeys: {} });
+          config.update({ appPin: await hashPin('246813'), pinGuard: null, personalVaults: [], personalDeviceKeys: {} });
           pinGuard.restore(null);
           const local = path.join(app.getPath('temp'), `kv-local-${process.pid}`);
           await fs.mkdir(local, { recursive: true });
-          if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
-          const r = await createPersonal({ folder: dir, password: 'Persoenlich-Test-123!', pin: '2468' });
+          if (await createPersonal({ folder: local, password: 'Persoenlich-Test-123!', pin: '246813' }).then(() => true, () => false)) errors.push('personal: local folder accepted');
+          const r = await createPersonal({ folder: dir, password: 'Persoenlich-Test-123!', pin: '246813' });
           if (!r.recoveryKey) errors.push('personal: no recovery key');
           if (!config.get().personalRecoveryPending?.[r.id]) errors.push('personal: recovery key counts as confirmed right after creating');
           await api.confirmPersonalRecovery(r.id);
@@ -641,7 +645,7 @@ export function runSmokeTest() {
           await vault.saveItem(r.id, { title: 'Privat', username: 'me', password: 'x' });
           files.get(r.id).lock();
           if (!Object.keys(config.get().personalDeviceKeys || {}).length) errors.push('personal: key not bound to the device');
-          await api.verifyPin('2468');
+          await api.verifyPin('246813');
           if (files.get(r.id).locked) errors.push('personal: PIN did not unlock the vault');
           if (await files.updateKeyring(r.id, { type: 'createInvite' }, 'x').then(() => true, () => false)) errors.push('personal: invitation was allowed');
           const pwEntry = files.get(r.id).keyring?.entries?.find((e) => e.type === 'password');
@@ -653,8 +657,21 @@ export function runSmokeTest() {
           // More structure through folders inside it.
           await vault.saveItem(r.id, { title: 'Steuer', username: 'me', password: 'x', folder: 'Geschäft' });
           if (!(await vault.summaries()).some((x) => x.containerId === r.id && x.folder === 'Geschäft')) errors.push('personal: entry in a folder not saved');
+          // #470: export of the personal vault – file holds the entries, locked refused, menu entry with the same warning.
+          {
+            const exportFile = process.env.KVPWSAFE_TEST_EXPORT = path.join(dir, 'export-470.csv');
+            const exp = await api.exportItems(r.id, await api.confirmExportPin(r.id, '246813')).catch((e) => ({ error: e.message })).finally(() => delete process.env.KVPWSAFE_TEST_EXPORT);
+            const csv = await fs.readFile(exportFile, 'utf8').catch(() => '');
+            if (exp?.count !== 2 || !csv.includes('Steuer') || !csv.includes('Privat') || !csv.includes('Geschäft')) errors.push(`personal export: file lacks the entries (${exp?.error || exp?.count})`);
+            files.get(r.id).lock();
+            if (await api.exportItems(r.id, await api.confirmExportPin(r.id, '246813')).then(() => true, () => false)) errors.push('personal export: locked vault exported');
+            await api.verifyPin('246813');
+            changed(); await sleep(1500);
+            // #473: menu entry, warning, app PIN (missing, wrong, reused refused; the right one exports) – ../smoke-export-pin.js
+            await (await import('../smoke-export-pin.js')).exportPinCheck({ api, js, sleep, errors, id: r.id, dir });
+          }
           // Only one personal vault: a second one is refused, created or added.
-          if (await createPersonal({ folder: dir, password: 'Zweiter-Test-123!', pin: '2468' }).then(() => true, () => false)) errors.push('personal: a second personal vault was created');
+          if (await createPersonal({ folder: dir, password: 'Zweiter-Test-123!', pin: '246813' }).then(() => true, () => false)) errors.push('personal: a second personal vault was created');
           if (await usePersonal({ folder: local }).then(() => true, () => false)) errors.push('personal: a second personal vault was added');
           // #400: the same vault again (wizard retry after a wrong master password) is no second one; the right password unlocks.
           files.get(r.id).lock();
@@ -860,6 +877,7 @@ export function runSmokeTest() {
           confirmAgentRead,
           confirmAgentPasskey,
           confirmAgentWrite,
+          confirmBrowserMove,
           nativeQuestion,
           mcpService: mcp,
           chooseAgentMicrosoft,
@@ -874,15 +892,16 @@ export function runSmokeTest() {
           browserPasskeyCandidates: (msg) => browserHandlers.passkeyCandidates(msg),
           noteExtension,
           simulateExtensionClients,
+          simulateExtensionPolicy,
           waitForUnlock,
           release: smokeRelease,
           lockIfWindowsLocked,
           signInDone: (host) => browserHandlers.signInDone({ host }),
-          // The feature checks use PIN 2468 (the personal vault check sets the same one).
+          // The feature checks use PIN 246813 (the personal vault check sets the same one; 6 characters for Enter, #472/#475).
           ensurePin: async () => {
-            if (!config.get().appPin) config.update({ appPin: await hashPin('2468'), pinGuard: null });
+            if (!config.get().appPin) config.update({ appPin: await hashPin('246813'), pinGuard: null });
             pinGuard.restore(null);
-            return '2468';
+            return '246813';
           },
           resetPinGuard: () => { pinGuard.restore(null); config.update({ pinGuard: null }); },
           openQuestionIds: () => [...questions.keys()],
