@@ -110,6 +110,9 @@ export default {
   'Der Tresor ist zusätzlich geschützt: Neue Mitglieder brauchen außerdem eine Einladung (Schutz und Benutzer → Benutzer einladen).':
     'The vault has extra protection: new members also need an invitation (Protection and users → Invite user).',
   'Der Datei-Tresor ist gesperrt': 'The file vault is locked',
+  'Demo-PIN': 'Demo PIN',
+  'Demo-PIN: {pin} – in der Live-Demo wird nichts gespeichert.': 'Demo PIN: {pin} – nothing is saved in the live demo.',
+  'Falsche Demo-PIN': 'Wrong demo PIN',
   'Der Einladungscode entsperrt den Tresor einmalig, danach legt die eingeladene Person ihren eigenen Passkey oder ihr eigenes Masterpasswort fest. Gib den Code auf einem sicheren Weg weiter (nicht zusammen mit der Datei).':
     'The invitation code unlocks the vault once; then the invited person sets up their own passkey or master password. Hand over the code on a secure channel (not together with the file).',
   'Die Seite hat sich geändert. Bitte öffne das Fenster neu und versuche es noch einmal.': 'The page has changed. Please open the window again and try once more.',
@@ -2113,4 +2116,7 @@ export default {
   'Privat: {name}': 'Private: {name}',
   'anderes Mitglied': 'another member',
   'Auch private Einträge anderer Benutzer anzeigen': 'Also show other users’ private entries',
+  'Hierher verschieben': 'Move here',
+  'Tresor nicht erreichbar': 'Vault not reachable',
+  'Ordner sind in diesem Tresor nicht freigeschaltet': 'Folders are not enabled in this vault',
 };

@@ -1,6 +1,0 @@
-<?xml version='1.0' encoding='UTF-8'?>
-<gupdate xmlns='http://www.google.com/update2/response' protocol='2.0'>
-  <app appid='pbkjijhihclckeeefbepoedgdmajioip'>
-    <updatecheck codebase='https://github.com/dominguez-posh/keyvault-pwsafe-releases/releases/download/v0.9.30/kvpwsafe-extension.crx' version='0.9.30' />
-  </app>
-</gupdate>

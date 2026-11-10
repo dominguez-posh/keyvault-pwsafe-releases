@@ -5,7 +5,7 @@ import vm from 'node:vm';
 // Runs the real content script against a small imitation of the page; `trusted` stands for what the browser reports in
 // event.isTrusted. For the tests of what the page may do to the in-page UI (field menu, passkey tag, bars).
 export const script = (name) => readFileSync(fileURLToPath(new URL(`../../extension/content/${name}`, import.meta.url)), 'utf8');
-export const source = [script('styles.js'), script('visible-guard.js'), script('content.js')].join('\n');
+export const source = [script('styles.js'), script('visible-guard.js'), script('field-kind.js'), script('content.js')].join('\n');
 export const flush = () => new Promise((r) => setImmediate(r));
 
 function element(tag) {
@@ -91,7 +91,7 @@ export function page({ host = 'shop.example', replies = {}, signIn = '', query =
     window: win, document, chrome, HTMLInputElement, globalThis: {}, console, setTimeout: signIn === 'bastion' ? () => 0 : setTimeout, clearTimeout, setInterval, clearInterval, Event: class {}, requestAnimationFrame, cancelAnimationFrame,
     Date: class extends Date { static now() { return clock.start + clock.offset; } }, IntersectionObserver, getComputedStyle: (e) => ({ visibility: 'visible', ...e.computed }),
     location: { hostname: host, pathname: '/', href: `https://${host}/` }, sessionStorage: { getItem: () => null, setItem() {} },
-    MutationObserver: class { observe() {} disconnect() {} },
+    MutationObserver: class { observe() {} disconnect() {} }, Node: { DOCUMENT_POSITION_FOLLOWING: 4, DOCUMENT_POSITION_PRECEDING: 2 },
   });
   const fire = (type, init) => { for (const fn of listeners[type] || []) fn(init); };
   const field = new HTMLInputElement();

@@ -10,6 +10,7 @@
 import { readFile } from 'node:fs/promises';
 import { autotypeFallbackCheck } from './smoke-autotype-fallback.js';
 import { multiClearCheck } from './smoke-multi.js';
+import { dropTargetCheck } from './smoke-drop-target.js';
 import { passkeyPinAgentCheck, passkeyPinBrowserCheck, passkeyPinSettingCheck, passkeyPinWindowsCheck } from './smoke-passkey-pin.js';
 import { deleteRefusedCheck, folderFirstCheck, renameCheck } from './smoke-delete-refused.js';
 import { moveAssetsCheck } from './smoke-move-assets.js';
@@ -935,6 +936,7 @@ export async function featureChecks(ctx) {
     });
 
     await step('multiclear', () => multiClearCheck({ js, sleep, fail, vaultName: kvc.name }));
+    await step('droptarget', () => dropTargetCheck({ js, sleep, fail, save, vault, api, kvc, win })); // #491
     await step('deleterefused', async () => { await deleteRefusedCheck({ js, fail, vault, changed, kvc }); await folderFirstCheck({ js, fail }); await renameCheck({ js, fail, vault, api, kvc }); });
     await step('deleterace', () => deleteRaceCheck({ js, fail, vault, changed, kvc }));
     await step('moveassets', () => moveAssetsCheck({ js, fail, vault, api, changed, kvc }));

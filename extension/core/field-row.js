@@ -22,12 +22,24 @@ export function actionRow(value, { ctx, label, action, run, menu }) {
       },
     }, icon('chevronDown', 16));
   }
-  const row = h('div', { class: 'field-row act-row' }, value, act, more);
-  row.actionRun = run;
+  // #498: action and arrow lie over the end of the value instead of taking room next to it, so without hover the value uses
+  // the full width of the card.
+  const row = h('div', { class: 'field-row act-row' }, value, h('span', { class: 'act-tools' }, act, more));
+  // #493: a copy answers right on the card with "Kopiert" for a moment (the toast stays as it is).
+  const copies = action === t('Kopieren') || action === t('Sicher kopieren');
+  let restore = null;
+  row.actionRun = () => {
+    run();
+    if (!copies) return;
+    clearTimeout(restore);
+    act.textContent = t('Kopiert');
+    row.classList.add('act-done');
+    restore = setTimeout(() => { act.textContent = action; row.classList.remove('act-done'); }, 1200);
+  };
   row.addEventListener('click', (e) => {
     if (e.target.closest('.act-more')) return;
     e.preventDefault();
-    run();
+    row.actionRun();
   });
   return row;
 }
@@ -93,7 +105,7 @@ export function userRow(label, value, ctx, { typeWhat } = {}) {
 
 /** Address: "Open and fill"; menu: copy the address. */
 export function urlRow(url, ctx) {
-  return actionRow(h('a', { href: '#', class: 'url' }, url), {
+  return actionRow(h('a', { href: '#', class: 'url', title: url }, url), {
     ctx, label: url, action: ctx.openLabel || t('Öffnen und ausfüllen'), run: () => ctx.openUrl(url),
     menu: () => [{ action: 'copy-url', icon: 'copy', label: t('Adresse kopieren'), onClick: () => ctx.copy(url, t('Adresse')) }],
   });

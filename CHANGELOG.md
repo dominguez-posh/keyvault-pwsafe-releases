@@ -6,6 +6,20 @@ GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Ver
 
 ## Unveröffentlicht
 
+## 0.9.32 – 2026-11-10
+- Erweiterung: Keevault schlägt Anmeldungen nur noch in echten Login-Feldern vor (Passwortfeld, Benutzername neben einem Passwortfeld, Microsoft-Anmeldung), nicht mehr in Such-, Kontakt-, Newsletter- oder Textfeldern (#502).
+- Ziehen und Ablegen: Der Ziel-Tresor bzw. -Ordner leuchtet beim Ziehen auf und zeigt „Hierher verschieben“; nicht erlaubte Ziele zeigen den Grund. Nach dem Ablegen gibt es eine kurze Rückmeldung (#491).
+- Feldkarten: Die Markierung bleibt nach einem Klick nicht mehr stehen (Tastaturfokus bleibt sichtbar), nach dem Kopieren steht kurz „Kopiert“ auf der Karte. Werte wie Adressen nutzen die volle Kartenbreite, die volle Adresse steht im Tooltip (#493, #498).
+- Live-Demo auf keevault.de: Der persönliche Tresor „Persönlich“ ist mit Beispieleinträgen und Demo-PIN dabei (#488).
+- Website-Admin: Antworten an Personen, die einen Fehler oder Wunsch gemeldet haben (#366).
+
+### English
+- Extension: Keevault only suggests sign-ins in real login fields (password field, user name next to a password field, Microsoft sign-in), no longer in search, contact, newsletter or text fields (#502).
+- Drag and drop: the target vault or folder lights up while dragging and shows "Move here"; targets that are not allowed show the reason. A short feedback follows the drop (#491).
+- Field cards: the highlight no longer sticks after a click (keyboard focus stays visible), "Copied" shows briefly on the card. Values such as addresses use the full card width, the full address is in the tooltip (#493, #498).
+- Live demo on keevault.de: the personal vault "Persönlich" is included with sample entries and a demo PIN (#488).
+- Website admin: reply to people who reported a bug or a wish (#366).
+
 ## 0.9.31 – 2026-11-08
 - Passkey: Schon der erste Klick auf „Passkey verwenden“ öffnet die PIN-Abfrage. Bisher wurde ein schneller erster Klick während der Einblend-Animation abgewiesen („Nichts eingefügt“) (#496).
 - Microsoft-Anmeldung: Die Erweiterung trägt auf der Seite „Kennwort eingeben“ das Passwort wieder ein und geht danach zum Einmalcode (TOTP) weiter. Eine unsichtbare Kopie des Namensfelds hatte das blockiert (#463).

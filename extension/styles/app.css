@@ -284,17 +284,28 @@ progress { width: 100%; }
 
 /* Shared by the app's detail pane and the popup's detail view. */
 /* #449: field rows in the detail view – shaded on hover, the action as text on the right, an arrow button with a menu. */
-.act-row { cursor: pointer; }
+.act-row { cursor: pointer; position: relative; }
+/* #498: the action lies over the end of the value (fading in from the card colour) and takes no room without hover. */
+.act-tools { --act-bg: var(--surface-2); position: absolute; right: 0; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 4px; padding-left: 24px; }
+.act-tools::before { content: ''; position: absolute; inset: 0; z-index: -1; background: linear-gradient(to right, transparent, var(--act-bg) 20px); opacity: 0; transition: opacity .12s; }
+.act-row:hover .act-tools::before, .act-row:has(:focus-visible) .act-tools::before, .act-card.single:hover .act-tools::before, .act-card.single:is(:focus-visible, :has(:focus-visible)) .act-tools::before, .act-row.act-done .act-tools::before { opacity: 1; }
+.act-row.act-done .act-tools { --act-bg: var(--accent-soft); }
+@media (prefers-reduced-motion: reduce) { .act-tools::before { transition: none; } }
 /* #458: the whole field card lights up (frame, background, label), not only the value area – for every kind of field. */
-:is(.detail-pane, .view.detail) .field-card > .field:hover, :is(.detail-pane, .view.detail) .field-card > .field:focus-within { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--accent); border-radius: 15px; border-top-color: transparent; }
+/* #493: with the mouse only on hover; a click focuses the card, but only keyboard focus (:focus-visible) keeps it lit. */
+:is(.detail-pane, .view.detail) .field-card > .field:hover, :is(.detail-pane, .view.detail) .field-card > .field:is(:focus-visible, :has(:focus-visible)) { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--accent); border-radius: 15px; border-top-color: transparent; }
 :is(.detail-pane, .view.detail) .field-card > .field:hover + .field { border-top-color: transparent; }
 :is(.detail-pane, .view.detail) .field-card > .act-card { cursor: pointer; }
 :is(.detail-pane, .view.detail) .field-card > .act-card:focus-visible { outline: none; }
-:is(.detail-pane, .view.detail) .field-card > .field:hover > label, :is(.detail-pane, .view.detail) .field-card > .field:focus-within > label { color: var(--text); }
+:is(.detail-pane, .view.detail) .field-card > .field:hover > label, :is(.detail-pane, .view.detail) .field-card > .field:is(:focus-visible, :has(:focus-visible)) > label { color: var(--text); }
 .act-row .act-label, .act-row .act-more { opacity: 0; transition: opacity .12s; }
-.act-row:hover .act-label, .act-row:hover .act-more, .act-row:focus-within .act-label, .act-row:focus-within .act-more { opacity: 1; }
+.act-row:hover .act-label, .act-row:hover .act-more, .act-row:has(:focus-visible) .act-label, .act-row:has(:focus-visible) .act-more { opacity: 1; }
 /* #458: a card with one value shows its action anywhere on the card (label, edge); several rows (Websites) keep it per row. */
-.act-card.single:hover .act-label, .act-card.single:hover .act-more, .act-card.single:focus-within .act-label, .act-card.single:focus-within .act-more { opacity: 1; }
+.act-card.single:hover .act-label, .act-card.single:hover .act-more, .act-card.single:is(:focus-visible, :has(:focus-visible)) .act-label, .act-card.single:is(:focus-visible, :has(:focus-visible)) .act-more { opacity: 1; }
+/* #493: short "Kopiert" after a copy by click or Enter – also when the mouse has already left the card. */
+.act-row.act-done .act-label { opacity: 1; color: var(--accent); }
+:is(.detail-pane, .view.detail) .field-card > .field:has(.act-done) { background: var(--accent-soft); transition: background-color .3s ease-out; }
+@media (prefers-reduced-motion: reduce) { :is(.detail-pane, .view.detail) .field-card > .field:has(.act-done) { transition: none; } }
 .act-label { flex: none; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--accent); padding: 4px 6px; border-radius: 6px; cursor: pointer; }
 .act-label:hover { color: var(--accent-hover); }
 .act-label:focus-visible, .act-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

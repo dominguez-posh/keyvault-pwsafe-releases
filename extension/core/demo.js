@@ -13,6 +13,8 @@ const SAMPLE = {
     { title: 'GitHub', username: 'alex@contoso.com', password: 'Fq7#xV2!mPz9@Lk4', urls: ['https://github.com/login'], totp: 'JBSWY3DPEHPK3PXP', favorite: true },
     { title: 'Microsoft 365', username: 'alex@contoso.com', password: 'Gh4$wQ8&nRt2*Ys6', urls: ['https://login.microsoftonline.com'], folder: 'Arbeit' },
     { type: 'note', title: 'WLAN Gäste', notes: 'SSID: Contoso-Gaeste\nPasswort: siehe Aushang am Empfang' },
+    { title: 'Streaming-Abo', username: 'alex@contoso.com', password: 'Nb6!dK3#yWq8$Rt5', urls: ['https://streaming.contoso.com'], folder: 'Privat' },
+    { type: 'note', title: 'Urlaubsideen', notes: 'Küstenwanderung im Herbst, Zugfahrt planen.', folder: 'Privat' },
   ],
   'kv-pws-demo-team': [
     { title: 'Firewall Admin', username: 'admin', password: 'Tz9!kB3#vNq7$Hw2', urls: ['https://fw01.contoso.local'], folder: 'Netzwerk' },

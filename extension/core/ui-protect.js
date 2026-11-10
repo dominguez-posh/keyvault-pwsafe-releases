@@ -169,13 +169,14 @@ export function unlockPanel(container, info, ctx, onUnlocked) {
     parts.push(notice(t('Die Passkeys dieses Tresors sind für eine andere App registriert. Entsperre mit Masterpasswort, Wiederherstellungsschlüssel oder Einladungscode und füge danach hier einen Passkey hinzu.')));
   }
   if (methods.password) {
-    const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: t('Masterpasswort') });
+    const pw = h('input', { type: 'password', autocomplete: 'current-password', placeholder: info.placeholder || t('Masterpasswort') });
     const b = h('button', { type: 'submit', class: 'btn' + (usable.length && ctx.passkeyAvailable ? '' : ' primary') }, t('Entsperren'));
     const form = h('form', { class: 'field-row' }, pw, b);
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       busy(b, t('Prüfen …'), async () => after(await ctx.unlock(container.id, { password: pw.value })))();
     });
+    if (info.hint) parts.push(h('p', { class: 'muted demo-hint' }, info.hint)); // live demo: the demo PIN
     parts.push(form);
     if (!(usable.length && ctx.passkeyAvailable)) setTimeout(() => pw.focus(), 0);
   }
