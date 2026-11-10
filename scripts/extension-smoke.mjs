@@ -19,6 +19,7 @@ import { checkDetailCards } from './extension-smoke-detail.mjs';
 import { checkCardHover } from './extension-smoke-hover.mjs';
 import { checkUrlSchema } from './extension-smoke-url.mjs';
 import { checkMsPasswordPage, msPasswordPage } from './extension-smoke-mspw.mjs';
+import { checkFieldKinds, fieldsPage } from './extension-smoke-fields.mjs';
 import { checkForeignRedirect, checkJobBoundToTab, checkRememberedAccount, checkStartPage, checkVaultSearch } from './extension-smoke-mstab.mjs';
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 const browser = arg('browser') || [
@@ -147,7 +148,7 @@ const bastionPage = `<!doctype html><meta charset="utf-8"><title>Bastion</title>
 const sophosPage = `<!doctype html><meta charset="utf-8"><title>VPN Portal</title>
 <form onsubmit="return false" method="post"><input name="username" type="text" id="username"><input name="password" type="password" id="password" autocomplete="off">
 <input class="blue_btn" name="loginbutton" value="Login" type="submit"></form>`;
-const server = createServer((req, res) => req.url.startsWith('/go302?') ? res.writeHead(302, { location: new URL(req.url, 'http://x').searchParams.get('to') }).end() : res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspw') ? msPasswordPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
+const server = createServer((req, res) => req.url.startsWith('/go302?') ? res.writeHead(302, { location: new URL(req.url, 'http://x').searchParams.get('to') }).end() : res.writeHead(200, { 'content-type': 'text/html' }).end(req.url.startsWith('/sophos') ? sophosPage : req.url.startsWith('/fields') ? fieldsPage : req.url.startsWith('/portal') ? portalBastionPage : req.url.startsWith('/mspw') ? msPasswordPage : req.url.startsWith('/mspick') ? msPickPage : req.url.startsWith('/mspk') ? msPasskeyPage : req.url.startsWith('/mskmsi') ? msKmsiPage : req.url.startsWith('/mswa') ? page : req.url.startsWith('/ms') || req.url.startsWith('/common/oauth2/logout') ? msPage : req.url.includes('/virtualMachines/') ? bastionPage : page));
 await new Promise((r) => server.listen(0, '::', r)); // dual stack: "localhost" may resolve to ::1
 const origin = `http://localhost:${server.address().port}`;
 // A second port with the same pages: not a test origin below, so the copy treats it with the real checks (#367).
@@ -572,6 +573,7 @@ try {
   check(!!menuResult?.user && !!menuResult?.password, `Feldmenü auf der Microsoft-Seite: Anmeldung bleibt stehen (${JSON.stringify(menuResult && { user: menuResult.user, password: !!menuResult.password })} ${JSON.stringify(menuState)})`);
   pageErrors(msMenu.sessionId, 'ms-menu');
   await checkMsPasswordPage({ send, evaluate, open, waitFor, check, sleep, sw, port: server.address().port, sessionId: options.sessionId, personal }); // #463
+  await checkFieldKinds({ send, open, sw, waitFor, check, sleep, shadowNode, sessionId: options.sessionId, personal, port: server.address().port }); // #502
 
   await checkSignInPages({ send, events, open, sw, waitFor, check, ext, options, personal, port: server.address().port, otherPort, shadowNode });
 
@@ -602,7 +604,7 @@ try {
 
   // Bastion blade in the portal: "Connect" (a plain button) offers the save; a VM that is already an asset gets the
   // login stored in it instead (#12).
-  await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'server', title: 'vm-smoke-03', server: { kind: 'azurevm' } } });
+  const vm03 = await sw(options.sessionId, 'save', { containerId: personal.id, item: { type: 'server', title: 'vm-smoke-03', server: { kind: 'azurevm' } } });
   for (const [vm, existing] of [['vm-smoke-02', false], ['vm-smoke-03', true]]) {
     await evaluate(options.sessionId, 'chrome.storage.session.get(null).then((all) => chrome.storage.session.remove(Object.keys(all).filter((k) => all[k]?.action === "bastion")))');
     const portal = await open(`http://portal.azure.com:${server.address().port}/portal#@contoso.com/resource/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/${vm}/bastionHost`);
@@ -619,6 +621,8 @@ try {
     check(!!p?.target === existing, `Bastion im Portal: ${existing ? 'vorhandenes Asset nicht erkannt' : 'neue VM als vorhanden behandelt'} (${vm})`);
     pageErrors(portal.sessionId, 'portal-bastion');
   }
+  // The demo vault holds 10 entries without a license: every test entry goes as soon as its part is done.
+  if (vm03?.id) await sw(options.sessionId, 'delete', { containerId: personal.id, id: vm03.id }).catch(() => {});
 
   // Bastion opened in the browser (#27): the bar offers the logins; the chosen one is filled in, "Connect" is pressed and
   // the VM is kept as an asset linked to that login.
@@ -723,6 +727,7 @@ try {
   const pkState = await waitFor(async () => { const r = await evaluate(pkOnly.sessionId, 'signedIn'); return (r.fido || r.emptySubmit) && r; }, 12000);
   check(pkState?.user === 'passkey@contoso.onmicrosoft.com' && pkState?.fido && !pkState?.emptySubmit, `Nur Passkey: kein Wechsel zum Passkey (${JSON.stringify(pkState)})`);
   pageErrors(pkOnly.sessionId, 'ms-passkey');
+  if (pkSaved?.id) await sw(options.sessionId, 'delete', { containerId: personal.id, id: pkSaved.id }).catch(() => {});
 
   // Microsoft account with a password AND a passkey: the passkey comes first and is used without a click (the user
   // started this sign-in); "Stay signed in?" afterwards on login.microsoft.com (another origin) gets "No".
@@ -748,6 +753,7 @@ try {
     pageErrors(both.sessionId, 'ms-passkey-auto');
   }
   await evaluate(options.sessionId, `chrome.storage.local.set({ msDefault: ${JSON.stringify(remembered)} }).then(() => true)`);
+  if (msPk) await sw(options.sessionId, 'delete', { containerId: msPk.containerId, id: msPk.id }).catch(() => {});
 
   // Signing out (Microsoft's logout page, account tiles like a sign-in): no bar and no automatic sign-in (#9).
   const out = await open(`http://login.microsoftonline.com:${server.address().port}/common/oauth2/logout?post_logout_redirect_uri=x`);

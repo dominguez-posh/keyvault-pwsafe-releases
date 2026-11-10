@@ -705,11 +705,10 @@
   async function onFocus(ev) {
     const input = ev.target;
     if (!(input instanceof HTMLInputElement) || !alive) return;
-    const webauthnField = /webauthn/i.test(input.autocomplete || '');
-    const otp = isOtpField(input);
-    const pw = !otp && isPassword(input);
-    const user = !pw && !otp && isUsernameLike(input);
-    if (!pw && !user && !webauthnField && !otp) return;
+    // Only real sign-in fields (#502, field-kind.js): never search, contact, address or comment fields.
+    const kind = globalThis.kvpwsafeFieldKind?.(input, { host: location.hostname, isOtp: isOtpField, loginFields });
+    if (!kind) return;
+    const otp = kind === 'otp';
     const data = await getMatches();
     if (document.activeElement !== input) return;
     const entries = [];

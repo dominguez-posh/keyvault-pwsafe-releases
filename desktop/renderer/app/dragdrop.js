@@ -3,6 +3,7 @@
 import { toast, confirmDialog } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
 import { MAX_FOLDER_DEPTH } from '../../../extension/core/model.js';
+import { ROOT_ONLY } from '../../../extension/core/private.js';
 import { call } from './ipc.js';
 import { explicitFolders, items, st, ui } from './state.js';
 import { writable } from './helpers.js';
@@ -37,7 +38,52 @@ export function startDrag(e, c, keys, folders) {
 export function endDrag() {
   draggedKeys = [];
   draggedFolder = null;
+  clearDropMarks();
 }
+
+// #491: how a drop target shows itself while something is dragged over it. "ok": accent frame, slight lift and the
+// label "Hierher verschieben"; "blocked": muted red frame with the reason (shown under the row, as a tooltip too –
+// Chromium shows no tooltips during a drag). Only the look: whether a drop is taken stays with the rules below.
+const MARKS = ['drop', 'drop-blocked', 'drop-before', 'drop-after'];
+function clearMark(el) {
+  if (el.classList.contains('drop-blocked')) el.removeAttribute('title');
+  el.classList.remove(...MARKS);
+  delete el.dataset.dropLabel;
+}
+/** Removes every drop mark (the drag ended somewhere else, e.g. outside the window). */
+export function clearDropMarks() {
+  document.querySelectorAll(MARKS.map((m) => `.${m}`).join(',')).forEach(clearMark);
+}
+function mark(el, blocked, label) {
+  const cls = blocked ? 'drop-blocked' : 'drop';
+  if (el.classList.contains(cls) && el.dataset.dropLabel === label) return; // dragover fires many times a second
+  clearMark(el);
+  el.classList.add(cls);
+  el.dataset.dropLabel = label;
+  if (blocked) el.title = label;
+}
+/** Short feedback right after a drop (a pulse of the row; without motion under prefers-reduced-motion). */
+function pulse(el) {
+  el.classList.remove('drop-done');
+  void el.offsetWidth; // restarts the animation
+  el.classList.add('drop-done');
+  setTimeout(() => el.classList.remove('drop-done'), 700);
+}
+
+/** Why the dragged entries (or folder) may not go into vault c – null when that is no target at all (their own vault). */
+function vaultBlockReason(c, keys, folder) {
+  const own = folder ? folder.containerId === c.id : keys.every((k) => splitKey(k)[0] === c.id);
+  if (own || (!folder && !keys.length)) return null;
+  if (c.locked) return t('Tresor ist gesperrt');
+  if (c.error) return t('Tresor nicht erreichbar');
+  if (!writable(c)) return t('Kein Schreibrecht in diesem Tresor');
+  if (folder && !featureAllowed(c, 'folders')) return t('Ordner sind in diesem Tresor nicht freigeschaltet');
+  if (c.personal) return t('Einträge aus geteilten Tresoren lassen sich nicht in den persönlichen Tresor verschieben');
+  return null;
+}
+
+/** "Nur für mich" entries live only in the root folder (#476): a subfolder is no target for them. */
+const privateBlockReason = (keys, folder) => (folder && keys.some((k) => items.find((i) => i.key === k)?.privateOwner) ? ROOT_ONLY() : null);
 
 /** What a drop carries: entry keys and { containerId, folders } (or null). */
 function dropped(e) {
@@ -99,18 +145,26 @@ export function vaultDropTarget(c) {
         e.currentTarget.classList.toggle('drop-before', !half(e));
         return;
       }
-      const ok = e.dataTransfer.types.includes(DRAG_FOLDER) ? vaultAccepts(c, draggedKeys, draggedFolder)
-        : e.dataTransfer.types.includes(DRAG_TYPE) && vaultAccepts(c, draggedKeys);
-      if (!ok) return;
+      const types = e.dataTransfer.types;
+      const withFolder = types.includes(DRAG_FOLDER);
+      if (!withFolder && !types.includes(DRAG_TYPE)) return;
+      const ok = withFolder ? vaultAccepts(c, draggedKeys, draggedFolder) : vaultAccepts(c, draggedKeys);
+      if (!ok) {
+        const why = vaultBlockReason(c, draggedKeys, withFolder ? draggedFolder : null);
+        if (why) mark(e.currentTarget, true, why);
+        return;
+      }
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      e.currentTarget.classList.add('drop');
+      mark(e.currentTarget, false, t('Hierher verschieben'));
     },
-    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop', 'drop-before', 'drop-after'); },
+    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) clearMark(e.currentTarget); },
     ondrop: async (e) => {
       e.preventDefault();
       const after = half(e);
-      e.currentTarget.classList.remove('drop', 'drop-before', 'drop-after');
+      const accepted = e.currentTarget.classList.contains('drop');
+      clearMark(e.currentTarget);
+      if (accepted) pulse(e.currentTarget);
       if (e.dataTransfer.types.includes(DRAG_VAULT)) {
         const id = e.dataTransfer.getData(DRAG_VAULT);
         draggedVault = null;
@@ -161,16 +215,29 @@ export function dropTarget(folder, container = null) {
   return {
     ondragover: (e) => {
       const types = e.dataTransfer.types;
-      if (types.includes(DRAG_FOLDER) ? !folderFits(draggedFolder) : !types.includes(DRAG_TYPE)) return;
+      if (types.includes(DRAG_FOLDER)) {
+        if (!folderFits(draggedFolder)) {
+          // Into a subfolder of its own: say why; its own row and the folder it already lies in stay quiet.
+          const inside = draggedFolder?.containerId === container?.id && draggedFolder.folders.some((f) => folder.startsWith(`${f}/`));
+          if (inside) mark(e.currentTarget, true, t('Ein Ordner kann nicht in sich selbst verschoben werden'));
+          return;
+        }
+      } else if (!types.includes(DRAG_TYPE)) return;
+      else {
+        const why = privateBlockReason(draggedKeys, folder);
+        if (why) { mark(e.currentTarget, true, why); return; }
+      }
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      e.currentTarget.classList.add('drop');
+      mark(e.currentTarget, false, t('Hierher verschieben'));
     },
-    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) e.currentTarget.classList.remove('drop'); },
+    ondragleave: (e) => { if (!e.currentTarget.contains(e.relatedTarget)) clearMark(e.currentTarget); },
     ondrop: (e) => {
       e.preventDefault();
       e.stopPropagation();
-      e.currentTarget.classList.remove('drop');
+      const accepted = e.currentTarget.classList.contains('drop');
+      clearMark(e.currentTarget);
+      if (accepted) pulse(e.currentTarget);
       const { keys: all, folder: src } = dropped(e);
       if (src) {
         if (!folderFits(src)) return;
@@ -241,5 +308,5 @@ async function moveToFolder(key, folder) {
 }
 
 // Other modules read these bindings directly and change them through the setters (imports are read-only).
-export function setDraggedVault(value) { draggedVault = value; return value; }
+export function setDraggedVault(value) { draggedVault = value; if (value === null) clearDropMarks(); return value; }
 export function setDraggedPasskey(value) { draggedPasskey = value; return value; }

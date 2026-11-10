@@ -9,7 +9,7 @@
 import { until } from './smoke-wait.js';
 
 // The headings in German and English (the smoke run may use either language).
-const NAMES = { Benutzername: ['Benutzername', 'User name', 'Username'], Websites: ['Websites'], 'Mandanten-ID': ['Mandanten-ID'], 'Primäre Domäne': ['Primäre Domäne'],
+const NAMES = { Benutzername: ['Benutzername', 'User name', 'Username'], Websites: ['Websites'], Website: ['Website'], 'Mandanten-ID': ['Mandanten-ID'], 'Primäre Domäne': ['Primäre Domäne'],
   Karteninhaber: ['Karteninhaber', 'Cardholder'], 'Server (IP oder Name)': ['Server (IP oder Name)', 'Server (IP or name)'], Verwaltungsseite: ['Verwaltungsseite', 'Management page'] };
 const TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
 const card = (label) => `[...document.querySelectorAll(".detail-pane .field-card > .field")].find((c) => ${JSON.stringify(NAMES[label] || [label])}.includes(c.querySelector(":scope > label")?.textContent.trim()))`;
@@ -44,6 +44,7 @@ export async function fieldHoverCheck(ctx) {
       await move(box.x + 3, box.y + box.h / 2);
       if (!(await shown(label))[0]) fail(`${label}: mouse on the edge of the card, but "Copy" is not visible`);
     }
+    await clickFocusCheck();
     // The arrow of the user name card shows with the action (where the card has one) – the mouse back on that card.
     const userHead = await rect(`(${card('Benutzername')})?.querySelector(":scope > label")`);
     if (userHead) await move(userHead.x + userHead.w / 2, userHead.y + userHead.h / 2);
@@ -87,6 +88,7 @@ export async function fieldHoverCheck(ctx) {
       if (!copied) fail('TOTP: a click on the card did not copy the current code');
       if (await clipboardHas(TOTP_SECRET)) fail('TOTP: the click copied the secret (#469)');
     }
+    await widthCheck();
 
     // Card holder: the card with "Copy", no icon of its own.
     await save({ type: 'card', title: 'Smoke Hover Karte', card: { holder: 'Erika Hover', number: '4111111111111111' } });
@@ -114,6 +116,63 @@ export async function fieldHoverCheck(ctx) {
     }
   } finally {
     await move(1, 1);
+  }
+
+  // #493: a mouse click copies, says "Kopiert" on the card for a moment, and the card goes dark once the mouse has left
+  // (it keeps the focus, but not :focus-visible); keyboard focus on the card keeps it lit.
+  async function clickFocusCheck() {
+    const user = card('Benutzername');
+    const lit = () => js(`(() => { ${FINISH} const c = ${user}; const s = c && getComputedStyle(c);
+      return JSON.stringify({ frame: !!s && s.boxShadow.includes("inset"), action: !!c && getComputedStyle(c.querySelector(".act-label")).opacity === "1", text: c?.querySelector(".act-label")?.textContent || "" }); })()`).then(JSON.parse);
+    const head = await rect(`(${user})?.querySelector(":scope > label")`);
+    if (!head) return fail('#493: user name card missing');
+    const x = Math.round(head.x + head.w / 2), y = Math.round(head.y + head.h / 2);
+    await move(x, y);
+    win.webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+    win.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    if (!(await until(() => js(`/^(Kopiert|Copied)$/.test((${user})?.querySelector(".act-label")?.textContent || "")`), 2000))) fail('#493: no "Kopiert" on the card after the click');
+    if (!(await js(`!!(${user})?.contains(document.activeElement)`))) fail('#493: the click did not focus the card (the check would prove nothing)');
+    await move(1, 1);
+    await sleep(1500); // "Kopiert" is over
+    const after = await lit();
+    if (after.frame || after.action) fail(`#493: the card stays lit after a click once the mouse has left ${JSON.stringify(after)}`);
+    // Keyboard: a key press makes the next focus a keyboard focus (:focus-visible), as with Tab.
+    win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Shift' });
+    win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Shift' });
+    await sleep(200);
+    await js(`(() => { const c = ${user}; c?.blur(); c?.focus(); return true; })()`);
+    await sleep(200);
+    const keyboard = await lit();
+    const visible = await js(`!!(${user})?.matches(":focus-visible")`);
+    if (!visible || !keyboard.frame || !keyboard.action) fail(`#493: keyboard focus on the card is not visible ${JSON.stringify({ visible, ...keyboard })}`);
+    await js('document.activeElement?.blur(); true');
+    return undefined;
+  }
+
+  // #498: without hover the value of a card uses the full width of its row (no room kept for the action); the action
+  // lies over the end of the value at the right edge on hover; the full address is the tooltip.
+  async function widthCheck() {
+    const long = 'https://keevault.de/hilfe/ein-sehr-langer-pfad/der-sicher-nicht-in-die-karte-passt/und-noch-weiter';
+    await save({ type: 'login', title: 'Smoke Hover Lang', username: 'hover-user', password: 'Hover-Pass-1', urls: [long] });
+    await openItem('Smoke Hover Lang');
+    if (!(await until(() => js(`!!(${card('Website')})?.querySelector(".url")`), 4000))) return fail('#498: no Website card with the long address');
+    await move(1, 1);
+    const fit = (label, sel) => js(`JSON.stringify((() => { const c = ${card(label)}; const r = c?.querySelector(".act-row"), v = r?.querySelector(${JSON.stringify(sel)});
+      if (!v) return null; const a = r.getBoundingClientRect(), b = v.getBoundingClientRect(), t = r.querySelector(".act-tools").getBoundingClientRect();
+      return { row: Math.round(a.width), value: Math.round(b.width), toolsRight: Math.round(a.right - t.right), title: v.title || "", cut: v.scrollWidth > v.clientWidth }; })())`).then(JSON.parse);
+    for (const [label, sel] of [['Website', '.url'], ['Benutzername', '.value']]) {
+      const f = await fit(label, sel);
+      if (!f) { fail(`#498: ${label}: no value in the card`); continue; }
+      if (f.value < f.row - 2) fail(`#498: ${label}: the value takes only ${f.value} of ${f.row} px without hover (room kept for the action)`);
+      if (Math.abs(f.toolsRight) > 1) fail(`#498: ${label}: the action is not at the right edge of the row ${JSON.stringify(f)}`);
+      if (label === 'Website' && (f.title !== long || !f.cut)) fail(`#498: long address without tooltip or not shortened at the edge ${JSON.stringify(f)}`);
+    }
+    const head = await rect(`(${card('Website')})?.querySelector(":scope > label")`);
+    if (head) await move(head.x + head.w / 2, head.y + head.h / 2);
+    const hovered = await fit('Website', '.url');    if (!(await shown('Website'))[0]) fail('#498: mouse on the Website card, but the action is not visible');
+    if (hovered && hovered.value < hovered.row - 2) fail(`#498: on hover the address shrinks instead of the action lying over it ${JSON.stringify(hovered)}`);
+    await move(1, 1);
+    return undefined;
   }
 
   async function cardInfo(label) {

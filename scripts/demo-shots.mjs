@@ -110,6 +110,43 @@ const views = {
   await send('Target.closeTarget', { targetId });
 }
 
+// The personal vault "Persönlich" (#488): in the sidebar's personal slot with the cloud badge, locked, its entries hidden until
+// the demo PIN shown in the unlock panel opens it; a wrong PIN does not.
+for (const lang of ['de', 'en']) {
+  const { targetId, sessionId } = await openDemo({ lang, theme: 'light' });
+  const state = () => evaluate(sessionId, `JSON.stringify({
+    row: !!document.querySelector('.personal-slot .nav-row[data-vault]'),
+    name: document.querySelector('.personal-slot .nav-label')?.textContent || '',
+    badge: !!document.querySelector('.personal-slot .source-badge.cloud'),
+    hint: document.querySelector('.unlock-panel .demo-hint')?.textContent || '' })`).then((v) => JSON.parse(v));
+  const s0 = await state();
+  if (!s0.row || !/Pers/.test(s0.name)) errors.push(`Demo (${lang}): „Persönlich“ fehlt in der Seitenleiste ${JSON.stringify(s0)}`);
+  if (!s0.badge) errors.push(`Demo (${lang}): Cloud-Symbol an „Persönlich“ fehlt`);
+  const count = `window.pwsafe.invoke('items').then((r) => r.result.filter((x) => /personal/.test(x.containerId)).length)`;
+  if ((await evaluate(sessionId, count)) !== 0) errors.push(`Demo (${lang}): „Persönlich“ zeigt Einträge, obwohl gesperrt`);
+  await evaluate(sessionId, `document.querySelector('.personal-slot .nav').click()`);
+  await sleep(700);
+  const pin = ((await state()).hint.match(/\d{6}/) || [])[0];
+  if (!pin) errors.push(`Demo (${lang}): Demo-PIN wird nicht angezeigt`);
+  const unlock = (value) => evaluate(sessionId, `(async () => {
+    const input = document.querySelector('.unlock-panel form input');
+    input.value = ${JSON.stringify(value)};
+    input.form.requestSubmit();
+    await new Promise((r) => setTimeout(r, 900));
+    return ${count};
+  })()`);
+  if ((await unlock('000000')) !== 0) errors.push(`Demo (${lang}): falsche PIN öffnet „Persönlich“`);
+  if (pin) {
+    const n = await unlock(pin);
+    if (n < 3) errors.push(`Demo (${lang}): „Persönlich“ lässt sich mit der Demo-PIN nicht öffnen (Einträge: ${n})`);
+    if (arg('personal-shot') && lang === 'de') {
+      const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
+      writeFileSync(arg('personal-shot'), Buffer.from(data, 'base64'));
+    }
+  }
+  await send('Target.closeTarget', { targetId });
+}
+
 if (out) {
   for (const theme of ['light', 'dark']) {
     for (const lang of ['de', 'en']) {

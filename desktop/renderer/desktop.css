@@ -105,7 +105,26 @@ body { overflow: hidden; }
 .diagnosis dd { margin: 0; word-break: break-word; user-select: text; }
 .row-item[draggable="true"] { cursor: grab; }
 .row-item.cut { opacity: .5; }
-.folder-row.drop, .folder-crumb.drop { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+/* Drop targets (#491), in the folder tree and in the sidebar: "ok" lights up in the accent and lifts a little with the
+   label "Hierher verschieben"; "blocked" gets a muted red frame and the reason under the row; a pulse after the drop. */
+.nav-row, .folder-row, .folder-crumb { transition: background-color .14s ease, box-shadow .14s ease, transform .14s ease; }
+.nav-row.drop, .folder-row.drop, .folder-crumb.drop { position: relative; outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-soft); box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 24%, transparent); transform: translateY(-1px); }
+.folder-row.drop, .folder-crumb.drop, .folder-row.drop-blocked, .folder-crumb.drop-blocked { border-radius: 12px; }
+.nav-row.drop .nav, .nav-row.drop-blocked .nav { background: transparent; }
+.nav-row.drop .count, .nav-row.drop .nav-refresh, .folder-row.drop .icon-btn { visibility: hidden; }
+.drop[data-drop-label]::after { content: attr(data-drop-label); position: absolute; right: 8px; top: 50%; transform: translateY(-50%); padding: 2px 9px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 600; line-height: 18px; white-space: nowrap; pointer-events: none; animation: drop-label-in .16s ease-out; }
+.nav-row.drop-blocked, .folder-row.drop-blocked, .folder-crumb.drop-blocked { position: relative; z-index: 2; outline: 2px dashed color-mix(in srgb, var(--danger) 60%, transparent); outline-offset: -2px; background: color-mix(in srgb, var(--danger) 7%, transparent); cursor: not-allowed; }
+.drop-blocked[data-drop-label]::after { content: attr(data-drop-label); position: absolute; left: 6px; right: 6px; top: calc(100% + 4px); padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--danger); font-size: 12px; line-height: 1.35; white-space: normal; box-shadow: 0 6px 18px rgba(0, 0, 0, .14); pointer-events: none; animation: drop-label-in .16s ease-out; }
+.drop-done { animation: drop-done .6s ease-out; }
+@keyframes drop-label-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes drop-done { 0% { background: var(--accent-soft); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); transform: scale(1.02); } 100% { box-shadow: 0 0 0 10px transparent; transform: none; } }
+@keyframes drop-done-still { 0% { background: var(--accent-soft); } }
+@media (prefers-reduced-motion: reduce) {
+  .nav-row, .folder-row, .folder-crumb { transition: none; }
+  .nav-row.drop, .folder-row.drop, .folder-crumb.drop { transform: none; box-shadow: none; }
+  .drop[data-drop-label]::after, .drop-blocked[data-drop-label]::after { animation: none; }
+  .drop-done { animation: drop-done-still .6s linear; }
+}
 .access-search input { flex: 1; min-width: 0; }
 .access-search select { flex: none; width: auto; }
 .access-list { margin-top: 6px; }
@@ -652,10 +671,8 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .role-mark { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; color: var(--muted); background: var(--accent-soft); cursor: help; }
 .role-mark.role-write, .role-mark.role-admin { color: var(--accent); }
 .role-mark.role-owner { color: #b7791f; background: rgba(214, 158, 46, .14); }
-/* Optional "PIM" button top right, left of the window buttons (menu → View → PIM button). */
-  background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; user-select: none; }
-/* Vault in the sidebar while entries are dragged over it. */
-.nav-row.drop { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 10px; background: var(--accent-soft); }
+/* Vault in the sidebar while entries are dragged over it (the look of all drop targets: "Drop targets (#491)" above). */
+.nav-row.drop, .nav-row.drop-blocked { border-radius: 10px; }
 /* "New" at the top right of the list column, in the language of the floating entry toolbar: a light capsule with a
    soft shadow, the action in the accent colour, the arrow (choose what to create) quiet beside it. */
 .list-head .new-split { margin-left: auto; align-self: flex-start; margin-top: 2px; flex: 0 0 auto; display: inline-flex; align-items: center; height: 34px; padding: 3px; box-sizing: border-box; border-radius: 12px;
