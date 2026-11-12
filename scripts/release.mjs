@@ -117,7 +117,8 @@ function certThumbprint(subject) {
   return candidates[0].hash;
 }
 const publisher = pkg.build.appx.publisher; // "CN=KeyVault PwSafe Test" – same certificate as the passkey provider
-const thumbprint = certThumbprint(publisher);
+// --publish-only signs nothing and needs no certificate (#528: early-access.yml removes it before publishing).
+const thumbprint = publishOnly ? null : certThumbprint(publisher);
 const sign = (file) => run(signtool, ['sign', '/fd', 'SHA256', '/sha1', thumbprint, '/s', 'My', file]);
 
 /** First dotnet with an SDK 10 or newer (the provider targets net10.0; SDK 8 may come first on PATH). */

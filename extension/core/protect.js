@@ -132,12 +132,12 @@ function parseCode(code) {
 // ---------------------------------------------------------------- keyring
 
 /**
- * The real key change (#402) is built and tested, but switched off in this version (Lucas, 2026-11-07): a new master
- * password or recovery key only wraps the same key again, as before. THE ONE PLACE to switch it on is `enabled` here.
- * Everything that only RECOGNISES a changed state (key generation, check, merge, locking of stale keys) is always on, so
- * that devices on this version are ready when it is switched on later.
+ * The real key change (#402), switched on since 0.9.34 (Lucas, 2026-11-12: no device runs 0.9.28 or older any more):
+ * a new master password or recovery key gives the vault a new key. THE ONE PLACE to switch it off again is `enabled`
+ * here (then both only wrap the same key again). Everything that only RECOGNISES a changed state (key generation,
+ * check, merge, locking of stale keys) is always on.
  */
-export const KEY_CHANGE = { enabled: false };
+export const KEY_CHANGE = { enabled: true };
 
 /**
  * Key generation of a keyring: starts at 1, every real key change raises it. The highest generation of the entries
@@ -182,23 +182,38 @@ async function addEntry(keyring, ck, entry, kek, replaceType) {
   return { ...keyring, entries: [...kept, e], removed: [...new Set([...(keyring.removed || []), ...removed])], updated: now() };
 }
 
+const retiredError = () => new Error(t('Nach dem Entfernen des Masterpassworts gibt es ein neues nur mit dem Schlüsselwechsel'));
+
+/**
+ * A new master password needs the key change (#402): after one was removed (pwRetired), and – for vaults whose password
+ * was removed by an app up to 0.9.28, before pwRetired existed (Konrad 12.11.2026) – whenever the keyring has no password
+ * but removed entries. The types of removed entries are not kept, so a passkey-only vault with a consumed invitation counts
+ * too (the safe side: a key change, never a plain wrapping that an old password of an old file version could still open).
+ */
+export const passwordNeedsRekey = (keyring) => !!keyring?.pwRetired
+  || (!(keyring?.entries || []).some((e) => e.type === 'password') && (keyring?.removed || []).length > 0);
+
 /**
  * New master password: replaces every password entry, so that an old (maybe leaked) one stops working whoever set it.
  * add: only when an invited person sets their own (#441) – the passwords of the others stay.
  */
 export async function setPassword(keyring, ck, password, actor = '', { add = false } = {}) {
-  if (KEY_CHANGE.enabled && keyring.pwRetired) throw new Error(t('Nach dem Entfernen des Masterpassworts gibt es ein neues nur mit dem Schlüsselwechsel'));
+  if (KEY_CHANGE.enabled && keyring.pwRetired) throw retiredError();
   if (String(password).length < 8) throw new Error(t('Das Masterpasswort muss mindestens 8 Zeichen lang sein'));
   const salt = randomBytes(16);
   const kek = await passwordKey(password, salt);
   return addEntry(keyring, ck, { type: 'password', salt: b64uEncode(salt), iterations: PBKDF2_ITERATIONS, createdBy: actor }, kek, add ? null : 'password');
 }
 
-/** passkey: { credentialId, rpId, prfSalt, prfOutput, label } */
+/**
+ * passkey: { credentialId, rpId, prfSalt, prfOutput, label, device? }. device ('key' | 'hello' | 'phone', see prf.js
+ * deviceKind) is only shown (#531), e.g. as "FIDO-Stick hinterlegt"; it decides nothing about unlocking.
+ */
 export async function addPasskey(keyring, ck, passkey, actor = '') {
   const kek = await passkeyKey(b64uDecode(passkey.prfOutput));
+  const device = ['key', 'hello', 'phone'].includes(passkey.device) ? passkey.device : undefined;
   return addEntry(keyring, ck, {
-    type: 'passkey', credentialId: passkey.credentialId, rpId: passkey.rpId, prfSalt: passkey.prfSalt, label: passkey.label || '', createdBy: actor,
+    type: 'passkey', credentialId: passkey.credentialId, rpId: passkey.rpId, prfSalt: passkey.prfSalt, label: passkey.label || '', createdBy: actor, ...(device ? { device } : {}),
   }, kek);
 }
 
@@ -333,13 +348,14 @@ export function describeKeyring(keyring, rpId) {
   return {
     password: entries.some((e) => e.type === 'password'),
     passwordRetired: !!keyring?.pwRetired,
+    passwordNeedsRekey: passwordNeedsRekey(keyring),
     keyChange: KEY_CHANGE.enabled,
     passwordId: entries.find((e) => e.type === 'password')?.id || null,
     // Every password entry (e.g. one per invited person, #441), so that each one can be removed on its own.
     passwords: entries.filter((e) => e.type === 'password').map((e) => ({ id: e.id, created: e.created, createdBy: e.createdBy })),
     recovery: entries.some((e) => e.type === 'recovery'),
     passkeys: entries.filter((e) => e.type === 'passkey').map((e) => ({
-      id: e.id, label: e.label, rpId: e.rpId, usable: e.rpId === rpId, created: e.created, createdBy: e.createdBy,
+      id: e.id, label: e.label, rpId: e.rpId, usable: e.rpId === rpId, created: e.created, createdBy: e.createdBy, device: e.device || '',
     })),
     invites: entries.filter((e) => e.type === 'invite').map((e) => ({
       id: e.id, label: e.label, expires: e.expires, expired: new Date(e.expires) <= new Date(), created: e.created, createdBy: e.createdBy,
@@ -356,6 +372,8 @@ export function describeKeyring(keyring, rpId) {
 export async function applyKeyringOp(keyring, ck, op, actor = '') {
   switch (op.type) {
     case 'setPassword':
+      // The own password of an invited person (add) is refused only by pwRetired itself (setPassword).
+      if (KEY_CHANGE.enabled && op.add !== true && passwordNeedsRekey(keyring)) throw retiredError();
       return { keyring: await setPassword(keyring, ck, op.password, actor, { add: op.add === true }) };
     case 'addPasskey':
       return { keyring: await addPasskey(keyring, ck, op.passkey, actor) };

@@ -21,7 +21,7 @@ async function run() {
       : request.mode === 'approve'
         ? await assertApproval({ challenge: request.challenge, credentials: request.credentials, timeout: request.timeoutMs })
         : request.mode === 'register'
-      ? await registerPrf('localhost', { userName: request.userName, displayName: request.displayName, excludeCredentialIds: request.exclude || [], timeout: request.timeoutMs, attachment: request.attachment })
+      ? await registerPrf('localhost', { userName: request.userName, displayName: request.displayName, excludeCredentialIds: request.exclude || [], timeout: request.timeoutMs, attachment: request.attachment, hints: request.hints })
       : await evaluatePrf('localhost', request.passkeys, { timeout: request.timeoutMs });
     finish({ ok: true, result });
   } catch (e) {

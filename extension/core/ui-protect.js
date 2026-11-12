@@ -45,8 +45,8 @@ export function strengthMeter(input) {
 }
 
 /** Form part for choosing master password and/or passkey. read() → { password, passkeyLabel } or throws. */
-export function methodsForm(ctx, { requirePasskeyHint = false } = {}) {
-  const usePassword = h('input', { type: 'checkbox', checked: !ctx.passkeyAvailable });
+export function methodsForm(ctx, { requirePasskeyHint = false, noPassword = false } = {}) {
+  const usePassword = h('input', { type: 'checkbox', checked: !noPassword && !ctx.passkeyAvailable, disabled: noPassword });
   const usePasskey = h('input', { type: 'checkbox', checked: !!ctx.passkeyAvailable, disabled: !ctx.passkeyAvailable });
   const pw1 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: t('mindestens 8 Zeichen') });
   const pw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: t('wiederholen') });
@@ -66,7 +66,7 @@ export function methodsForm(ctx, { requirePasskeyHint = false } = {}) {
     h('label', { class: 'inline' }, usePasskey, h('b', {}, t('Passkey'))),
     ctx.passkeyAvailable ? pkBox : h('p', { class: 'muted small indent' }, t('Passkeys sind in dieser App auf diesem System nicht verfügbar.')),
     h('label', { class: 'inline', style: { marginTop: '10px' } }, usePassword, h('b', {}, t('Masterpasswort'))),
-    pwBox,
+    noPassword ? h('p', { class: 'muted small indent', 'data-pw-retired': 'invite' }, t('Für diesen Tresor wurde ein Masterpasswort entfernt. Ein neues gibt es erst, wenn der Tresor einen neuen Schlüssel bekommt – lege einen Passkey fest.')) : pwBox,
     requirePasskeyHint ? h('p', { class: 'muted small' }, t('Jede Methode entsperrt für sich. Weitere Benutzer fügst du später mit einer Einladung hinzu.')) : null);
   return {
     element,
@@ -125,7 +125,9 @@ export const showRecoveryKey = (code) => showCode(t('Wiederherstellungsschlüsse
 
 /** After unlocking with an invitation: register the own passkey (or password) and consume the invitation. */
 async function completeInvite(container, ctx, entryId) {
-  const form = methodsForm(ctx);
+  // After a master password was removed, a new one comes only with a key change (#402, pwRetired): passkey only here.
+  const methods = (await ctx.info(container.id).catch(() => null))?.methods;
+  const form = methodsForm(ctx, { noPassword: !!(methods?.keyChange && methods.passwordRetired) });
   await new Promise((resolve) => {
     modal(t('Willkommen in „{name}“', { name: container.name }), h('div', {},
       h('p', {}, t('Lege jetzt deine eigene Entsperrmethode fest. Die Einladung wird danach entfernt.')), form.element), [
@@ -226,6 +228,8 @@ export async function rekeyDialog(container, ctx, methods, refresh) {
     h('p', {}, lost.length
       ? t('Diese Zugänge entfallen und müssen danach neu angelegt werden: {list}.', { list: lost.join(', ') })
       : t('Es entfallen keine Passkeys oder Einladungen.')),
+    // Said before the change, also when "Masterpasswort festlegen" leads here (passwordNeedsRekey); cancel changes nothing.
+    methods.passkeys.length ? h('div', { 'data-rekey': 'passkeys-lost' }, notice(t('Danach musst du deine Passkeys und FIDO-Sticks neu hinzufügen.'), 'warn')) : null,
     h('p', { class: 'muted small' }, t('Auf anderen Geräten muss der Tresor danach neu entsperrt werden. Ältere Versionen von Einträgen sind dann nicht mehr lesbar.')),
     h('div', { class: 'field' }, h('label', {}, t('Neues Masterpasswort')), pw1, strengthMeter(pw1)),
     h('div', { class: 'field' }, h('label', {}, t('Wiederholen')), pw2)), [
@@ -288,7 +292,7 @@ export async function manageDialog(container, ctx, onChange) {
     });
     const password = h('button', { type: 'button', class: 'btn' }, icon('lock'), m.password ? t('Masterpasswort ändern') : t('Masterpasswort festlegen'));
     password.addEventListener('click', () => {
-      if (m.keyChange && (m.password || m.passwordRetired)) return rekeyDialog(container, ctx, m, refresh); // key change switched on (protect.js KEY_CHANGE)
+      if (m.keyChange && (m.password || m.passwordNeedsRekey)) return rekeyDialog(container, ctx, m, refresh); // key change switched on (protect.js KEY_CHANGE)
       const pw1 = h('input', { type: 'password', autocomplete: 'new-password' });
       const pw2 = h('input', { type: 'password', autocomplete: 'new-password' });
       modal(m.password ? t('Masterpasswort ändern') : t('Masterpasswort festlegen'), h('div', {},
@@ -306,19 +310,22 @@ export async function manageDialog(container, ctx, onChange) {
     // The personal vault keeps its master password (it opens it on new devices); others may drop it for passkeys.
     // Several master passwords (one per invited person, #441): each listed and removable on its own.
     const passwords = m.passwords || [];
+    // With the key change on (#402), removing a master password retires passwords (pwRetired): say so before and after.
+    const retireNote = m.keyChange ? ` ${t('Ein neues Masterpasswort gibt es danach nur zusammen mit einem neuen Schlüssel für den Tresor; dabei entfallen Passkeys und Einladungen.')}` : '';
+    const retiredHint = m.keyChange && m.passwordRetired ? h('p', { class: 'muted small', 'data-pw-retired': 'manage' }, t('Ein Masterpasswort wurde entfernt. Neue Masterpasswörter, auch für eingeladene Personen, gibt es erst nach einem neuen Schlüssel für den Tresor („Masterpasswort festlegen“ oder „Neuer Wiederherstellungsschlüssel“).')) : null;
     const passwordRows = passwords.length > 1 && !container.personal ?passwords.map((p) => h('div', { class: 'member' }, icon('lock'),
       h('div', { class: 'row-text' },
         h('div', { class: 'row-title' }, t('Masterpasswort')),
         h('div', { class: 'row-sub' }, [p.createdBy, formatDateTime(p.created)].filter(Boolean).join(' · '))),
       iconButton('trash', t('Masterpasswort entfernen'), async () => {
         const label = [t('Masterpasswort'), p.createdBy].filter(Boolean).join(' · ');
-        if (!(await confirmDialog(t('Masterpasswort entfernen'), t('„{label}“ kann den Tresor danach nicht mehr entsperren.', { label }), { confirmLabel: t('Entfernen'), danger: true }))) return;
+        if (!(await confirmDialog(t('Masterpasswort entfernen'), t('„{label}“ kann den Tresor danach nicht mehr entsperren.', { label }) + retireNote, { confirmLabel: t('Entfernen'), danger: true }))) return;
         await ctx.update(container.id, { type: 'removeEntry', entryId: p.id }).catch((e) => toast(e.message, 'error'));
         refresh();
       }))) : [];
     const removePassword = !container.personal && passwords.length <= 1 && m.password && (m.passkeys.length || m.recovery) ? h('button', { type: 'button', class: 'btn', onclick: async () => {
       const entry = (await ctx.info(container.id)).methods;
-      if (!(await confirmDialog(t('Masterpasswort entfernen'), t('Danach entsperren nur noch Passkeys und der Wiederherstellungsschlüssel.'), { confirmLabel: t('Entfernen'), danger: true }))) return;
+      if (!(await confirmDialog(t('Masterpasswort entfernen'), t('Danach entsperren nur noch Passkeys und der Wiederherstellungsschlüssel.') + retireNote, { confirmLabel: t('Entfernen'), danger: true }))) return;
       await ctx.update(container.id, { type: 'removeEntry', entryId: entry.passwordId }).catch((e) => toast(e.message, 'error'));
       refresh();
     } }, t('Masterpasswort entfernen')) : null;
@@ -342,6 +349,7 @@ export async function manageDialog(container, ctx, onChange) {
       h('h3', {}, t('Weitere Methoden')),
       passwordRows.length ? passwordRows : null,
       h('p', { class: 'muted small' }, [m.password ? t('Masterpasswort eingerichtet') : t('Kein Masterpasswort'), m.recovery ? t('Wiederherstellungsschlüssel vorhanden') : t('Kein Wiederherstellungsschlüssel')].join(' · ')),
+      retiredHint,
       h('div', { class: 'actions' }, password, removePassword, recovery),
       container.kind === 'keyvault' ? h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn danger', onclick: async () => {
         if (!(await confirmDialog(t('Schutz ausschalten'), t('Alle Einträge werden wieder unverschlüsselt im Key Vault gespeichert. Zugriff regelt dann nur noch Azure RBAC.'), { confirmLabel: t('Schutz ausschalten'), danger: true }))) return;

@@ -9,7 +9,7 @@ import { featureChecks } from '../smoke-features.js';
 import { smokeRelease } from './api/release.js';
 import { areaSelection } from '../smoke-areas.js';
 import { plantedOrgFileTaken } from '../org-file.js';
-import { downgradeCheck, fileSwapCheck, foreignKeyCheck, rejectedCheck, rollbackCheck } from '../smoke-file-swap.js';
+import { downgradeCheck, fileSwapCheck, foreignKeyCheck, rejectedCheck, removeRaceCheck, rollbackCheck } from '../smoke-file-swap.js';
 import { acceptOlderCheck } from '../smoke-accept-older.js';
 import { t } from '../../extension/core/i18n.js';
 import { appRoot, demo, missingFiles, screenshot, smokeGuard } from './boot.js';
@@ -274,7 +274,7 @@ export function runSmokeTest() {
         if (movedItem?.folder !== 'Partner/Contoso' || !(await api.folders(id)).includes('Partner/Contoso')) errors.push('folders: rename did not move entries/subfolders');
         await api.renameFolder(id, 'Partner', '');
         if ((await files.summaries(id)).find((s) => s.title === 'Contoso VPN')?.folder !== 'Contoso') errors.push('folders: delete did not move content up');
-        await fileSwapCheck({ files, js, sleep, errors, dir: app.getPath('userData'), changed }); await downgradeCheck({ files, errors, file: secured, id }); await rollbackCheck({ files, errors, file: secured, id }); await rejectedCheck({ files, errors, file: secured, id }); await foreignKeyCheck({ files, errors, file: secured, id }); // #404, #430, #432, #433, #521
+        await fileSwapCheck({ files, js, sleep, errors, dir: app.getPath('userData'), changed }); await downgradeCheck({ files, errors, file: secured, id }); await rollbackCheck({ files, errors, file: secured, id }); await rejectedCheck({ files, errors, file: secured, id }); await foreignKeyCheck({ files, errors, file: secured, id, js }); await removeRaceCheck({ errors, dir: app.getPath('userData') }); // #404, #430, #432, #433, #521, #523
         await acceptOlderCheck({ api, files, config, js, sleep, errors, changed, file: secured, id, lockedApi: WINDOW_LOCKED_API, pinGuard }); // #435, 0.9.33 review
       } catch (e) {
         errors.push(`secured flow: ${e.message}`);

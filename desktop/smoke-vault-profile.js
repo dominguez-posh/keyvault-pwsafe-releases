@@ -191,4 +191,24 @@ async function protectCheck({ js, fail480, api, vault, kvc, bridge, save, ensure
   if (await until(() => js('!!document.querySelector(".context-menu [data-action=export]")'), 1500)) fail480('protect: the vault menu still offers the export');
   await js('document.querySelector(".context-menu")?.remove(); true');
   await api.setVaultSettings(kvc.id, { protect: {} });
+  // #525: the lock is off now – while the settings can't be read (network error), export and the move into the personal
+  // vault are refused with the reason instead of deciding on stored or default settings.
+  const readMeta = vault.readContainerMeta;
+  vault.readContainerMeta = async () => { throw new TypeError('fetch failed'); };
+  vault.vaultSettingsCache?.clear();
+  try {
+    const unread = /nicht lesen|cannot be read/;
+    const blindToken = await api.confirmExportPin(kvc.id, await ensurePin()).catch(() => null);
+    const blindExport = await api.exportItems(kvc.id, blindToken).then(() => 'exported', (e) => e.message);
+    if (!unread.test(blindExport)) fail480(`protect: export with unreadable vault settings not refused (${blindExport})`);
+    if (personal) {
+      const blindMove = await api.move(kvc.id, personal.id, entry.id).then(() => 'moved', (e) => e.message);
+      if (!unread.test(blindMove)) fail480(`protect: move into the personal vault with unreadable vault settings not refused (${blindMove})`);
+      const blindBridge = await bridge.planMove({ fromId: kvc.id, toId: personal.id, itemId: entry.id }).then(() => 'planned', (e) => e.message);
+      if (!unread.test(blindBridge)) fail480(`protect: the extension planned a move into the personal vault with unreadable vault settings (${blindBridge})`);
+    }
+  } finally {
+    vault.readContainerMeta = readMeta;
+    vault.vaultSettingsCache?.clear();
+  }
 }

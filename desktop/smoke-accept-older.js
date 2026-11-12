@@ -4,33 +4,25 @@
 // a locked window. Taken, the file has a new key above the known state and the change log says so.
 
 import fs from 'node:fs/promises';
-import { webContents } from 'electron';
-import { ACCEPT_DELAY_MS } from './file-accept-older.js';
+import { ACCEPT_DELAY_MS, OlderStateAcceptance } from './file-accept-older.js';
 import { until } from './smoke-wait.js';
 
 const PIN = '271828';
 
 /**
- * #526: Alex (admin) and Sam (editor) registered their passkeys in the run's one virtual authenticator. The older state
- * lists both, and the authenticator answered with either – with Sam's, "Nur Admins …" refused about every second run.
- * Alex's device has only Alex's passkey: Sam's is set aside for fn and put back afterwards. → fn's result
+ * #527: Alex (admin) and Sam (editor) registered their passkeys in the run's one virtual authenticator, and the older
+ * state holds both. Only Alex's may be offered (allowCredentials) – before, the authenticator answered with either and
+ * Sam's was refused about every second run (#526). Sam's passkey now stays in the authenticator for the real ceremony.
  */
-async function onlyAdminsPasskey(fail, fn) {
-  const wc = webContents.getAllWebContents().find((w) => !w.isDestroyed() && w.kvAuthenticator);
-  if (!wc) {
-    fail('no virtual authenticator of the passkey window');
-    return fn();
-  }
-  const authenticatorId = wc.kvAuthenticator;
-  const { credentials } = await wc.debugger.sendCommand('WebAuthn.getCredentials', { authenticatorId });
-  const aside = credentials.filter((c) => /sam@contoso\.com/i.test(c.userName || ''));
-  if (!aside.length) fail(`Sam's passkey not found in the authenticator (${credentials.map((c) => c.userName).join(', ')})`);
-  for (const c of aside) await wc.debugger.sendCommand('WebAuthn.removeCredential', { authenticatorId, credentialId: c.credentialId });
-  try {
-    return await fn();
-  } finally {
-    for (const c of aside) await wc.debugger.sendCommand('WebAuthn.addCredential', { authenticatorId, credential: c }).catch((e) => fail(`Sam's passkey not put back: ${e.message}`));
-  }
+async function onlyAdminsOffered(files, id, backup, fail) {
+  const sam = JSON.parse(backup).keyring.members.find((m) => m.email === 'sam@contoso.com');
+  const samCreds = new Set((sam?.credentials || []).map((c) => c.credentialId));
+  if (!samCreds.size) fail('no passkey of Sam in the older state (#527)');
+  const acc = new OlderStateAcceptance(files);
+  const { token } = await acc.prepare(id);
+  const { passkeys } = await acc.passkeys(token, 'localhost');
+  if (!passkeys.length) fail('no admin passkey offered (#527)');
+  if (passkeys.some((p) => samCreds.has(p.credentialId))) fail('the passkey of a non-admin is offered (#527)');
 }
 
 export async function acceptOlderCheck({ api, files, config, js, sleep, errors, changed, file, id, lockedApi, pinGuard }) {
@@ -84,8 +76,9 @@ export async function acceptOlderCheck({ api, files, config, js, sleep, errors, 
     const info = await api.acceptOlderPrepare(id);
     if (await api.acceptOlderUnlock(info.token, '000000').then(() => true, () => false)) fail('unlocked with a wrong PIN');
     if (await api.acceptOlderCommit(info.token, 'Team-Datei').then(() => true, () => false)) fail('committed without passkey');
+    await onlyAdminsOffered(files, id, backup, fail);
     const started = Date.now();
-    const checked = await onlyAdminsPasskey(fail, () => api.acceptOlderUnlock(info.token, PIN));
+    const checked = await api.acceptOlderUnlock(info.token, PIN); // Sam's passkey is in the authenticator, too (#527)
     if (typeof checked?.dropped !== 'number') fail('no count of dropped versions');
     if (pinGuard.consume()) fail('the PIN left an unlock token behind'); // 0.9.33 review
     if (Date.now() - started < ACCEPT_DELAY_MS - 500 && await api.acceptOlderCommit(info.token, 'Team-Datei').then(() => true, () => false)) fail('committed before the wait');

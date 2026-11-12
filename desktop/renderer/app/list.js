@@ -15,7 +15,7 @@ import { dropPasskey, passkeyFits } from './admin-tools.js';
 import { newItem, renderDetail } from './detail.js';
 import { DRAG_PASSKEY, draggedPasskey, endDrag, setDraggedPasskey, startDrag } from './dragdrop.js';
 import { secureUnlockPanel } from './file-vaults.js';
-import { fileRepair, fileSwapDialog } from './file-swap.js';
+import { fileKeyRefused, fileRepair, fileSwapDialog } from './file-swap.js';
 import { acceptOlderButton } from './accept-older.js';
 import { folderActions, folderRows, newFolderDialog } from './folders.js';
 import { itemAvatar } from './icons.js';
@@ -216,6 +216,7 @@ export function renderList() {
         : t('{message}. Für Lesezugriff braucht dein Konto die Rolle „Key Vault Secrets User“, zum Bearbeiten „Key Vault Secrets Officer“. Besitzer oder Mitwirkender auf Subscription oder Ressourcengruppe reichen nicht – das sind keine Datenrollen.', { message: container.error.message })) : null,
     // A changed file was refused (#430): what is shown is the last good state, nothing of the file was taken.
     container?.warning ? h('div', { id: 'file-warning' }, notice(t('Die geänderte Datei wurde nicht übernommen: {message}', { message: container.warning }), 'warn')) : null,
+    fileKeyRefused(container),
     fileRepair(container),
     acceptOlderButton(container),
     container?.swap ? h('button', { class: 'btn', id: 'file-swap-check', onclick: () => fileSwapDialog(container) }, icon('shield', 14), t('Erstellerin und Sicherheitscode prüfen')) : null,

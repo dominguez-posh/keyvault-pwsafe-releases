@@ -130,6 +130,15 @@ export class OfflineMirror {
     if (changed) this.schedule();
   }
 
+  /** Everything recorded of one vault (host name), lists included: its container key changed (#402). */
+  forgetVault(host) {
+    const name = String(host).toLowerCase();
+    let changed = false;
+    for (const url of this.entries.keys()) if (secretOf(url).host === name) changed = this.entries.delete(url) || changed;
+    this.listings.delete(name);
+    if (changed) this.schedule();
+  }
+
   /**
    * The list of all secrets, page by page. Only a list followed to its last page says what is missing: a page out of turn
    * (a second list at the same time, one given up half way) ends it without any conclusion.

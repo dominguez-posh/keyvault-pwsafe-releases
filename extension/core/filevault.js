@@ -13,7 +13,7 @@ import {
   createSecureKeyring, unlockSecure, verifyRoster, applyRejections, applySecureOp, rekeyMembers, mergeSecureKeyrings, describeSecure, requestAccess,
   signObject, verifyObject, unwrapKey, fileIdFor, canWrite, secureCredentials,
 } from './members.js';
-import { keyChangeSigned, keyChangeAt, keyCheck, keyUnsignedMessage } from './key-proof.js';
+import { keyChangeSigned, keyChangeAt, keyCheck, keyUnsignedMessage, mergeLosesProof } from './key-proof.js';
 import { recryptDoc, rekeyFile, stamp } from './filevault-rekey.js';
 import { normalizeItem, newItemId, summaryFromItem, normalizeFolder, stampPasswordChange } from './model.js';
 
@@ -239,7 +239,7 @@ export class FileVault {
   async unlock(ck) {
     const key = ck instanceof ContainerKey ? ck : await ContainerKey.fromRaw(ck);
     // A key from before a key change (PIN binding of this device, an old session) is refused clearly (#402).
-    if (!this.secure && !(await keyMatches(this.doc.keyring, key))) throw new UnlockError(t('Der Schlüssel dieses Tresors wurde gewechselt – bitte mit Masterpasswort oder neuem Wiederherstellungsschlüssel entsperren'));
+    if (!this.secure && !(await keyMatches(this.doc.keyring, key))) throw new UnlockError(t('Der Schlüssel dieses Tresors wurde gewechselt – bitte mit dem neuen Masterpasswort oder dem neuen Wiederherstellungsschlüssel entsperren'));
     this.ck = key;
     if (!this.secure) this.ck.kv = keyVersionOf(this.doc.keyring);
     await this.decryptAll();
@@ -422,7 +422,7 @@ export class FileVault {
     if (!this.secure && disk && keyVersionOf(disk.keyring) > keyVersionOf(this.doc.keyring)) {
         await this.load();
       this.lock();
-      throw new Error(t('Der Schlüssel dieses Tresors wurde auf einem anderen Gerät gewechselt. Bitte neu entsperren und die Änderung wiederholen.'));
+      throw new Error(t('Der Schlüssel dieses Tresors wurde auf einem anderen Gerät gewechselt. Bitte mit dem neuen Masterpasswort neu entsperren und die Änderung wiederholen.'));
     }
     if (this.secure && disk?.version === 2 && (disk.keyring.keyVersion > this.doc.keyring.keyVersion
       || (this.memberId && disk.keyring.keyVersion === this.doc.keyring.keyVersion && this.ownWrap(disk) !== this.ownWrap()))) {
@@ -430,8 +430,15 @@ export class FileVault {
       await this.load();
       throw new Error(t('Die Datei wurde gerade neu verschlüsselt (Benutzer entfernt). Bitte die Änderung wiederholen.'));
     }
-    [this.known, this.doc] = [this.secure ? mergeFloors(this.floor, floorOf(this.doc, this.roster)) : null, mergeDocs(disk, this.doc)];
-    if (this.secure) this.doc.keyring = await applyRejections(this.doc.keyring, this.known); // what we held counted, the disk's is new (#440)
+    const known = this.secure ? mergeFloors(this.floor, floorOf(this.doc, this.roster)) : null;
+    const merged = mergeDocs(disk, this.doc);
+    if (this.secure) merged.keyring = await applyRejections(merged.keyring, known); // what we held counted, the disk's is new (#440)
+    // #523: a merge that takes the proof of our key away (key-proof.js mergeLosesProof) is not written.
+    if (this.secure && disk && this.ck && (await mergeLosesProof(this, merged, await verifyRoster(merged.keyring, known)))) {
+      await this.load(); // usually refuses itself: the disk is an older state than this device has seen
+      throw new Error(t('In der Datei wurde inzwischen der Admin entfernt, der den Tresor-Schlüssel dieses Geräts gesetzt hat. Es wurde nichts gespeichert – bitte die Datei neu öffnen.'));
+    }
+    [this.known, this.doc] = [known, merged];
     await this.io.write(JSON.stringify(this.doc, null, 1));
     if (this.secure) this.roster = await verifyRoster(this.doc.keyring, this.known);
     if (this.ck) await this.decryptAll();

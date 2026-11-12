@@ -8,6 +8,7 @@ import { call } from './ipc.js';
 import { ui } from './state.js';
 import { notice } from './helpers.js';
 import { reloadAll } from './shell.js';
+import { adminMode } from './modes.js';
 
 const row = (label, before, now) => h('tr', {}, h('th', {}, label), h('td', {}, before || t('unbekannt')), h('td', { class: before && before !== now ? 'changed' : '' }, now || '–'));
 
@@ -34,6 +35,19 @@ export function fileSwapDialog(c) {
       await reloadAll();
     } },
   ]);
+}
+
+/**
+ * #522: a container key in the file that no admin signed (#521) – possibly someone with write access to the share. No
+ * repair (it would keep the key); the way out is a state an admin wrote: a backup put back, taken with #435 if older.
+ */
+export function fileKeyRefused(c) {
+  if (!c?.keyRefused) return null;
+  return h('div', { id: 'file-key-refused' },
+    notice(t('Möglicher Manipulationsversuch: Jemand mit Schreibzugriff auf die Datei hat einen Tresor-Schlüssel eingesetzt, den kein Admin bestätigt hat. Er wurde nicht übernommen, du arbeitest mit dem bisherigen Stand weiter. Bitte informiere einen Admin der Datei und deine IT.'), 'warn'),
+    adminMode() || c.role === 'admin'
+      ? h('p', { class: 'muted small', id: 'file-key-refused-admin' }, t('Als Admin: Spiele eine Sicherung der Datei zurück. Meldet die App sie danach als älteren Stand, nimm sie im Admin-Modus mit „Älteren Stand annehmen …“ an – der Tresor bekommt dabei einen neuen Schlüssel für alle aktiven Mitglieder. Prüfe, wer Schreibzugriff auf den Speicherort hat.'))
+      : null);
 }
 
 /**

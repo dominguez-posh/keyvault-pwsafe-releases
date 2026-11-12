@@ -35,6 +35,9 @@ export async function recoveryKeyCheck(ctx) {
     await answer(button);
     // With the key change switched on (#402) the new master password comes first.
     if (KEY_CHANGE.enabled) await until(() => js('!!document.querySelector("dialog[open] input[data-rekey=password]")'), 3000);
+    // The key change can still be cancelled; with passkeys in the list, it says before that they must be added again.
+    if (KEY_CHANGE.enabled && await js('!!document.querySelector("dialog[open] [data-rekey=dialog]") && ![...document.querySelectorAll("dialog[open] .modal-footer .btn")].some((b) => !b.classList.contains("primary"))')) fail('the key change dialog has no way to cancel');
+    if (KEY_CHANGE.enabled && await js('(() => { const d = document.querySelector("dialog[open] [data-rekey=dialog]"); return !!d && /Passkey/.test(d.textContent) && !/entfallen keine/.test(d.textContent) && !d.querySelector("[data-rekey=passkeys-lost]"); })()')) fail('the key change dialog drops passkeys without saying they must be added again');
     if (KEY_CHANGE.enabled) await js('for (const i of document.querySelectorAll("dialog[open] input[data-rekey]")) { i.value = "renewed-password-1"; i.dispatchEvent(new Event("input", { bubbles: true })); } document.querySelector("dialog[open] .modal-footer .btn.primary")?.click(); true');
     await until(async () => KEY.test(await codeIn('dialog[open]')), 5000);
     return codeIn('dialog[open]');
@@ -166,7 +169,9 @@ export async function recoveryKeyCheck(ctx) {
     await sleep(1500);
     if (await dialogs()) fail('asked after unlocking although the key was made in the protection dialog');
     if (await notice()) fail('notice although the key was made in the protection dialog');
-    if (KEY_CHANGE.enabled) await rekeyCheck({ api, fail }); // real key change (#402), only when switched on
+    // Real key change (#402), switched on since 0.9.34: always checked, a switched-off flag is reported.
+    if (!KEY_CHANGE.enabled) fail('the key change (#402) is switched off (protect.js KEY_CHANGE)');
+    else await rekeyCheck({ api, fail });
   } finally {
     await drive.restore();
   }

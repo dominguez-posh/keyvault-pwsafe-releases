@@ -83,6 +83,8 @@ export function newSession() {
     // #476: "Nur für mich" entries of other people stay out of every list (window, extension, MCP, bridge).
     viewer: viewerId,
     adapters: { file: files },
+    // #402: after a key change nothing recorded under the old key stays in the offline mirror (read again, recorded again).
+    onKeyChange: (containerId) => { if (mirrorWanted()) offlineMirror().forgetVault(containerId); },
     // Vaults of other tenants (customers, guest access) are found and opened with tokens for their tenant.
     multiTenant: true,
     // The sidebar spins the refresh icon of the vault that is being loaded or reconciled right now.

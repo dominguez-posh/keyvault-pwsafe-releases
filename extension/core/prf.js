@@ -39,7 +39,7 @@ export async function evaluatePrf(rpId, passkeys, { timeout = 120_000 } = {}) {
  * Registers a new passkey with PRF. Returns { credentialId, prfSalt, prfOutput, rpId }.
  * Some authenticators only return the PRF value on sign-in; then a second confirmation follows.
  */
-export async function registerPrf(rpId, { userName, displayName, excludeCredentialIds = [], timeout = 120_000, attachment }) {
+export async function registerPrf(rpId, { userName, displayName, excludeCredentialIds = [], timeout = 120_000, attachment, hints }) {
   const prfSalt = randomBytes(32);
   let credential;
   try {
@@ -52,6 +52,8 @@ export async function registerPrf(rpId, { userName, displayName, excludeCredenti
         authenticatorSelection: { userVerification: 'required', residentKey: 'discouraged', authenticatorAttachment: attachment || undefined },
         excludeCredentials: excludeCredentialIds.map((id) => ({ type: 'public-key', id: b64uDecode(id) })),
         timeout,
+        // #531: 'security-key' lets the browser offer the stick first instead of Windows Hello.
+        ...(hints?.length ? { hints } : {}),
         extensions: { prf: { eval: { first: prfSalt } } },
       },
     });
@@ -62,16 +64,45 @@ export async function registerPrf(rpId, { userName, displayName, excludeCredenti
   const credentialId = b64uEncode(new Uint8Array(credential.rawId));
   const salt = b64uEncode(prfSalt);
   const platform = credential.authenticatorAttachment === 'platform';
-  if (ext?.results?.first) return { rpId, credentialId, prfSalt: salt, prfOutput: b64uEncode(new Uint8Array(ext.results.first)), platform };
-  // Some platforms (Windows Hello) only report PRF on sign-in: try once before giving up.
+  // What was registered (#531): the name and the personal vault's FIDO step tell a stick from Windows Hello by it.
+  const kind = { platform, attachment: credential.authenticatorAttachment || '', transports: transportsOf(credential) };
+  if (ext?.results?.first) return { rpId, credentialId, prfSalt: salt, prfOutput: b64uEncode(new Uint8Array(ext.results.first)), ...kind };
+  // Some authenticators only report PRF on sign-in (Windows Hello; security keys through Windows may report "enabled"
+  // at creation and the value only on sign-in): try once before giving up.
   try {
     const r = await evaluatePrf(rpId, [{ credentialId, prfSalt: salt }], { timeout });
-    return { rpId, credentialId, prfSalt: salt, prfOutput: r.prfOutput, platform };
+    return { rpId, credentialId, prfSalt: salt, prfOutput: r.prfOutput, ...kind };
   } catch (e) {
     if (ext?.enabled) throw e;
     const detail = e?.name ? ` [${e.name}: ${e.message}]` : '';
     throw new Error((platform
       ? t('Windows Hello liefert auf diesem Gerät keine Schlüsselableitung (PRF), die Keevault für den Dateischlüssel braucht. Nutze einen FIDO2-Sicherheitsschlüssel, ein Smartphone als Passkey (QR-Code) oder ein Masterpasswort.')
-      : t('Dieser Passkey unterstützt keine Schlüsselableitung (PRF). Nutze einen FIDO2-Sicherheitsschlüssel, Windows Hello (aktuelles Windows 11) oder ein Smartphone.')) + detail);
+      : deviceKind(kind) === 'key'
+        ? t('Dieser Sicherheitsschlüssel unterstützt kein PRF (hmac-secret) und kann den Tresor deshalb nicht entsperren. Nutze einen Schlüssel mit PRF (z. B. YubiKey ab Firmware 5.2), Windows Hello oder das Masterpasswort.')
+        : t('Dieser Passkey unterstützt keine Schlüsselableitung (PRF). Nutze einen FIDO2-Sicherheitsschlüssel, Windows Hello (aktuelles Windows 11) oder ein Smartphone.')) + detail);
   }
+}
+
+function transportsOf(credential) {
+  try {
+    return credential.response?.getTransports?.() || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * What kind of authenticator a registration came from (#531): { platform, attachment, transports } → 'hello' (on this
+ * device), 'phone' (QR code / hybrid), 'key' (security key over USB, NFC or Bluetooth) or '' (not reported).
+ */
+export function deviceKind({ platform, attachment, transports = [] } = {}) {
+  if (platform || attachment === 'platform') return 'hello';
+  if (attachment !== 'cross-platform') return '';
+  if (transports.includes('hybrid') && !transports.some((x) => ['usb', 'nfc', 'ble'].includes(x))) return 'phone';
+  return 'key';
+}
+
+/** Name part for a passkey of that kind, '' when unknown. */
+export function deviceName(kind) {
+  return { hello: 'Windows Hello', phone: t('Smartphone'), key: t('Sicherheitsschlüssel') }[kind] || '';
 }

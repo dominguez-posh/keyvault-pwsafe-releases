@@ -5,6 +5,7 @@
 import { rm } from 'node:fs/promises';
 import { until } from './smoke-wait.js';
 import { personalStorageCheck } from './smoke-personal-storage.js';
+import { fidoStepCheck } from './smoke-fido-step.js';
 
 const PERSONAL = 'dialog[open].wizard-modal .wizard:not(.vault-wizard):not(.first-start-wizard)';
 const ACCOUNT = 'dialog[open].wizard-modal .first-start-wizard';
@@ -85,7 +86,8 @@ export async function firstStartCheck(ctx) {
     await drive.click(`${PERSONAL} label.inline input[type=checkbox]`);
     await drive.primary(); // the key confirmed
     await drive.atStep(4);
-    await drive.click(`${PERSONAL} .wizard-buttons .btn`); // skip the FIDO key
+    await fidoStepCheck(ctx); // #531: a security key added here is recognised, one without PRF says so
+    await drive.click(`${PERSONAL} .wizard-buttons .btn`); // on past the FIDO step
     await drive.atStep(5);
     if (!(await js(`/team/i.test(document.querySelector(${JSON.stringify(`${PERSONAL} .wizard-buttons`)})?.textContent || "")`))) fail('firstwizard', 'last step does not offer the team vault');
     await drive.primary();

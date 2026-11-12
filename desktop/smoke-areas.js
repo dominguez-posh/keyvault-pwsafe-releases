@@ -11,14 +11,15 @@ export const FEATURE_AREAS = [
   'browserimport', 'foldericons', 'vaultwizard', 'firstaccount', 'firstwizard', 'recoverykey', 'adminstart', 'narrowsidebar', 'sidebarfoot', 'version', 'versionchannel',
   'list', 'agentfront', 'agententer', 'agentrevoke', 'agentwrite', 'agentlock', 'agenttrust', 'passkeypin', 'passkeypinagent', 'passkeypinwindows', 'passkeypinbrowser', 'folderdrag', 'multidrag', 'multiclear', 'droptarget',
   'deleterefused', 'vaultprofile', 'deleterace', 'moveassets', 'cutpaste', 'mcpextra', 'helpfeedback', 'noscroll', 'passkeynarrow', 'listnarrow', 'passkeydrag', 'adminpin', 'admin', 'devices',
-  'bastionfqdn', 'adminpim', 'offlinedelete', 'winlock', 'releasesign', 'versionhistory', 'otpsecret', 'fieldhover', 'adminflags', 'nurfuermich', 'pimlock', 'machinesetup', 'settingsfile', 'logging', 'compliance', 'tlsenv',
+  'bastionfqdn', 'adminpim', 'offlinedelete', 'winlock', 'releasesign', 'versionhistory', 'otpsecret', 'fieldhover', 'adminflags', 'nurfuermich', 'pimlock', 'machinesetup', 'settingsfile', 'logging', 'compliance', 'tlsenv', 'passkeywindow',
 ];
 
 export const SMOKE_AREAS = [...FLOW_AREAS, ...FEATURE_AREAS];
 
 // What an area finds only after another one has run: the vault search looks for the secured file "Team-Datei".
 // The drop targets (#491) need the personal vault as the forbidden target.
-const NEEDS = { vaultsearch: ['secured'], sharehint: ['secured'], droptarget: ['personal'] };
+// The passkey window check (#532) needs the window the passkey ceremonies of the protection flow created.
+const NEEDS = { vaultsearch: ['secured'], sharehint: ['secured'], droptarget: ['personal'], passkeywindow: ['protection'] };
 
 const onlyArg = (args) => args.find((a) => a.startsWith('--only='))?.slice('--only='.length);
 

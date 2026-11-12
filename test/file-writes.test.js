@@ -74,7 +74,7 @@ test('file vault: a failed write of a new file leaves the pin of the old one (#3
   }
 });
 
-test('file vault: parallel new recovery keys leave one working key, the last (#399)', async () => {
+test('file vault: parallel new master passwords leave one working password, the last (#399)', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kv-keyring-'));
   let paths = [];
   const containers = new FileContainers({ paths: () => paths, setPaths: (p) => { paths = p; }, onChange: () => {} });
@@ -92,17 +92,21 @@ test('file vault: parallel new recovery keys leave one working key, the last (#3
       await write(keyring);
       writing--;
     };
-    const [first, second] = await Promise.all([
-      containers.updateKeyring(id, { type: 'newRecovery' }, 'me'),
-      containers.updateKeyring(id, { type: 'newRecovery' }, 'me'),
+    // A new recovery key is a key change since #402 (rekey, its own path); a new master password is a plain keyring change.
+    await Promise.all([
+      containers.updateKeyring(id, { type: 'setPassword', password: 'Erstes-Passwort-1' }, 'me'),
+      containers.updateKeyring(id, { type: 'setPassword', password: 'Zweites-Passwort-2' }, 'me'),
     ]);
     assert.equal(most, 1, 'keyring changes overlapped');
-    assert.equal(containers.get(id).keyring.entries.filter((e) => e.type === 'recovery').length, 1);
+    assert.equal(containers.get(id).keyring.entries.filter((e) => e.type === 'password').length, 1);
     const fresh = new FileContainers({ paths: () => [file], setPaths: () => {}, onChange: () => {} });
-    await fresh.load();
-    await assert.rejects(fresh.unlock(id, { code: first.recoveryKey }));
-    await fresh.unlock(id, { code: second.recoveryKey });
-    fresh.close();
+    try {
+      await fresh.load();
+      await assert.rejects(fresh.unlock(id, { password: 'Erstes-Passwort-1' }));
+      await fresh.unlock(id, { password: 'Zweites-Passwort-2' });
+    } finally {
+      fresh.close();
+    }
   } finally {
     containers.close();
     await fs.rm(dir, { recursive: true, force: true });
@@ -111,24 +115,25 @@ test('file vault: parallel new recovery keys leave one working key, the last (#3
 
 test('file vault: parallel keyring changes both stay (#399)', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'kv-keyring-'));
+  const file = path.join(dir, 'Keyring.kvpws');
+  let paths = [];
+  const containers = new FileContainers({ paths: () => paths, setPaths: (p) => { paths = p; }, onChange: () => {} });
+  const fresh = new FileContainers({ paths: () => [file], setPaths: () => {}, onChange: () => {} });
   try {
-    const file = path.join(dir, 'Keyring.kvpws');
-    let paths = [];
-    const containers = new FileContainers({ paths: () => paths, setPaths: (p) => { paths = p; }, onChange: () => {} });
     const { id } = await containers.create(file, 'Keyring', { password: 'Smoke-Pass-1234' }, 'me');
-    const [, renewed] = await Promise.all([
+    const [, invited] = await Promise.all([
       containers.updateKeyring(id, { type: 'setPassword', password: 'Neues-Passwort-5678' }, 'me'),
-      containers.updateKeyring(id, { type: 'newRecovery' }, 'me'),
+      containers.updateKeyring(id, { type: 'createInvite', label: 'Kim', days: 7 }, 'me'),
     ]);
-    const fresh = new FileContainers({ paths: () => [file], setPaths: () => {}, onChange: () => {} });
     await fresh.load();
     await fresh.unlock(id, { password: 'Neues-Passwort-5678' }); // the password change was not written over
     fresh.get(id).lock();
-    await fresh.unlock(id, { code: renewed.recoveryKey }); // nor the new recovery key
-    assert.equal(fresh.get(id).keyring.entries.filter((e) => e.type === 'recovery').length, 1);
+    await fresh.unlock(id, { code: invited.inviteCode }); // nor the invitation
+    assert.equal(fresh.get(id).keyring.entries.filter((e) => e.type === 'invite').length, 1);
+  } finally {
+    // Closed after a failed assertion too: an open vault keeps watching its file and the test file would not end.
     containers.close();
     fresh.close();
-  } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
 });

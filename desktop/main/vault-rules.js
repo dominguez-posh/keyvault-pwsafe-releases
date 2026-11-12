@@ -11,6 +11,8 @@ import { copyPin } from './guards.js';
 
 /** Settings of a vault for a rule check; a read error gives the last stored ones (readVaultSettings). */
 export const rulesOf = (containerId) => readVaultSettings(vault, containerId);
+/** #525: for the export lock – settings that can't be read right now refuse (VaultSettingsUnknown), no stored or default answer. */
+export const strictRulesOf = (containerId) => readVaultSettings(vault, containerId, { strict: true });
 
 /** Group 3: a save that leaves a required field of the vault empty is refused (names the fields). */
 export async function checkRequired(containerId, item) {
@@ -75,7 +77,7 @@ export async function checkCopy(text, containerId = null) {
 
 /** Export: refused when the vault forbids it; → true when the vault wants the PIN (the export then needs it). */
 export async function checkExport(containerId) {
-  const { protect } = await rulesOf(containerId);
+  const { protect } = await strictRulesOf(containerId); // #525: unknown settings refuse the export
   if (protect.noExport) throw new Error(t('Der Export ist für diesen Tresor gesperrt.'));
   if (protect.pinExport && !config.get().appPin) throw new Error(t('Dieser Tresor verlangt die App-PIN. Lege zuerst in den Einstellungen eine App-PIN fest.'));
   return protect.pinExport;
@@ -89,7 +91,7 @@ export async function checkLeaveToPersonal(fromId, toId) {
   if (!fromId || !toId || fromId === toId) return;
   const [from, to] = await Promise.all([vault.container(fromId), vault.container(toId)]);
   if (!to?.personal || from?.personal) return;
-  const rules = await rulesOf(fromId); // a read error refuses – the export lock must not open by failing
+  const rules = await strictRulesOf(fromId); // a read error refuses (#525) – the export lock must not open by failing
   if (rules?.protect.noExport) throw new Error(t('Der Tresor „{name}“ sperrt den Export – Einträge daraus lassen sich nicht in den persönlichen Tresor verschieben oder kopieren.', { name: from.name }));
 }
 

@@ -21,8 +21,8 @@
       <ul class="list loading-skeleton" aria-hidden="true"><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li></ul>
     </div>
   </main>
-  <!-- QR decoder for two-factor setup codes shown on websites (jsQR 1.4.0, Apache-2.0, vendored in lib/). -->
-  <script src="../lib/jsqr.js"></script>
+  <!-- #534: the PIN view from the last known state, before popup.js and its modules are loaded. -->
+  <script src="early.js"></script>
   <script type="module" src="popup.js"></script>
 </body>
 </html>

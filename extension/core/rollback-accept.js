@@ -5,7 +5,7 @@
 // who did it. Other devices then see a newer generation with every grant they know and follow the key change; their
 // floor stays as strict as it was. What a device never saw, this one cannot put back (residual risk, see the dialog).
 
-import { verifyRoster, applyRejections, rekeyMembers, unlockSecure, fileIdFor } from './members.js';
+import { verifyRoster, applyRejections, rekeyMembers, unlockSecure, fileIdFor, secureCredentials } from './members.js';
 import { ContainerKey } from './protect.js';
 import { recryptDoc } from './filevault-rekey.js';
 import { belowFloor } from './rollback.js';
@@ -44,6 +44,15 @@ export async function floorRoster(floor, keyring) {
     members: floor.members.map((m) => ({ ...m, credentials: [], removedCredentials: [] })),
   };
   return verifyRoster(k, floor);
+}
+
+/** #527: passkeys in the older state of members who are active admins in the known state – only they can take it. */
+export async function adminPasskeys(text, floor, rpId) {
+  const doc = parseFile(text);
+  if (doc.version !== 2 || !doc.keyring) return [];
+  const known = await floorRoster(floor, doc.keyring);
+  const admin = (id) => known.current(id)?.status === 'active' && known.current(id)?.role === 'admin';
+  return secureCredentials({ members: doc.keyring.members.filter((m) => admin(m.id)) }, rpId);
 }
 
 /**
