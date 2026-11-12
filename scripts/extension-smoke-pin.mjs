@@ -4,6 +4,9 @@
 // the worker's restart for the demo removes the imitation.
 
 import { checkPinInBar } from './extension-smoke-pinbar.mjs';
+import { checkWarmStart } from './extension-smoke-warm.mjs';
+import { checkPopupUnlockStatus } from './extension-smoke-unlock.mjs';
+import { checkStartButtonCentred, checkButtonCentred } from './extension-smoke-center.mjs';
 
 /**
  * What the service worker gets instead of the native port: an app that runs, is locked and has a PIN. Kept in
@@ -16,17 +19,19 @@ export const lockedAppWithPin = `(() => {
       hello: { version: '0.0.0', opened: false },
       snapshot: { version: '0.0.0', opened: false, pinSet: true, containers: [], summaries: [] },
     };
-    globalThis.__kvApp = { answers, listeners };
+    const disconnect = []; // #505: the warm-start part ends this port like a lost host
+    globalThis.__kvApp = { answers, listeners, disconnect };
     return {
       onMessage: { addListener: (fn) => listeners.push(fn) },
-      onDisconnect: { addListener: () => {} },
-      postMessage: ({ id, cmd, ...args }) => setTimeout(() => {
+      onDisconnect: { addListener: (fn) => disconnect.push(fn) },
+      // A function answer may take its time (a Promise, #508); an error keeps its name (TimeoutError).
+      postMessage: ({ id, cmd, ...args }) => setTimeout(async () => {
         let reply = { id, ok: false, error: { message: 'Unknown command' } };
         if (cmd in answers) {
           try {
-            reply = { id, ok: true, result: typeof answers[cmd] === 'function' ? answers[cmd](args) : answers[cmd] };
+            reply = { id, ok: true, result: typeof answers[cmd] === 'function' ? await answers[cmd](args) : answers[cmd] };
           } catch (e) {
-            reply = { id, ok: false, error: { message: e.message } };
+            reply = { id, ok: false, error: { message: e.message, name: e.name } };
           }
         }
         for (const fn of listeners) fn(reply);
@@ -37,9 +42,15 @@ export const lockedAppWithPin = `(() => {
 })()`;
 
 export async function checkNoPinInPage({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession, settle }) {
+  // #506: first the app that is not running ("Keevault starten" centred), then the locked one ("Entsperren" centred).
+  await checkStartButtonCentred({ send, evaluate, open, waitFor, check, ext, workerSession });
   await evaluate(workerSession, lockedAppWithPin);
   // The first attempt found no native host; the client tries again after 2 s.
   await new Promise((r) => setTimeout(r, 2200));
+  const locked = await open(`${ext}/popup/popup.html`);
+  check(await waitFor(() => evaluate(locked.sessionId, '!!document.querySelector("#view input[type=password]") && !!document.querySelector("#view .btn.primary")')), '#506: Popup zeigt bei gesperrter App kein PIN-Feld mit „Entsperren“');
+  await checkButtonCentred({ evaluate, check, sessionId: locked.sessionId, selector: '#view .btn.primary', what: 'Entsperren' });
+  await send('Target.closeTarget', { targetId: locked.targetId }).catch(() => {});
   const tab = await open(`${origin}/`);
   await evaluate(tab.sessionId, 'startGet(), true');
   const prompt = await waitFor(() => findTarget(`${ext}/prompt/prompt.html#get:`));
@@ -52,6 +63,10 @@ export async function checkNoPinInPage({ send, evaluate, attach, open, shadowNod
     await send('Target.closeTarget', { targetId: prompt.targetId }).catch(() => {});
   }
   await send('Target.closeTarget', { targetId: tab.targetId }).catch(() => {});
+  // #508: the popup unlocks the same app with the PIN and says what is going on (leaves the app open).
+  await checkPopupUnlockStatus({ send, evaluate, open, waitFor, check, sleep, ext, workerSession });
   // #465: the same imitated app, now open – the PIN in the Keevault tag at the top of the page.
   await checkPinInBar({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession, settle });
+  // #505: warm start – a lost host comes back by itself, and the popup list is there at once.
+  await checkWarmStart({ send, evaluate, open, waitFor, check, sleep, ext, workerSession });
 }

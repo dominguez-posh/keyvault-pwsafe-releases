@@ -8,6 +8,10 @@ export let files;
 export let vault;
 export let bridge = null;
 export let opened = false;
+// #507: the vault session is open for the browser extension only – the window keeps its lock screen until the PIN.
+export let windowLocked = false;
+// #512: counts the window locks – a Windows Hello answer lifts only the lock it was asked for.
+export let windowLockEpoch = 0;
 
 export let windows = null;
 
@@ -19,6 +23,11 @@ export let mcp = null;
 // Other modules read these bindings directly and change them through the setters (imports are read-only).
 export function setVault(value) { vault = value; return value; }
 export function setOpened(value) { opened = value; return value; }
+export function setWindowLocked(value) {
+  if (value && !windowLocked) windowLockEpoch += 1;
+  windowLocked = !!value;
+  return windowLocked;
+}
 export function setQuitting(value) { quitting = value; return value; }
 export function setBridge(value) { bridge = value; return value; }
 export function setWin(value) { win = value; return value; }

@@ -6,6 +6,60 @@ GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Ver
 
 ## Unveröffentlicht
 
+## 0.9.33 – 2026-11-12
+- Sicherheit: Datei-Tresore übernehmen einen neuen Tresor-Schlüssel nur noch, wenn der Wechsel von einem aktiven Admin signiert ist. Fremde Schlüssel werden abgelehnt (#521).
+- Sicherheit: Ein aktives Mitglied lässt sich nur mit Schlüsselwechsel entfernen, nicht mehr durch bloßes Ablehnen (#520).
+- Sicherheit: Die Browser-Erweiterung prüft, dass sie mit der echten Keevault-App spricht, bevor Daten übergeben werden (#511).
+- Sicherheit: Umgebungsvariablen, die die Zertifikatsprüfung abschalten oder TLS-Schlüssel mitschreiben würden, werden beim Start entfernt; die App weist einmal darauf hin (#517).
+- Sicherheit: Passkeys folgen beim Verschieben denselben Tresorregeln wie Einträge. Aus einem geteilten Tresor landen sie nicht mehr im persönlichen Tresor (#519).
+- Verschieben: Vor dem Löschen in der Quelle wird die Version geprüft; ein zwischendurch geänderter Eintrag bleibt stehen (#510). Der bestätigte Plan wird unverändert ausgeführt (#474).
+- Export: Die PIN-Abfrage vor dem Export setzt einen geöffneten Tresor voraus (#477).
+- Datei-Tresor: Ein älterer Stand lässt sich bewusst annehmen – nur für Admins, mit App-PIN und Passkey und einer Übersicht, was verloren geht (#435). Mitglieder-Aktionen laufen nicht mehr mit einem gleichzeitigen Neuladen auseinander (#526).
+- Erststart: Zuerst die Microsoft-Anmeldung (oder ohne Konto weiter), danach die App-PIN (überspringbar), danach die Einrichtung (#515). „OneDrive direkt“ ist als „demnächst verfügbar“ angekündigt (#516).
+- Windows Hello: Das gesperrte Fenster lässt sich zusätzlich zur App-PIN mit Windows Hello entsperren. Standardmäßig aus; die Organisation kann es per Richtlinie verbieten (#512).
+- Fenster-Sperre: Entsperren in der Erweiterung öffnet nicht mehr das App-Fenster (#507). Die Erweiterung zeigt beim Entsperren einen Status (#508).
+- Erweiterung: Das Popup öffnet sofort mit Ladeanzeige (#495) und startet schneller (#505). Es hat den Look der App (#509), der Knopf „Keevault-App läuft nicht“ ist mittig (#506). Die richtige PIN wird direkt nach einer falschen wieder angenommen (#526).
+- Erweiterung neu installieren: Ein Klick in der App startet die Neuinstallation mit Administrator-Abfrage; danach den Browser neu starten (#494).
+- Tresor-Einstellungen: Darstellung, Ansprechpartner, Regeln, Vorlagen und Schutz-Standards werden im Tresor gespeichert und gelten für alle Mitglieder (#480).
+- Für Tresor-Verwalter: Compliance-Übersicht (Einträge nach dem Austritt einer Person, alte Passwörter) (#500) und Anbindung an Log Analytics (#486).
+- Einstellungen: Die Einstellungsdatei lässt sich in OneDrive ablegen, beim Einrichten importieren, Export/Import im Menü. Ist die Datei gerade offen, wird das Speichern wiederholt (#478, #353).
+- Zwischenablage: Hält ein anderes Programm die Zwischenablage kurz fest, wartet Keevault bis zu 5 Sekunden statt sofort aufzugeben; das automatische Löschen greift auch dann (#526).
+- OneDrive for Business: Der Ordner „OneDrive – <Organisation>“ wird erkannt (#514).
+- Admin-Optionen erscheinen im Eintragseditor nur im Admin-Modus (#487). „Nur für mich“: Einträge ohne Ersteller öffnen sich im Editor (#482).
+- Tresornamen: Bei gleichen Namen steht die Tresoradresse dabei, auch in der MCP-Tresorauswahl (#485).
+- Update: Das Update wartet nicht mehr auf Keevault-Hilfsprozesse und zeigt, worauf es noch wartet (#513).
+- QR-Code scannen nur auf deine Aktion; das PIN-Feld bekommt zuverlässig den Fokus (#497).
+- Geschwindigkeit: Richtlinien werden nicht mehr mehrfach gleichzeitig gelesen (#526).
+- Live-Demo auf keevault.de ist auf dem Handy bedienbar (#438).
+- Vorabversionen: Early Access zeigt einen Dank mit „Bug melden“, die Erweiterung kennt ihre Update-Stufe (#420).
+
+### English
+- Security: file vaults only accept a new vault key when the change is signed by an active admin. Foreign keys are rejected (#521).
+- Security: an active member can only be removed with a key change, no longer by a plain rejection (#520).
+- Security: the browser extension checks that it talks to the genuine Keevault app before any data is handed over (#511).
+- Security: environment variables that would switch off certificate checking or log TLS keys are removed at start; the app points this out once (#517).
+- Security: passkeys follow the same vault rules as entries when moved. From a shared vault they no longer land in the personal vault (#519).
+- Moving: the version is checked before deleting at the source; an entry changed in the meantime stays (#510). The confirmed plan is executed unchanged (#474).
+- Export: the PIN prompt before an export requires an open vault (#477).
+- File vault: an older state can be accepted deliberately – admins only, with App PIN and passkey and an overview of what will be lost (#435). Member actions no longer get lost during a simultaneous reload (#526).
+- First start: Microsoft sign-in first (or continue without an account), then the App PIN (skippable), then setup (#515). "OneDrive direct" is announced as "coming soon" (#516).
+- Windows Hello: the locked window can be unlocked with Windows Hello in addition to the App PIN. Off by default; the organization can forbid it by policy (#512).
+- Window lock: unlocking in the extension no longer opens the app window (#507). The extension shows a status while unlocking (#508).
+- Extension: the popup opens at once with a loading state (#495) and starts faster (#505). It uses the look of the app (#509), the "Keevault app is not running" button is centred (#506). The correct PIN is accepted right after a wrong one again (#526).
+- Reinstall the extension: one click in the app starts the reinstallation with an administrator prompt; restart the browser afterwards (#494).
+- Vault settings: appearance, contact person, rules, templates and protection defaults are stored in the vault and apply to all members (#480).
+- For vault managers: compliance overview (entries after a person has left, old passwords) (#500) and a Log Analytics connection (#486).
+- Settings: the settings file can be placed in OneDrive, imported during setup, export/import in the menu. If the file is open in another program, saving is retried (#478, #353).
+- Clipboard: if another program briefly holds the clipboard, Keevault waits up to 5 seconds instead of giving up; automatic clearing still applies (#526).
+- OneDrive for Business: the folder "OneDrive - <organization>" is recognised (#514).
+- Admin options appear in the entry editor only in admin mode (#487). "Only for me": entries without a creator open in the editor (#482).
+- Vault names: with equal names the vault address is shown, also in the MCP vault picker (#485).
+- Update: the update no longer waits for Keevault helper processes and shows what it is still waiting for (#513).
+- QR code scan only on your action; the PIN field reliably gets focus (#497).
+- Speed: policies are no longer read several times at once (#526).
+- Live demo on keevault.de works on a phone (#438).
+- Pre-releases: Early Access shows a thank-you with "Report a bug", the extension knows its update stage (#420).
+
 ## 0.9.32 – 2026-11-10
 - Erweiterung: Keevault schlägt Anmeldungen nur noch in echten Login-Feldern vor (Passwortfeld, Benutzername neben einem Passwortfeld, Microsoft-Anmeldung), nicht mehr in Such-, Kontakt-, Newsletter- oder Textfeldern (#502).
 - Ziehen und Ablegen: Der Ziel-Tresor bzw. -Ordner leuchtet beim Ziehen auf und zeigt „Hierher verschieben“; nicht erlaubte Ziele zeigen den Grund. Nach dem Ablegen gibt es eine kurze Rückmeldung (#491).

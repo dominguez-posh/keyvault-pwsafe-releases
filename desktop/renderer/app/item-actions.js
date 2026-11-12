@@ -22,6 +22,7 @@ import { cutItems } from './cut-paste.js';
 import { reloadAll, render } from './shell.js';
 import { deleteNotice } from './trash.js';
 import { privacyActions } from './private.js';
+import { adminMode } from './modes.js';
 
 /** Stand-alone password generator: copy, type into another window or start a new entry with it. */
 export function generatorDialog() {
@@ -65,6 +66,8 @@ export function itemActions(i) {
   const [containerId, id] = splitKey(i.key);
   const c = st.containers.find((x) => x.id === containerId) || {};
   const canWrite = writable(c);
+  // #487: a server entry is edited and duplicated only in admin mode (connecting works always).
+  const asServer = i.type !== 'server' || adminMode();
   const open = async () => call('item', containerId, id);
   // Copying takes the sign-in the entry uses (a linked login: the linked entry's user name and password).
   const usable = async () => resolveLogin(await open(), (c, x) => call('item', c, x));
@@ -81,7 +84,7 @@ export function itemActions(i) {
     i.type === 'card' ? { action: 'copy-card', icon: 'copy', label: t('Kartennummer kopieren'), onClick: async () => copy((await open()).card.number, t('Kartennummer')) } : null,
     i.hosts?.[0] ? { action: 'open', icon: 'external', label: t('Website öffnen'), onClick: () => (i.loginLinked ? openSite() : openUrl(`https://${i.hosts[0]}`)) } : null,
     '-',
-    { action: 'edit', icon: 'edit', label: t('Bearbeiten'), disabled: !canWrite, onClick: async () => {
+    { action: 'edit', icon: 'edit', label: t('Bearbeiten'), disabled: !canWrite || !asServer, onClick: async () => {
       ui.selected = i.key;
       ui.editing = 'edit';
       ui.editingItem = await open();
@@ -89,7 +92,7 @@ export function itemActions(i) {
       renderDetail();
     } },
     { action: 'cut', icon: 'move', label: t('Ausschneiden'), disabled: !canWrite, onClick: () => cutItems([i]) },
-    { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), disabled: !canWrite, onClick: () => duplicateItem(containerId, id) },
+    { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), disabled: !canWrite || !asServer, onClick: () => duplicateItem(containerId, id) },
     { action: 'history', icon: 'history', label: t('Verlauf'), onClick: async () => historyDialog(await open()) },
     { action: 'copy-link', icon: 'link', label: t('Link kopieren'), disabled: !buildItemLink(c, id), onClick: () => copyItemLink(c, id) },
     ...privacyActions(i, c, canWrite), // #476: admin mode only

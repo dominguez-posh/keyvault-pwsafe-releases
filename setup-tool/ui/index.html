@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="title">Keevault-Einrichtung</title>
+  <link rel="stylesheet" href="../../extension/styles/app.css">
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <header class="setup-head">
+    <div class="brand">Keevault <span class="muted" data-i18n="brandSub">Einrichtung</span></div>
+    <span class="spacer"></span>
+    <span id="account" class="muted small"></span>
+    <select id="lang" class="small" aria-label="Sprache / Language">
+      <option value="de">Deutsch</option>
+      <option value="en">English</option>
+    </select>
+    <button id="quit" class="btn small" type="button" data-i18n="quit">Beenden</button>
+  </header>
+  <main class="setup-main">
+    <p id="error" class="setup-error" role="alert" hidden></p>
+
+    <section class="card" id="sec-signin">
+      <h2><span class="num">1</span> <span data-i18n="s1">Anmeldung und Rechte</span></h2>
+      <div id="signin-form" hidden>
+        <p class="muted" data-i18n="signinHint"></p>
+        <div class="field"><label for="tenant" data-i18n="tenant"></label><input id="tenant" autocomplete="off" placeholder="contoso.onmicrosoft.com"></div>
+        <button id="connect" class="btn primary" type="button" data-i18n="connect">Anmelden</button>
+      </div>
+      <div id="rights" hidden></div>
+      <!-- #516: consent for Keevault's own app registration ("OneDrive direkt"), waits for the home tenant. -->
+      <div class="actions">
+        <button id="tenant-consent" class="btn" type="button" disabled aria-disabled="true" data-i18n="tenantConsent">Keevault im Tenant freischalten (demnächst verfügbar)</button>
+      </div>
+      <p class="muted small" data-i18n="tenantConsentHint"></p>
+    </section>
+
+    <section class="card" id="sec-plan">
+      <h2><span class="num">2</span> <span data-i18n="s2">Auswahl</span></h2>
+      <div class="grid2">
+        <div class="field"><label for="subscription" data-i18n="subscription"></label><input id="subscription" autocomplete="off" placeholder="00000000-0000-0000-0000-000000000000"></div>
+        <div class="field"><label for="location" data-i18n="location"></label><input id="location" autocomplete="off"></div>
+        <div class="field"><label for="rg" data-i18n="rg"></label><input id="rg" autocomplete="off"></div>
+        <div class="field"><label for="pattern" data-i18n="pattern"></label><input id="pattern" autocomplete="off"></div>
+      </div>
+      <h3 data-i18n="vaults">Tresore</h3>
+      <div id="vaults"></div>
+      <button id="add-vault" class="btn small" type="button" data-i18n="addVault">Tresor hinzufügen</button>
+      <h3 data-i18n="steps">Schritte</h3>
+      <div id="steps" class="step-choice"></div>
+      <h3 data-i18n="questions">Rückfragen</h3>
+      <p class="muted small" data-i18n="questionsHint"></p>
+      <div id="questions"></div>
+      <h3 data-i18n="dpTitle">Geräte-Richtlinien (GPO und Intune)</h3>
+      <p class="muted small" data-i18n="dpHint"></p>
+      <div id="device" class="grid2"></div>
+      <div class="actions">
+        <button id="device-zip" class="btn" type="button" data-i18n="dpZip">Richtlinien-Paket herunterladen (ZIP)</button>
+      </div>
+      <ul id="plan-errors" class="setup-errors" hidden></ul>
+      <div class="actions">
+        <label class="btn" for="import-file" data-i18n="import">Einstellungen importieren</label>
+        <input id="import-file" type="file" accept=".json,application/json" hidden>
+        <button id="export" class="btn" type="button" data-i18n="export">Einstellungen exportieren</button>
+        <button id="terraform" class="btn" type="button" data-i18n="terraform">Als Terraform exportieren</button>
+        <label class="inline"><input id="portable" type="checkbox" checked> <span data-i18n="portable"></span></label>
+      </div>
+    </section>
+
+    <section class="card" id="sec-check">
+      <h2><span class="num">3</span> <span data-i18n="s3">Checkliste und Probelauf</span></h2>
+      <p class="muted" data-i18n="s3Hint"></p>
+      <button id="dryrun" class="btn primary" type="button" data-i18n="dryrun">Probelauf</button>
+      <ol id="checklist" class="checklist"></ol>
+    </section>
+
+    <section class="card" id="sec-run">
+      <h2><span class="num">4</span> <span data-i18n="s4">Ausführen und Doku</span></h2>
+      <p class="muted" data-i18n="s4Hint"></p>
+      <div class="actions">
+        <button id="run" class="btn primary" type="button" disabled data-i18n="run">Ausführen</button>
+        <button id="report-html" class="btn" type="button" disabled data-i18n="reportHtml">Doku zum Drucken (HTML)</button>
+        <button id="report-docx" class="btn" type="button" disabled data-i18n="reportDocx">Doku als Word (DOCX)</button>
+        <button id="report" class="btn" type="button" disabled data-i18n="reportMd">Doku als Markdown</button>
+      </div>
+      <p class="muted small" data-i18n="docHint"></p>
+    </section>
+
+    <section class="card" id="sec-verify">
+      <h2><span class="num">5</span> <span data-i18n="s5">Prüfen: Drift und Sicherheitsempfehlungen</span></h2>
+      <p class="muted" data-i18n="s5Hint"></p>
+      <div class="actions">
+        <button id="drift" class="btn primary" type="button" data-i18n="drift">Drift prüfen</button>
+        <label class="inline"><input id="drift-device" type="checkbox"> <span data-i18n="driftDevice"></span></label>
+        <button id="compliance" class="btn" type="button" data-i18n="compliance">Sicherheitsempfehlungen prüfen</button>
+      </div>
+      <div id="drift-result" hidden></div>
+      <div id="compliance-result" hidden></div>
+      <div class="actions">
+        <button id="check-html" class="btn" type="button" disabled data-i18n="reportHtml">Doku zum Drucken (HTML)</button>
+        <button id="check-docx" class="btn" type="button" disabled data-i18n="reportDocx">Doku als Word (DOCX)</button>
+        <button id="check-md" class="btn" type="button" disabled data-i18n="reportMd">Doku als Markdown</button>
+      </div>
+    </section>
+
+    <section class="card" id="sec-update">
+      <h2><span class="num">6</span> <span data-i18n="s6">Aktualisieren</span></h2>
+      <p id="tool-version" class="muted small"></p>
+      <div class="actions">
+        <button id="update-check" class="btn" type="button" data-i18n="updateCheck">Nach Updates suchen</button>
+        <button id="update-install" class="btn primary" type="button" hidden></button>
+      </div>
+      <p id="update-status" class="small" hidden></p>
+    </section>
+  </main>
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

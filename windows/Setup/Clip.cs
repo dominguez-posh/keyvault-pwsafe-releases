@@ -5,8 +5,13 @@
 //
 // Keevault-Update.exe --clipboard-clear: clears the clipboard if it still holds the UTF-8 text from stdin (the
 // app's "clear after N seconds"); something copied since stays. Exit code 0 cleared, 1 different text, 2 busy.
+//
+// Exit code 2 (both modes): another program held the clipboard for the whole wait (OpenClipboard failed for ~5 s).
+// Exit code 4 (--clipboard): written, but another program held the clipboard while reading it back – the text is most
+// likely there, so the app treats it as copied and starts its clear timer (#526: with 2 the secret stayed uncleared).
 
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -42,11 +47,26 @@ namespace Keevault.Setup
             using (var stdin = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false))) return stdin.ReadToEnd();
         }
 
+        /// <summary>Longest wait for the clipboard. Same value in desktop/autotype.js (SetSecretClipboard).</summary>
+        internal const int OpenWaitMs = 5000;
+
+        /// <summary>Exit code: written, the read-back found the clipboard held (desktop/main/typing.js CLIPBOARD_UNVERIFIED).</summary>
+        private const int WrittenUnverified = 4;
+
+        /// <summary>
+        /// Opens the clipboard. Windows has one clipboard for the whole session, and clipboard monitors, the clipboard
+        /// history and its sync open it after every change: tried again for up to ~5 s with growing pauses (25 ms
+        /// doubling up to 250 ms) – 1 s was too short on a busy machine (#526). False: another program held it.
+        /// </summary>
         private static bool Open()
         {
-            var open = false;
-            for (var i = 0; i < 40 && !(open = OpenClipboard(IntPtr.Zero)); i++) Thread.Sleep(25);
-            return open;
+            var watch = Stopwatch.StartNew();
+            for (var pause = 25; ; pause = Math.Min(pause * 2, 250))
+            {
+                if (OpenClipboard(IntPtr.Zero)) return true;
+                if (watch.ElapsedMilliseconds >= OpenWaitMs) return false;
+                Thread.Sleep(pause);
+            }
         }
 
         /// <summary>Text on the open clipboard (CF_UNICODETEXT), null if there is none.</summary>
@@ -78,7 +98,7 @@ namespace Keevault.Setup
                 CloseClipboard();
             }
             // Read back: only a text that really arrived counts as copied.
-            if (!Open()) return 2;
+            if (!Open()) return WrittenUnverified;
             try { return CurrentText() == text ? 0 : 3; }
             finally { CloseClipboard(); }
         }

@@ -18,6 +18,12 @@
       font: inherit; font-size: 16px; letter-spacing: .3em; text-align: center; outline: none; }
     input.pin:focus { border-color: var(--kv); box-shadow: 0 0 0 3px rgba(15,108,189,.16); }
     .problem { color: var(--err); font-size: 12px; }
+    .busy { display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: 12px; }
+    .spinner { width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--kv); border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Locked while the app checks (#508): never by opacity. The visibility guard (content/visible-guard.js) counts an
+       element with opacity below 1 as covered and starts its time over, so a quick second try was refused (#526). */
+    input.pin:disabled { color: var(--muted); border-style: dashed; cursor: wait; }
     [hidden] { display: none !important; }
   </style>
 </head>

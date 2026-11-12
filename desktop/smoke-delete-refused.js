@@ -68,3 +68,4 @@ export async function deleteRefusedCheck({ js, fail, vault, changed, kvc }) {
 
 export { folderFirstCheck } from './smoke-folder-order.js';
 export { renameCheck } from './smoke-rename.js';
+export { vaultProfileCheck } from './smoke-vault-profile.js';

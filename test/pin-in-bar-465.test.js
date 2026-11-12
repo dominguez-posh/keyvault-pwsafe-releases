@@ -286,7 +286,7 @@ test('pin page: Enter only when trusted and visible, the field emptied every tim
   assert.match(js, /addEventListener\('blur', \(\) => \{ if \(pin\) pin\.value = ''; \}\)/);
   assert.match(js, /e\.key === 'Escape'[\s\S]{0,40}cancel\(\)/);
   assert.match(js, /call\('webauthn:pinApprove', \{ requestId, containerId, itemId, credentialId, pin: typed \}\)/);
-  assert.match(js, /showPinProblem\(problem, err\.message\)/, 'lockout countdown (#439)');
+  assert.match(js, /showPinProblem\(problem, unlockError\(err\)\)/, 'lockout countdown (#439), timeout message (#508)');
   assert.ok(!/postMessage|window\.parent|window\.top/.test(js), 'never talks to the page');
   assert.match(read('pin/pin.html'), /<script src="\.\.\/content\/visible-guard\.js"><\/script>/);
 });

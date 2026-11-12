@@ -6,7 +6,7 @@ import { decryptKdbx } from '../../kdbx.js';
 import { SAMPLE_CSV } from '../../../extension/core/import-sample.js';
 import { mapLimit } from '../../../extension/core/util.js';
 import { t } from '../../../extension/core/i18n.js';
-import { CERT_MAX_BYTES, limitFolderDepth } from '../../../extension/core/model.js';
+import { CERT_MAX_BYTES, keepAdminFlags, limitFolderDepth } from '../../../extension/core/model.js';
 import { itemsToCsv } from '../../../extension/core/export.js';
 import { movePasskeyBetween, moveWithAssets, planMoveWithAssets } from '../../../extension/core/move-assets.js';
 import { smokeTest } from '../boot.js';
@@ -15,11 +15,13 @@ import { api } from './index.js';
 import { refreshStaleForBrowser } from '../browser.js';
 import { copyToClipboard } from '../clipboard.js';
 import { checkDeviceLinks } from '../devices.js';
-import { exportPin, requireFeature, requireOpen } from '../guards.js';
+import { adminFlagsGuard, exportPin, requireFeature, requireOpen } from '../guards.js';
 import { changed, refreshAll, send } from '../session.js';
 import { autoTypeCalls, autoTypeText, autoTypeValue, selectedKey, setSelectedKey } from '../typing.js';
 import { othersView, setPrivacy } from '../private.js';
 import { scanScreenQr } from '../qr-scan.js';
+import { checkCopy, checkExport, checkLeaveToPersonal, checkRequired, noteServed } from '../vault-rules.js';
+import { copyPin } from '../guards.js';
 
 // Import: entries per block (progress and, in a file vault, one write each).
 const IMPORT_BLOCK = 50;
@@ -38,7 +40,7 @@ export const itemsApi = {
     // #476: other people's "Nur für mich" entries only for a Verwalter who switched them on in admin mode.
     return vault.summaries({ maxAgeMs: Infinity, others: await othersView() });
   },
-  item: async (containerId, id, fresh) => vault.getItem(containerId, id, { fresh, others: await othersView() }),
+  item: async (containerId, id, fresh) => noteServed(containerId, await vault.getItem(containerId, id, { fresh, others: await othersView() })),
   /** #476: "Nur für mich" on or off (admin mode; checks in ../private.js). */
   async setPrivate(containerId, id, on) {
     requireOpen();
@@ -48,21 +50,27 @@ export const itemsApi = {
   },
   save: async (containerId, item, expectedVersion) => {
     if (item?.type === 'server' && item.server) checkDeviceLinks(containerId, item.server);
-    const saved = await vault.saveItem(containerId, item, { expectedVersion });
+    await checkRequired(containerId, item); // #480: required fields of the vault
+    const saved = await vault.saveItem(containerId, await adminFlagsGuard(containerId, item), { expectedVersion });
     config.update({ defaultContainer: containerId });
     return saved;
   },
   delete: (containerId, id) => vault.deleteItem(containerId, id),
   /** Entries (assets, linked logins) that use this login – "Show linked assets" in admin mode (#307). */
   linkedEntries: (containerId, id) => vault.linkedEntries(containerId, id),
-  move: (fromId, toId, id, opts) => vault.moveItem(fromId, toId, id, opts),
+  move: async (fromId, toId, id, opts) => {
+    await checkLeaveToPersonal(fromId, toId); // review 0.9.33: the export lock holds through the personal vault
+    return vault.moveItem(fromId, toId, id, opts);
+  },
   /** #452: what moving this entry would take along (linked assets), without changing anything. */
   planMove: async (fromId, toId, id) => {
+    await checkLeaveToPersonal(fromId, toId);
     const { items, order, ...plan } = await planMoveWithAssets(vault, fromId, toId, id);
     return plan;
   },
   /** #452: the entry with its linked assets, all or nothing (see core/move-assets.js). */
   moveWithAssets: async (fromId, toId, id, opts) => {
+    await checkLeaveToPersonal(fromId, toId);
     const { saved, moved, dropped } = await moveWithAssets(vault, fromId, toId, id, opts);
     return { saved, moved, dropped };
   },
@@ -72,6 +80,7 @@ export const itemsApi = {
    */
   async movePasskey(args) {
     requireOpen();
+    await checkLeaveToPersonal(args?.from?.containerId, args?.to?.containerId); // #519: the export lock, as for move
     return movePasskeyBetween(vault, args); // (#464: the same function serves the extension's popup)
   },
   history: (containerId, id) => vault.history(containerId, id),
@@ -89,10 +98,14 @@ export const itemsApi = {
    * vaults only the personal one (#470), and only unlocked (the PIN or master password opened it). #473: with an app PIN
    * set, only with the fresh confirmation from confirmExportPin (one export, short time; see ../../export-pin.js).
    */
-  confirmExportPin: (containerId, pin) => exportPin.confirm(containerId, pin),
+  confirmExportPin: (containerId, pin) => {
+    requireOpen(); // #477: like every other vault call – nothing to confirm in a locked app
+    return exportPin.confirm(containerId, pin);
+  },
   async exportItems(containerId, pinToken) {
     requireOpen();
     exportPin.consume(containerId, pinToken);
+    await checkExport(containerId); // #480: export locked, or the app PIN demanded by the vault
     const c = await requireFeature(containerId, 'export');
     if (c.kind === 'file' && !c.personal) throw new Error(t('Diese Funktion gibt es für diesen Tresor nicht.'));
     if (c.locked) throw new Error(t('Zuerst entsperren'));
@@ -125,7 +138,15 @@ export const itemsApi = {
     return r;
   },
 
-  copy: (text) => copyToClipboard(String(text)),
+  /** #480: containerId names the vault the value comes from; its settings may want the app PIN (confirmCopyPin). */
+  async copy(text, containerId) {
+    await checkCopy(String(text), typeof containerId === 'string' ? containerId : null);
+    return copyToClipboard(String(text));
+  },
+  confirmCopyPin: (containerId, pin) => {
+    requireOpen();
+    return copyPin.confirm(containerId, pin);
+  },
   /**
    * Auto-type for Strg+Umschalt+U/P/O: minimizes the app so that the previous window gets the focus back and
    * types user name, password or current one-time code there – no clipboard involved.
@@ -195,6 +216,8 @@ export const itemsApi = {
     await requireFeature(containerId, 'import');
     // At most three folder levels: deeper source folders go into the third level's name ("A/B/C/D" → "A/B/C – D").
     items = items.map((i) => ({ ...i, folder: limitFolderDepth(i.folder) }));
+    // #487 (review): an import file sets no admin flags outside admin mode.
+    if (config.get().adminTools !== true) items = items.map((i) => keepAdminFlags(i, null));
     // Folder symbols of the source (e.g. KeePass group icons): set where no symbol is chosen yet; a deeper folder keeps
     // its symbol under its shortened path.
     const icons = [...new Map(Object.entries(folderIcons || {}).map(([p, v]) => [limitFolderDepth(p), v]).filter(([p, v]) => p && v)).entries()];

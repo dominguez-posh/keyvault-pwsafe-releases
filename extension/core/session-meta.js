@@ -1,6 +1,7 @@
 // Metadata secret of a Key Vault container (pws-container): a versioned object { format, v, id, name, … } that
 // later versions extend. Writing is read, merge, write, so fields this version does not know stay as they are.
 import { t } from './i18n.js';
+import { rememberSettings } from './vault-settings.js';
 
 /**
  * Key Vault secrets have no ETag: the write is checked by reading it back; if another writer got in between,
@@ -11,10 +12,12 @@ export async function writeMeta(session, client, patch, { secret, format, type }
   for (let attempt = 0; attempt < 3; attempt++) {
     const current = (await session.readContainerMeta(client).catch(() => null))
       || { format, v: 1, id: crypto.randomUUID(), created: new Date().toISOString() };
-    next = { ...current, ...patch, updated: new Date().toISOString() };
+    // #480: a function builds the patch from the state just read (nested values like "settings" merge on every attempt).
+    const p = typeof patch === 'function' ? patch(current) : patch;
+    next = { ...current, ...p, updated: new Date().toISOString() };
     await client.setSecret(secret, JSON.stringify(next), { contentType: type, tags: { kvpwsafe: 'container' } });
     const back = await session.readContainerMeta(client).catch(() => null);
-    if (!back || Object.entries(current).every(([k, v]) => k in patch || k === 'updated' || JSON.stringify(back[k]) === JSON.stringify(v))) break;
+    if (!back || Object.entries(current).every(([k, v]) => k in p || k === 'updated' || JSON.stringify(back[k]) === JSON.stringify(v))) break;
   }
   return next;
 }
@@ -32,9 +35,14 @@ const UNSAFE_NAME_CHARS = /[\p{Cc}\p{Zl}\p{Zp}\p{Cf}\p{Default_Ignorable_Code_Po
  * (full-width and compatibility forms fold to their plain letters), the length is capped; empty → null (fallback).
  */
 export function cleanVaultName(name) {
+  return cleanText(name, VAULT_NAME_MAX);
+}
+
+/** cleanVaultName with another length cap (#480: description, contact, templates); empty → null. */
+export function cleanText(name, max) {
   if (typeof name !== 'string') return null;
   const clean = [...name.replace(UNSAFE_NAME_CHARS, '').normalize('NFKC').replace(UNSAFE_NAME_CHARS, '')]
-    .slice(0, VAULT_NAME_MAX).join('').trim();
+    .slice(0, max).join('').trim();
   return clean || null;
 }
 
@@ -61,15 +69,17 @@ export const vaultHostLabel = (c) => {
 };
 
 /**
- * Host to show next to a vault's name, or null: always when the name comes from the vault's metadata and differs
- * from the Key Vault's own name (anyone with secret write access sets it, so it may pose as another vault, also
- * with look-alike letters), and when another vault in the list carries the same name. shared = sharedNames(all).
+ * Host to show next to a vault's name, or null: always when the name comes from the vault's metadata or its ARM tag
+ * (#485) and differs from the Key Vault's own name (anyone with secret or tag write access sets it, so it may pose as
+ * another vault, also with look-alike letters NFKC does not fold), and when another vault in the list carries the same
+ * name. shared = sharedNames(all).
  */
 export function shownVaultHost(c, shared = new Set()) {
   const host = vaultHostLabel(c);
   if (!host) return null;
   const own = nameKey(host.split('.')[0]);
-  const fromVault = !!c.metaName && nameKey(c.name) === nameKey(c.metaName) && nameKey(c.metaName) !== own;
+  const shown = nameKey(c.name);
+  const fromVault = shown !== own && [c.metaName, c.tagName].some((n) => !!n && nameKey(n) === shown);
   return fromVault || shared.has(nameKey(c.name)) ? host : null;
 }
 
@@ -97,6 +107,12 @@ export async function renameInVault(session, containerId, name) {
   if (!clean) throw new Error(t('Bitte einen Namen eingeben'));
   await session.writeContainerMeta(session.kv(c), { name: clean });
   await rememberMetaName(session, containerId, clean);
+}
+
+/** After reading the metadata secret: its name (rememberMetaName) and its vault settings (#480). */
+export async function rememberMeta(session, containerId, meta) {
+  if (meta?.name) await rememberMetaName(session, containerId, String(meta.name));
+  await rememberSettings(session, containerId, meta?.settings);
 }
 
 /** Remembers the name from the vault's metadata; it takes precedence over the ARM tag and the local name. */

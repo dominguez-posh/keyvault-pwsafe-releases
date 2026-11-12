@@ -24,6 +24,7 @@ import { reloadAll } from './shell.js';
 import { deleteNotice } from './trash.js';
 import { licenses } from './vault-dialogs.js';
 import { featureAllowed } from './vault-menu.js';
+import { ageNotice, saveAsTemplate } from './vault-profile.js';
 
 export const splitKey = (key) => {
   const i = key.indexOf('/');
@@ -67,12 +68,14 @@ export async function renderDetail() {
   const shown = await resolveLogin(item, (c, i) => call('item', c, i));
   if (ui.selected !== key || ui.editing) return undefined;
   const canWrite = writable(st.containers.find((c) => c.id === containerId) || {});
+  // #487: a server entry is read-only outside admin mode (connect works); it is edited and duplicated only there.
+  const asServer = item.type !== 'server' || adminMode();
   // #451: the button only when at least one asset or login uses this login.
   const hasLinkedAssets = adminMode() && shown.type === 'login'
     && (await call('linkedEntries', containerId, id).then((e) => e.length > 0, () => false));
   if (ui.selected !== key || ui.editing) return undefined;
   pane.replaceChildren(itemDetail(shown, {
-    copy,
+    copy: (value, label) => copy(value, label, containerId), // #480: the vault may want the app PIN
     hoverActions: true,
     // Menu "Type into window": the existing auto-type of the selected entry (u = user name, p = password).
     typeInto: (what) => call('autoType', containerId, id, what).catch((e) => toast(e.message, 'error')),
@@ -103,19 +106,20 @@ export async function renderDetail() {
       contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: Math.max(8, r.top - height - 6) }, items);
     },
     actions: [
-      canWrite ? { action: 'edit', icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: () => {
+      canWrite && asServer ? { action: 'edit', icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: () => {
         ui.editing = 'edit';
         ui.editingItem = item;
         renderDetail();
       } } : null,
       canWrite ? { icon: 'star', quick: true, on: !!item.favorite, label: item.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), onClick: () => toggleFavorite(item) } : null,
       canWrite ? { action: 'move', icon: 'move', label: t('Verschieben'), onClick: () => moveDialog(item) } : null,
-      canWrite ? { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), onClick: () => duplicateItem(containerId, id) } : null,
+      canWrite && asServer ? { action: 'duplicate', icon: 'copy', label: t('Duplizieren'), onClick: () => duplicateItem(containerId, id) } : null,
       { action: 'history', icon: 'history', label: t('Verlauf'), onClick: () => historyDialog(item) },
       buildItemLink(st.containers.find((c) => c.id === containerId), id)
         ? { icon: 'link', quick: true, label: t('Link kopieren'), onClick: () => copyItemLink(st.containers.find((c) => c.id === containerId), id) } : null,
       st.containers.find((c) => c.id === containerId)?.secure
         ? { icon: 'clock', label: t('Änderungsprotokoll'), onClick: () => changelogDialog(st.containers.find((c) => c.id === containerId), id) } : null,
+      saveAsTemplate(st.containers.find((c) => c.id === containerId), item),
       canWrite ? { action: 'delete', icon: 'trash', label: t('Löschen'), danger: true, onClick: async () => {
         if (!(await confirmDialog(t('Eintrag löschen'), `${t('„{title}“ löschen?', { title: item.title })} ${await deleteNotice(st.containers.find((x) => x.id === containerId))}`, { confirmLabel: t('Löschen'), danger: true }))) return;
         try {
@@ -129,6 +133,8 @@ export async function renderDetail() {
       } } : null,
     ].filter(Boolean),
   }));
+  // #480: the vault's notice for an old password (age from the entry's metadata or its version history).
+  ageNotice(st.containers.find((c) => c.id === containerId), item, () => ui.selected === key && !ui.editing).then((n) => n && pane.prepend(n));
   return undefined;
 }
 
@@ -154,7 +160,10 @@ function renderEditor() {
   const folderTarget = isNew ? ui.containerId : item.containerId;
   const knownFolders = [...new Set([...folderList(folderTarget), ...modeItems(folderTarget).map((i) => i.folder).filter(Boolean)])].sort();
   const folderContainer = st.containers.find((c) => c.id === folderTarget);
+  const startId = isNew ? [ui.containerId, st.settings.defaultContainer].find((id) => targets.some((c) => c.id === id)) || targets[0]?.id : item.containerId;
   const form = itemForm(item, {
+    // #480: generator defaults of the vault the entry goes to (or is in).
+    generator: st.containers.find((c) => c.id === startId)?.vaultSettings?.rules?.generator || null,
     // TOTP: the setup QR code from the screen (#492), read in the main process.
     scanQr: () => call('scanScreenQr'), scanQrScreen: true,
     // Moving a passkey: edit mode only (#453).
@@ -169,15 +178,14 @@ function renderEditor() {
     isNew,
     linkOptions: linkOptions(),
     devices: adminMode(),
+    adminMode: adminMode(),
     folders: knownFolders,
     // Without the "folders" function only existing folders can be chosen (no new ones by typing).
     folderFree: !folderContainer || featureAllowed(folderContainer, 'folders'),
     typeFixed: isNew,
     defaultFolder: ui.containerId ? ui.folder : '',
     containers: isNew ? targets : st.containers.map((c) => ({ id: c.id, name: choiceName(c) })),
-    containerId: isNew
-      ? [ui.containerId, st.settings.defaultContainer].find((id) => targets.some((c) => c.id === id)) || targets[0]?.id
-      : item.containerId,
+    containerId: startId,
     onCancel: () => {
       ui.editing = null;
       renderDetail();

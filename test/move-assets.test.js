@@ -103,6 +103,37 @@ test('counter-test: a failed deletion in the source leaves complete, valid copie
   assert.equal(entries(kvA).length, 2, 'what is left is named, nothing is lost');
 });
 
+test('counter-test (#510): an entry changed in the source after the plan stays there and is named', async () => {
+  const { session, kvA, kvB, login, vm2 } = await two();
+  const plan = await planMoveWithAssets(session, A, B, login.id);
+  const fresh = await session.getItem(A, vm2.id, { fresh: true });
+  await session.saveItem(A, { ...fresh, notes: 'changed meanwhile' }, { expectedVersion: fresh.version });
+  await assert.rejects(moveWithAssets(session, A, B, login.id, { plan }),
+    (e) => e instanceof MoveAssetsError && e.stage === 'changed' && e.changed.join() === 'VM02' && e.left.join() === 'VM02,Admin'
+      && /„VM02“ wurde während des Verschiebens/.test(e.message) && /verknüpft.*Admin/.test(e.message));
+  assert.equal(entries(kvB).length, 3, 'the copies are in the target');
+  assert.deepEqual(entries(kvA).sort(), [login.id, vm2.id].sort(), 'the changed entry and the login it uses stay in the source; VM01 is gone');
+  assert.equal((await session.getItem(A, vm2.id, { fresh: true })).notes, 'changed meanwhile', 'with the change');
+  assert.equal((await session.getItem(A, vm2.id, { fresh: true })).server.rdpLink, `${A}/${login.id}`, 'its link still resolves');
+});
+
+test('counter-test (#510): a changed entry that nothing in the move links to stays alone', async () => {
+  const { session, kvA, login } = await two();
+  const plan = await planMoveWithAssets(session, A, B, login.id);
+  const fresh = await session.getItem(A, login.id, { fresh: true });
+  await session.saveItem(A, { ...fresh, password: 'new' }, { expectedVersion: fresh.version });
+  await assert.rejects(moveWithAssets(session, A, B, login.id, { plan }), (e) => e.stage === 'changed' && e.left.join() === 'Admin' && !/verknüpft/.test(e.message));
+  assert.deepEqual(entries(kvA), [login.id]);
+});
+
+test('an unchanged source is deleted after the copy as before (#510)', async () => {
+  const { session, kvA, login } = await two();
+  const plan = await planMoveWithAssets(session, A, B, login.id);
+  const r = await moveWithAssets(session, A, B, login.id, { plan });
+  assert.equal(r.moved.length, 3);
+  assert.equal(entries(kvA).length, 0);
+});
+
 test('counter-test: without write access in the target nothing moves and the entries are listed', async () => {
   const { session, kvA, kvB, login } = await two();
   await setAccess(session, B, { read: true, write: false });

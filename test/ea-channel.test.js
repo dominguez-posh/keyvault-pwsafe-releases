@@ -66,7 +66,8 @@ test('ExtensionSettings: only the exact fixed value of one of our two feeds is o
     JSON.stringify({ [FOREIGN_EXT]: { installation_mode: 'blocked' } }),
     JSON.stringify({ [EXTENSION_ID]: { installation_mode: 'blocked' } }),
     JSON.stringify({ [EXTENSION_ID]: { update_url: 'https://updates.example.com/x.xml', override_update_url: true } }),
-    JSON.stringify({ [EXTENSION_ID]: { update_url: UPDATE_URL, override_update_url: true, installation_mode: 'force_installed' } }),
+    // (#494: our ID alone with our release repo and our known fields counts as an older value of ours, see ext-reinstall-494.test.js)
+    JSON.stringify({ [EXTENSION_ID]: { update_url: UPDATE_URL, override_update_url: true, installation_mode: 'blocked' } }),
     '{kein json',
     '',
     '[]',
@@ -134,8 +135,9 @@ test('elevated command line for ExtensionSettings: only reg.exe, only the two fi
   assert.ok(programs.length >= 8 && programs.every((p) => p === 'c:\\windows\\system32\\reg.exe'));
   assert.ok(args.includes(`/d "${settingsValue(EARLY_ACCESS_FEED).replace(/"/g, '\\"')}"`));
   assert.match(args, /query "HKLM[^"]*Edge" \/v ExtensionSettings >nul 2>&1 \|\| /, 'a new value only where the name is still free');
-  const op = { kind: 'settings-replace', key: POLICY_BASES.edge, name: 'ExtensionSettings', value: settingsValue(UPDATE_URL) };
+  const op = { kind: 'settings-replace', key: POLICY_BASES.edge, name: 'ExtensionSettings', value: settingsValue(UPDATE_URL), old: settingsValue(EARLY_ACCESS_FEED) };
   assert.doesNotThrow(() => elevatedArguments([op], WIN));
+  assert.throws(() => elevatedArguments([{ ...op, old: undefined }], WIN), /unexpected/, 'a replacement without the value read before (#494)');
   assert.throws(() => elevatedArguments([{ ...op, value: '{"a":"b"} & calc' }], WIN), /unexpected/, 'not a fixed value');
   assert.throws(() => elevatedArguments([{ ...op, value: settingsValue('https://evil.example/u.xml') }], WIN), /unexpected/, 'not one of our two feeds');
   assert.throws(() => elevatedArguments([{ ...op, key: 'HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run' }], WIN), /unexpected/, 'another key');
@@ -266,8 +268,9 @@ const companyCases = {
     trees: Object.fromEntries(['edge', 'chrome'].map((b) => [POLICY_BASES[b],
       `\r\n${HKLM_FULL(b)}\r\n\r\n${HKLM_FULL(b)}\\ExtensionSettings\r\n\r\n${HKLM_FULL(b)}\\ExtensionSettings\\*\r\n    installation_mode    REG_SZ    blocked\r\n`])),
   },
-  'Forcelist entry of another extension': {
-    lists: { edge: [entry(`${FOREIGN_EXT};https://x.example/u.xml`)], chrome: [entry(`${FOREIGN_EXT};https://x.example/u.xml`)] },
+  // #494: a Forcelist entry of another extension no longer counts (test/ext-reinstall-494.test.js); a block list in HKLM does.
+  'extension block list in HKLM': {
+    trees: Object.fromEntries(['edge', 'chrome'].map((b) => [POLICY_BASES[b], `\r\n${HKLM_FULL(b)}\r\n\r\n${HKLM_FULL(b)}\\ExtensionInstallBlocklist\r\n    1    REG_SZ    *\r\n`])),
   },
   'cloud enrollment token': {
     trees: { [POLICY_BASES.edge]: `\r\n${HKLM_FULL('edge')}\r\n    EdgeManagementEnrollmentToken    REG_SZ    00000000-token\r\n` },
@@ -304,7 +307,7 @@ test('our own entries are not foreign; with a company policy beside them only th
   assert.deepEqual(plain.foreign, { edge: false, chrome: false }, 'our Forcelist entry and ExtensionSettings value');
   assert.equal(foreignInTree(`\r\n${HKCU_FULL('edge')}\r\n`, USER_POLICY_BASES.edge, false), false, 'an empty key per user');
   assert.equal(foreignInTree(null, POLICY_BASES.edge, true), false, 'no key at all');
-  assert.equal(foreignInTree(`\r\n${HKLM_FULL('edge')}\r\n    ExtensionSettings    REG_SZ    {}\r\n    HomepageLocation    REG_SZ    https://intranet.example\r\n`, POLICY_BASES.edge, true), true, 'another value next to ours');
+  assert.equal(foreignInTree(`\r\n${HKLM_FULL('edge')}\r\n    ExtensionSettings    REG_SZ    {}\r\n    HomepageLocation    REG_SZ    https://intranet.example\r\n`, POLICY_BASES.edge, true), false, '#494: an unrelated value next to ours');
   assert.deepEqual(parseRegTree(`\r\n${HKLM_FULL('edge')}\r\n    A B    REG_SZ    \r\n`), [{ key: HKLM_FULL('edge'), values: [{ name: 'A B', type: 'REG_SZ', value: '' }] }]);
 
   // Forcelist of ours but no ExtensionSettings, and a company policy per user: switch our entry, never add ExtensionSettings.

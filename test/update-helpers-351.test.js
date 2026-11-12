@@ -27,6 +27,10 @@ function call(method, arg) {
 test('#351: the connections for the browser and for agents are recognised, the app itself is not', { skip }, () => {
   assert.equal(call('IsHelper', '"C:\\Program Files\\Keevault\\Keevault.exe" "C:\\Users\\a\\AppData\\Roaming\\KeyVault PwSafe\\native-host\\host.cjs" chrome-extension://abc/'), 'True');
   assert.equal(call('IsHelper', '"C:\\Program Files\\Keevault\\Keevault.exe" C:/Users/a/AppData/Roaming/KeyVault PwSafe/mcp/keevault-mcp.cjs'), 'True');
+  // #505: the relay from resources (Keevault-Update.exe --native-host) is the browser's connection as well.
+  assert.equal(call('IsHelper', '"C:\\Program Files\\Keevault\\resources\\Keevault-Update.exe" --native-host "C:\\Users\\a\\AppData\\Roaming\\KeyVault PwSafe\\native-host\\host.json" chrome-extension://abc/'), 'True');
+  assert.equal(call('IsHelper', '"C:\\Program Files\\Keevault\\resources\\Keevault-Update.exe" chrome-extension://abc/ --parent-window=0'), 'True', 'as Chrome/Edge start it');
+  assert.equal(call('IsHelper', '"C:\\Program Files\\Keevault\\resources\\Keevault-Update.exe" --update C:\\t\\setup.exe'), 'False');
   assert.equal(call('IsHelper', '"C:\\Program Files\\Keevault\\Keevault.exe" --type=renderer'), 'False');
   assert.equal(call('IsHelper', '"C:\\Program Files\\Keevault\\Keevault.exe"'), 'False');
   assert.equal(call('IsHelper', ''), 'False');
@@ -49,7 +53,8 @@ test('#351: the command line of a running process is read (for the check and the
 test('#351: Release ends the connections at once instead of waiting for them, and logs every command line', () => {
   const release = errors.slice(errors.indexOf('public static async Task<List<string>> Release'), errors.indexOf('private static void End('));
   const loop = release.slice(release.indexOf('while (DateTime.Now < until)'), release.indexOf('await Task.Delay(500);'));
-  assert.match(loop, /HelperProcesses\.IsHelper\(commandLine\)\) End\(p, commandLine/, 'helpers are ended inside the waiting loop');
-  assert.match(loop, /if \(waitFor == 0\) return new List<string>\(\);/, 'only the others are waited for');
-  assert.match(errors, /UpdateLog\.Write\(\$"ending \{p\.ProcessName\} \(\{p\.Id\}\), \{why\}: \{commandLine/);
+  // #513: after the grace that lets them quit on the update's signal, each once.
+  assert.match(loop, /HelperProcesses\.IsHelper\(commandLine\) && DateTime\.Now - start >= helperGrace && ended\.Add\(p\.Id\)\) End\(p, commandLine/, 'helpers are ended inside the waiting loop');
+  assert.match(loop, /if \(running\.Count == 0\) return running;/, 'done when nothing runs any more');
+  assert.match(errors, /UpdateLog\.Write\(\$"ending \{NameOf\(p\)\} \(\{p\.Id\}\), \{why\}: \{commandLine/);
 });

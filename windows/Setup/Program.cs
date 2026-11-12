@@ -9,8 +9,13 @@
 //   Keevault-Update.exe --clipboard-clear      clears the clipboard if it still holds the stdin text (Clip.cs)
 //   Keevault-Update.exe --type                 stdin text → typed into the focused window (auto-type, Typing.cs)
 //   Keevault-Update.exe --type-selftest        checks the key plan for remote desktop/VM windows, types nothing
+//   Keevault-Update.exe chrome-extension://<id>/  (or --native-host --pipe … --server … --launch …)
+//                                              the browser's native messaging host: relay to the app's pipe (NativeHost.cs, #505)
+//   Keevault-Update.exe --pipe-acl <pipe>      the app's pipe: current user only, no network (PipeAcl.cs, #511; --pipe-acl-show prints it;
+//                                              --pipe-peer <pipe> --server <exe> prints the relay's check of the other end)
+//   Keevault-Update.exe --hello-status / --hello-verify <hwnd>  Windows Hello for the window lock (Hello.cs, #512)
 //   Keevault-Update.exe --rdp                  stdin host/port/user/password → mstsc with a temporary credential (Rdp.cs)
-//   … --screenshot <png> --page welcome|progress|done|error|update|updated [--theme light|dark] [--lang de|en]
+//   … --screenshot <png> --page welcome|progress|done|error|update|updated|waiting [--theme light|dark] [--lang de|en]
 //                                              renders one page into a PNG without showing a window (tests, docs)
 
 using System;
@@ -40,7 +45,20 @@ namespace Keevault.Setup
         [STAThread]
         private static int Main(string[] argv)
         {
+            // #505: the browser's native messaging host first, before anything of WPF is loaded (Start's body refers to WPF
+            // types, and compiling it loads their assemblies): every millisecond here is waiting time in the browser.
+            if (NativeHost.Wanted(argv)) return NativeHost.Run(argv);
+            return Start(argv);
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static int Start(string[] argv)
+        {
             var args = Args.Parse(argv);
+            // #511: access list of the app's pipe (no window, no WPF).
+            if (args.Has("pipe-acl")) return PipeAcl.Set(args.Get("pipe-acl"));
+            if (args.Has("pipe-acl-show")) return PipeAcl.Show(args.Get("pipe-acl-show"));
+            if (args.Has("pipe-peer")) return NativeHost.ShowPeer(args.Get("pipe-peer"), args.Get("server"), args.Get("expect-sid"), args.Get("expect-session"));
             // Clipboard with history/cloud markers for the app (no window, no WPF).
             if (args.Has("clipboard-clear")) return Clip.ClearIfEquals();
             if (args.Has("clipboard")) return Clip.Run();
@@ -55,6 +73,9 @@ namespace Keevault.Setup
             if (args.Has("location")) return Location.Run(args.Get("location"));
             // Remote desktop with an account from the vault: temporary credential for mstsc (Rdp.cs).
             if (args.Has("rdp")) return Rdp.Run();
+            // #512: Windows Hello for the app's window lock (Hello.cs); --hello-status shows nothing.
+            if (args.Has("hello-status")) return Hello.Status();
+            if (args.Has("hello-verify")) return Hello.Verify(args.Get("hello-verify"));
             // Test of the rollback in a temporary folder (test/setup-rollback.test.js).
             if (args.Has("rollback-selftest")) return Rollback.SelfTest(args.Get("rollback-selftest"));
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
@@ -179,6 +200,15 @@ namespace Keevault.Setup
             ["Fehlercode {0}"] = "Error code {0}",
             ["Hilfe zu diesem Fehler"] = "Help for this error",
             ["Noch geöffnet: {0}"] = "Still open: {0}",
+            ["Wartet noch auf: {0}"] = "Still waiting for: {0}",
+            ["geöffnete Dateien ({0})"] = "open files ({0})",
+            ["Update wartet"] = "Update is waiting",
+            ["Bitte diese Programme schließen (KI-Agenten: Sitzung beenden). Das Update startet erst, wenn keine Datei von Keevault mehr geöffnet ist."] = "Please close these programs (AI agents: end the session). The update starts only when no Keevault file is open any more.",
+            ["Abbrechen"] = "Cancel",
+            ["Keevault (App)"] = "Keevault (app)",
+            ["KI-Agent-Verbindung (MCP)"] = "AI agent connection (MCP)",
+            ["Browser-Verbindung"] = "Browser connection",
+            ["anderes Programm aus dem Keevault-Ordner"] = "another program from the Keevault folder",
             ["Auf diesem Gerät ist noch Keevault {0} für alle Benutzer installiert. Sie bliebe neben der neuen Version stehen, aktualisiert sich nicht und steht im Startmenü ebenfalls als „Keevault“. Am besten vorher entfernen (Administratorrechte nötig)."] = "Keevault {0} for all users is still installed on this device. It would stay next to the new version, does not update itself and also appears as “Keevault” in the Start menu. Best remove it first (administrator rights needed).",
             ["Entfernen & installieren"] = "Remove & install",
             ["Überspringen"] = "Skip",
@@ -772,13 +802,27 @@ namespace Keevault.Setup
                 if (args.Get("to") != null) status.Text = Text.T("Neue Version wird installiert …");
                 if (string.IsNullOrEmpty(setup) || !File.Exists(setup)) { FailUpdate(SetupError.UpdateFileMissing(), false, null); return; }
                 var dir = ExistingInstallDir();
+                // #513: the browser's and the agents' connections quit by themselves when asked. The setup starts only when
+                // nothing from the folder runs and no file in it is open; otherwise the window says what it waits for.
+                UpdateLog.Write(UpdateWait.Signal() ? "asked the connections for the browser and AI agents to quit" : "could not write the quit signal");
+                if (!await ReadyToInstall(dir, TimeSpan.FromSeconds(retry ? 10 : 20))) return;
                 var code = 0;
                 List<string> left = null;
                 rollback = await Task.Run(() => Rollback.Prepare(dir));
                 for (var attempt = 1; attempt <= 2; attempt++)
                 {
-                    left = await InstallProcesses.Release(dir, TimeSpan.FromSeconds(attempt == 1 ? 20 : 10));
-                    if (left.Count > 0) UpdateLog.Write("still running from the installation folder: " + string.Join(", ", left));
+                    if (attempt > 1)
+                    {
+                        // Code 2: files were open after all. Again only when nothing runs and nothing is open (#513).
+                        left = (await InstallProcesses.Release(dir, TimeSpan.FromSeconds(10))).Select(KindLabel).Distinct().ToList();
+                        var locked = await Task.Run(() => UpdateWait.LockedFilesSettled(dir, TimeSpan.FromSeconds(5)));
+                        if (left.Count > 0 || locked.Count > 0)
+                        {
+                            UpdateLog.Write("not run again, still open: " + string.Join(", ", left.Concat(locked)));
+                            left = left.Count > 0 ? left : locked;
+                            break;
+                        }
+                    }
                     // --updated: the old uninstaller keeps the user's setup (installer/installer.nsh, isUpdated).
                     code = await RunHidden(setup, "/S --updated");
                     UpdateLog.Write($"setup attempt {attempt}: exit code {code}");
@@ -821,6 +865,50 @@ namespace Keevault.Setup
             if (stillOpen != null && stillOpen.Count > 0) subtitle.Text += "\n" + Text.T("Noch geöffnet: {0}", string.Join(", ", stillOpen));
         }
 
+        /// <summary>
+        /// #513: waits up to <paramref name="wait"/> for everything from the installation folder to end (the status line says
+        /// what it waits for), then checks that no program file is still open. True: the setup may run. False: the window
+        /// shows "Wartet noch auf: …" with "Erneut versuchen" and "Abbrechen" (silent: the old version starts again).
+        /// </summary>
+        private async Task<bool> ReadyToInstall(string dir, TimeSpan wait)
+        {
+            var kinds = await InstallProcesses.Release(dir, wait, TimeSpan.FromSeconds(3),
+                (running) => status.Text = Text.T("Wartet noch auf: {0}", UpdateWait.Summary(running, KindLabel)));
+            var locked = await Task.Run(() => UpdateWait.LockedFilesSettled(dir, TimeSpan.FromSeconds(5)));
+            if (kinds.Count == 0 && locked.Count == 0) return true;
+            var what = kinds.Count > 0 ? UpdateWait.Summary(kinds, KindLabel) : Text.T("geöffnete Dateien ({0})", string.Join(", ", locked));
+            UpdateLog.Write($"waiting, setup not started: still running {string.Join(", ", kinds)}; open files {string.Join(", ", locked)}");
+            if (args.Has("silent")) { StartApp(null); Close(); return false; }
+            ShowWaiting(what);
+            return false;
+        }
+
+        private void ShowWaiting(string what)
+        {
+            ticker.Stop();
+            Pulse(false);
+            title.Text = Text.T("Update wartet");
+            subtitle.Text = Text.T("Wartet noch auf: {0}", what) + "\n" + Text.T("Bitte diese Programme schließen (KI-Agenten: Sitzung beenden). Das Update startet erst, wenn keine Datei von Keevault mehr geöffnet ist.");
+            Show(bar, false);
+            Show(status, false);
+            Show(closeButton, false);
+            startAppOnClose = true; // "Abbrechen" or the window closed: the old version is still complete, it starts again
+            SetActions(
+                new Button(this, Text.T("Erneut versuchen"), ButtonKind.Primary, async () => await RunUpdate(true)),
+                new Button(this, Text.T("Abbrechen"), ButtonKind.Secondary, () => { UpdateLog.Write("cancelled while waiting"); ExitCode = 1; Close(); }));
+        }
+
+        private static string KindLabel(string kind)
+        {
+            switch (kind)
+            {
+                case "app": return Text.T("Keevault (App)");
+                case "mcp": return Text.T("KI-Agent-Verbindung (MCP)");
+                case "browser": return Text.T("Browser-Verbindung");
+                default: return Text.T("anderes Programm aus dem Keevault-Ordner");
+            }
+        }
+
         private void StartApp(string updatedFrom)
         {
             var dir = ExistingInstallDir() ?? installDir;
@@ -856,6 +944,8 @@ namespace Keevault.Setup
                     ShowError(args.Has("update") || updateMode ? Text.T("Update fehlgeschlagen") : Text.T("Installation fehlgeschlagen"), SetupError.FromExitCode(2), () => Task.CompletedTask); break;
                 case "update":
                     ticker.Stop(); progress = 0.4; status.Text = $"{args.Get("from") ?? "0.7.17"}  →  {args.Get("to") ?? "0.7.18"}"; break;
+                case "waiting":
+                    ShowProgress("", ""); ShowWaiting(UpdateWait.Summary(new[] { "app", "mcp", "mcp", "browser" }, KindLabel)); break;
                 case "updated":
                     ticker.Stop(); progress = 1; title.Text = Text.T("Aktualisiert auf {0}", args.Get("to") ?? "0.7.18"); subtitle.Text = Text.T("Keevault startet …");
                     Show(bar, false); Show(status, false); checkScale.ScaleX = checkScale.ScaleY = 1; keyhole.Visibility = Visibility.Collapsed; break;

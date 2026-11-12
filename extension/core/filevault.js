@@ -13,8 +13,9 @@ import {
   createSecureKeyring, unlockSecure, verifyRoster, applyRejections, applySecureOp, rekeyMembers, mergeSecureKeyrings, describeSecure, requestAccess,
   signObject, verifyObject, unwrapKey, fileIdFor, canWrite, secureCredentials,
 } from './members.js';
+import { keyChangeSigned, keyChangeAt, keyCheck, keyUnsignedMessage } from './key-proof.js';
 import { recryptDoc, rekeyFile, stamp } from './filevault-rekey.js';
-import { normalizeItem, newItemId, summaryFromItem, normalizeFolder } from './model.js';
+import { normalizeItem, newItemId, summaryFromItem, normalizeFolder, stampPasswordChange } from './model.js';
 
 export { normalizeFolder };
 import { t } from './i18n.js';
@@ -157,8 +158,9 @@ export class FileVault {
     vault.doc = { format: FILE_FORMAT, version: 2, id: r.id, name, keyring: r.keyring, items: {}, folders: {}, log: [], created: Date.now(), updated: Date.now() };
     r.ck.kv = r.keyring.keyVersion;
     Object.assign(vault, { ck: r.ck, identity: r.identity, memberId: r.memberId });
+    vault.wrapSeen = vault.ownWrap();
     vault.roster = await verifyRoster(r.keyring);
-    await vault.addLog({ action: 'file-create', name, email });
+    await vault.addLog({ action: 'file-create', name, email, keyCheck: await keyCheck(r.ck, r.id, 1) }); // #521: proof of the first key
     return vault;
   }
 
@@ -204,11 +206,12 @@ export class FileVault {
     }
     if (doc.version === 2) doc.keyring = await applyRejections(doc.keyring, this.known = mergeFloors(this.floor, floorOf(this.doc, this.roster))); // #432, #433, #440
     const roster = doc.version === 2 ? await verifyRoster(doc.keyring, this.known) : null; // a changed known grant: refused (#444)
-    if (belowFloor(doc, this.known, roster) || roster?.tampered) throw new FileFormatError(roster?.tampered ? t('Die Datei wurde manipuliert: ein bekannter Eintrag der Benutzerliste wurde verändert – nicht übernommen.') : t('Die Datei ist ein älterer Stand, als hier schon gesehen wurde – nicht übernommen.'));
+    if (belowFloor(doc, this.known, roster) || roster?.tampered) throw Object.assign(new FileFormatError(roster?.tampered ? t('Die Datei wurde manipuliert: ein bekannter Eintrag der Benutzerliste wurde verändert – nicht übernommen.') : t('Die Datei ist ein älterer Stand, als hier schon gesehen wurde – nicht übernommen.')), { code: roster?.tampered ? 'tampered' : 'older' });
+    const prev = [this.doc, this.roster];
     this.doc = doc;
     if (this.secure) {
       this.roster = roster;
-      if (this.ck) await this.followKeyChange();
+      if (this.ck) await this.followKeyChange().catch((e) => { [this.doc, this.roster] = prev; throw e; }); // #521: refused → as before
     } else if (this.ck && !(await keyMatches(doc.keyring, this.ck))) {
       // Another device changed the key (#402): ours opens nothing here any more.
       this.lock();
@@ -220,10 +223,14 @@ export class FileVault {
   /** After a key change by an admin: unwrap the new container key with our identity (or lock if removed). */
   async followKeyChange() {
     const me = this.doc.keyring.members.find((m) => m.id === this.memberId);
-    if (this.role && me?.wrapped && me.wrapped.kv === this.doc.keyring.keyVersion && me.wrapped.kv !== this.ck.kv) {
-      const raw = await unwrapKey(me.wrapped, this.identity, `kvpwsafe/member-key/${this.doc.id}/${me.id}/${me.wrapped.kv}`);
-      this.ck = await ContainerKey.fromRaw(raw);
+    // #435 (Konrad): the same generation with another wrapping for us is a key change too (an older state taken on purpose).
+    if (this.role && me?.wrapped && me.wrapped.kv === this.doc.keyring.keyVersion && (me.wrapped.kv !== this.ck.kv || this.ownWrap() !== this.wrapSeen)) {
+      const ck = await ContainerKey.fromRaw(await unwrapKey(me.wrapped, this.identity, `kvpwsafe/member-key/${this.doc.id}/${me.id}/${me.wrapped.kv}`));
+      // #521: the wrapping is not signed – the key counts only with an admin's signed log entry it opens.
+      if (!(await keyChangeSigned(this.doc, ck, this.roster, me.wrapped.kv))) throw Object.assign(new FileFormatError(keyUnsignedMessage()), { code: 'key-unsigned' });
+      this.ck = ck;
       this.ck.kv = me.wrapped.kv;
+      this.wrapSeen = this.ownWrap();
     } else if (!this.role || this.ck.kv !== this.doc.keyring.keyVersion) {
       this.lock();
     }
@@ -243,10 +250,17 @@ export class FileVault {
     await this.load();
     const r = await unlockSecure(this.doc.keyring, credentialId, prfOutput, this.known);
     if (r.pending) return r;
+    if (!(await keyChangeSigned(this.doc, r.ck, r.roster, this.doc.keyring.keyVersion))) throw new UnlockError(keyUnsignedMessage()); // #521
     r.ck.kv = this.doc.keyring.keyVersion;
     Object.assign(this, { ck: r.ck, identity: r.identity, memberId: r.memberId, roster: r.roster });
+    this.wrapSeen = this.ownWrap();
     await this.decryptAll();
     return { memberId: r.memberId, role: r.role, platform: r.platform, hasPlatform: r.hasPlatform };
+  }
+
+  /** Our own wrapping of the container key as stored (#435: compared to notice a key change of the same generation). */
+  ownWrap(doc = this.doc) {
+    return JSON.stringify(doc?.keyring?.members?.find((m) => m.id === this.memberId)?.wrapped ?? null);
   }
 
   lock() {
@@ -274,7 +288,7 @@ export class FileVault {
       return null;
     }
     const { sig, ...body } = inner;
-    const author = this.doc.keyring.members.find((m) => m.id === body.meta?.by);
+    const author = this.roster?.current(body.meta?.by)?.member; // #521: the member whose grants were checked
     if (!author || !check(body.meta) || !(await verifyObject(author.sign, { file: this.doc.id, ...body }, sig))) return null;
     return body;
   }
@@ -287,7 +301,7 @@ export class FileVault {
   async verifyOp(op) {
     if (!op?.sig) return false;
     const { sig, ...body } = op;
-    const author = this.doc.keyring.members.find((m) => m.id === body.by);
+    const author = this.roster?.current(body.by)?.member; // #521
     return !!author && canWrite(this.roster.roleAt(body.by, body.at)) && verifyObject(author.sign, { file: this.doc.id, ...body }, sig);
   }
 
@@ -410,8 +424,9 @@ export class FileVault {
       this.lock();
       throw new Error(t('Der Schlüssel dieses Tresors wurde auf einem anderen Gerät gewechselt. Bitte neu entsperren und die Änderung wiederholen.'));
     }
-    if (this.secure && disk?.version === 2 && disk.keyring.keyVersion > this.doc.keyring.keyVersion) {
-      // An admin changed the container key meanwhile: our change is encrypted with the old key.
+    if (this.secure && disk?.version === 2 && (disk.keyring.keyVersion > this.doc.keyring.keyVersion
+      || (this.memberId && disk.keyring.keyVersion === this.doc.keyring.keyVersion && this.ownWrap(disk) !== this.ownWrap()))) {
+      // An admin changed the container key meanwhile (#435: also within the same generation): our change is encrypted with the old key.
       await this.load();
       throw new Error(t('Die Datei wurde gerade neu verschlüsselt (Benutzer entfernt). Bitte die Änderung wiederholen.'));
     }
@@ -425,10 +440,10 @@ export class FileVault {
 
   // ---------------------------------------------------------------- change log (format 2)
 
-  async addLog(payload) {
+  async addLog(payload, at = nowIso()) {
     if (!this.secure) return;
     const id = rev();
-    const meta = { id, at: nowIso(), by: this.memberId };
+    const meta = { id, at, by: this.memberId };
     this.doc.log = [...(this.doc.log || []), { id, at: meta.at, by: meta.by, kv: this.ck.kv ?? this.doc.keyring.keyVersion, data: await this.sealSigned({ meta, payload }, this.aad(`log/${id}`)) }];
   }
 
@@ -496,7 +511,8 @@ export class FileVault {
     const at = nowIso();
     const by = this.secure ? this.memberId : actor;
     const who = this.secure ? this.memberEmail(this.memberId) : actor;
-    const item = normalizeItem({ ...input, id });
+    const stored = shown && { password: shown.item ? shown.item.password ?? '' : null, passwordChanged: shown.item?.passwordChanged || '' };
+    const item = normalizeItem({ ...input, id, passwordChanged: stampPasswordChange(input, stored) }); // #500: date never from the input
     const doc = {
       v: 1, ...item, id: undefined, created: item.created || at, createdBy: item.createdBy || who, updated: at, updatedBy: who,
     };
@@ -726,6 +742,7 @@ export class FileVault {
     const ctx = { ck: this.ck, identity: this.identity, memberId: this.memberId, known: this.known };
     const target = op.memberId && this.memberEmail(op.memberId);
     const r = await applySecureOp(this.doc.keyring, ctx, op);
+    const undo = r.rotate && [structuredClone(this.doc), this.ck, this.roster, this.wrapSeen];
     this.doc.keyring = r.keyring;
     this.roster = await verifyRoster(this.doc.keyring, this.known);
     const log = {
@@ -739,6 +756,11 @@ export class FileVault {
     }[op.type];
     if (log) await this.addLog(log);
     if (r.rotate) await this.rotateKey();
+    // #521: our own proof of the new key must count for every member – checked before anything is written.
+    if (r.rotate && !(await keyChangeSigned(this.doc, this.ck, this.roster, this.ck.kv))) {
+      [this.doc, this.ck, this.roster, this.wrapSeen] = undo;
+      throw new Error(t('Der Schlüsselwechsel ließ sich nicht gültig nachweisen (Uhrzeit dieses Geräts prüfen) – nichts gespeichert.'));
+    }
     this.doc.updated = Date.now();
     await this.persist();
   }
@@ -751,7 +773,9 @@ export class FileVault {
     this.doc.keyring = await rekeyMembers(this.doc.keyring, next, this.known);
     next.kv = this.doc.keyring.keyVersion;
     this.ck = next;
-    await this.addLog({ action: 'key-rotate', keyVersion: next.kv });
+    this.wrapSeen = this.ownWrap();
+    // The proof of the new key (#521): signed, with its key check, dated after the removal just signed.
+    await this.addLog({ action: 'key-rotate', keyVersion: next.kv, keyCheck: await keyCheck(next, this.doc.id, next.kv) }, keyChangeAt(this.roster, this.memberId));
   }
 
   /**
@@ -780,7 +804,7 @@ export class FileVault {
     }
     await target.addLog({ action: 'file-migrate', count: items.length, from: this.doc.id });
     await this.io.write(JSON.stringify(target.doc, null, 1));
-    Object.assign(this, { doc: target.doc, ck: target.ck, identity: target.identity, memberId: target.memberId, roster: target.roster });
+    Object.assign(this, { doc: target.doc, ck: target.ck, identity: target.identity, memberId: target.memberId, roster: target.roster, wrapSeen: target.wrapSeen });
     await this.decryptAll();
     return this.doc.id;
   }

@@ -1,0 +1,28 @@
+{
+  "schema": "keevault-setup-plan",
+  "version": 1,
+  "target": {
+    "tenantId": "",
+    "subscriptionId": "00000000-0000-0000-0000-000000000000",
+    "location": "germanywestcentral"
+  },
+  "resourceGroup": "rg-keevault",
+  "groupPattern": "Keevault-{vault}-{level}",
+  "vaults": [
+    { "name": "kv-team-a", "displayName": "Team A" },
+    { "name": "kv-team-b", "displayName": "Team B" }
+  ],
+  "steps": {
+    "subscriptionTip": true,
+    "resourceGroup": true,
+    "vaults": true,
+    "groups": true,
+    "roles": true,
+    "pim": true,
+    "breakGlass": true,
+    "conditionalAccess": true
+  },
+  "answers": {
+    "breakGlassFidoLocation": "Safe im Serverraum, Schlüssel bei der IT-Leitung"
+  }
+}

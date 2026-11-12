@@ -153,13 +153,15 @@ class ProviderError extends Error {
 export class WindowsProvider {
   /**
    * vault(): VaultSession, isOpen(): bool, actor(): string, show(): bring the app to the front, notify(): UI update,
-   * pin: { state() → { required, pinSet }, check(pin) } – the app PIN that every passkey use needs (#439)
+   * pin: { state() → { required, pinSet }, check(pin) } – the app PIN that every passkey use needs (#439),
+   * windowLocked(): the session is open for the browser extension only, the window keeps its lock screen (#507)
    */
-  constructor({ vault, isOpen, actor, show, notify, pin }) {
+  constructor({ vault, isOpen, actor, show, notify, pin, windowLocked = () => false }) {
     if (!pin) throw new Error('WindowsProvider needs the passkey PIN check');
     this.pin = pin;
     this.vault = vault;
     this.isOpen = isOpen;
+    this.windowLocked = windowLocked;
     this.actor = actor;
     this.show = show;
     this.notify = notify;
@@ -202,6 +204,9 @@ export class WindowsProvider {
 
   /** Pending requests with what the confirmation dialog needs (only when the vault is open). */
   async list() {
+    // #507: behind the window's lock only that a sign-in waits – no site, account, entry or vault, no vault list. The
+    // window's PIN unlocks it, then the request shows in full.
+    if (this.windowLocked()) return [...this.pending.values()].map((p) => ({ id: p.id, kind: p.kind, locked: true, held: true }));
     const out = [];
     for (const p of this.pending.values()) {
       const info = {
@@ -246,6 +251,8 @@ export class WindowsProvider {
       this.finish(id, new ProviderError('Cancelled', t('Vom Benutzer abgebrochen')));
       return;
     }
+    // #507: refusing works always, allowing only after the window was unlocked with the PIN.
+    if (this.windowLocked()) throw new ProviderError('WindowLocked', t('Das Fenster ist gesperrt – bitte mit der PIN entsperren'));
     const vault = this.vault();
     if (p.kind === 'create') {
       if (p.parsed.excludeList.length && (await vault.passkeyCandidates(p.rpId, p.parsed.excludeList)).length) {

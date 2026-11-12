@@ -4,7 +4,8 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { newIdentity, signObject } from '../extension/core/members.js';
+import { newIdentity, signObject, wrapKey } from '../extension/core/members.js';
+import { ContainerKey } from '../extension/core/protect.js';
 
 export async function fileSwapCheck({ files, js, sleep, errors, dir, changed }) {
   const file = path.join(dir, 'Swap404.kvpws');
@@ -76,6 +77,36 @@ export async function rollbackCheck({ files, errors, file, id }) {
     await files.watched(files.entries.get(id));
   }
   return null;
+}
+
+/**
+ * #521: a container key wrapped for us by someone with write access to the share (next generation, no signed key change
+ * of an admin) is refused by the watcher: shown as a warning, the open vault keeps its key, a save writes nothing.
+ */
+export async function foreignKeyCheck({ files, errors, file, id }) {
+  const current = await fs.readFile(file, 'utf8');
+  const doc = JSON.parse(current);
+  const vault = files.entries.get(id)?.vault;
+  const before = vault?.ck?.exported;
+  const evil = await ContainerKey.generate();
+  const kv = doc.keyring.keyVersion + 1;
+  doc.keyring.keyVersion = kv;
+  doc.keyring.members = await Promise.all(doc.keyring.members.map(async (m) => (m.id === vault?.memberId
+    ? { ...m, wrapped: { kv, ...(await wrapKey(evil.raw, m.ecdh, `kvpwsafe/member-key/${doc.id}/${m.id}/${kv}`)) } } : m)));
+  try {
+    await fs.writeFile(file, JSON.stringify(doc));
+    await files.watched(files.entries.get(id));
+    const warning = (await files.containers()).find((c) => c.id === id)?.warning || '';
+    if (!/nicht von einem Admin|not set by an admin/.test(warning)) errors.push(`foreign key: an unsigned key change is not shown as a warning (#521): ${warning}`);
+    const now = files.entries.get(id)?.vault?.ck?.exported;
+    if (now === evil.exported) errors.push('foreign key: the device took a key wrapped by someone else (#521)');
+    else if (now !== before) errors.push('foreign key: the open vault lost its key (#521)');
+    await files.rename(id, 'Team-521').catch(() => {});
+    if (JSON.parse(await fs.readFile(file, 'utf8')).name === 'Team-521') errors.push('foreign key: a change was saved into the file with the foreign key (#521)');
+  } finally {
+    await fs.writeFile(file, current);
+    await files.watched(files.entries.get(id));
+  }
 }
 
 /** #433: an unsigned entry in rejected (written by any writer) takes no admin out of the secured team file. */

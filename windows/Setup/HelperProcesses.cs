@@ -57,6 +57,8 @@ namespace Keevault.Setup
             if (string.IsNullOrEmpty(commandLine)) return false;
             var c = commandLine.Replace('/', '\\');
             return c.IndexOf("\\native-host\\host.cjs", StringComparison.OrdinalIgnoreCase) >= 0
+                || c.IndexOf(" --native-host", StringComparison.OrdinalIgnoreCase) >= 0 // #505: the relay (Keevault-Update.exe)
+                || c.IndexOf(" chrome-extension:", StringComparison.OrdinalIgnoreCase) >= 0 // #505: the relay as the browser starts it
                 || c.IndexOf("\\mcp\\keevault-mcp.cjs", StringComparison.OrdinalIgnoreCase) >= 0;
         }
     }

@@ -53,13 +53,21 @@ async function moveAssets({ js, fail, vault, changed, kvc, target, seen }) {
     if (!/Passkeys wandern mit/.test(dialogText) && !/Passkeys move along/.test(dialogText)) fail(AREA, 'the dialog does not say that passkeys move along and the history stays');
     if (!(await js('document.querySelector("dialog[open] input[name=moveAssets]")?.checked'))) fail(AREA, 'the box "move linked assets" is not ticked by default');
 
-    // Unticked: only the login moves, and it is refused because assets still use it – nothing changes.
-    await js('document.querySelector("dialog[open] input[name=moveAssets]").click(); document.querySelector("dialog[open] .modal-footer .btn.primary")?.click(); true');
-    await until(() => js('!!document.getElementById("toast")?.classList.contains("error")'), 4000);
+    // Unticked: only the login moves, and it is refused because assets still use it – nothing changes. The button is
+    // disabled while the move runs: judged only once it is usable again with a fresh error message (#526: an error toast
+    // left by an earlier area and a slow full run let the check look too early).
+    const primary = 'document.querySelector("dialog[open] .modal-footer .btn.primary")';
+    await js('document.getElementById("toast")?.classList.remove("error"); document.querySelector("dialog[open] input[name=moveAssets]").click(); true');
+    await js(`${primary}?.click(); true`);
+    const refused = await until(() => js(`!!${primary} && !${primary}.disabled && !!document.getElementById("toast")?.classList.contains("error")`), 20000);
+    if (!refused) return fail(AREA, `unticked: no refusal within 20 s (${await js('document.getElementById("toast")?.textContent || "no message"')})`);
     if (!(await inVault(kvc.id, LOGIN)) || await inVault(target.id, LOGIN)) fail(AREA, 'unticked: the login moved although assets use it');
 
-    // Ticked: all three arrive in the target, the source has none of them, the links are valid there.
-    await js('document.querySelector("dialog[open] input[name=moveAssets]").click(); document.querySelector("dialog[open] .modal-footer .btn.primary")?.click(); true');
+    // Ticked: all three arrive in the target, the source has none of them, the links are valid there. The move copies
+    // one entry after the other and deletes the originals last: judged once the dialog has closed (#526: the login alone
+    // in the target is not the end of the move).
+    await js(`document.querySelector("dialog[open] input[name=moveAssets]").click(); ${primary}?.click(); true`);
+    if (!(await until(() => js('!document.querySelector("dialog[open] .move-plan")'), 20000))) return fail(AREA, 'ticked: the move did not finish within 20 s (the dialog is still open)');
     const moved = await until(async () => !!(await inVault(target.id, LOGIN)), 8000);
     if (!moved) return fail(AREA, 'the login did not arrive in the target vault');
     for (const title of [LOGIN, ASSET1, ASSET2]) {

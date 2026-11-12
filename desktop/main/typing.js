@@ -22,13 +22,24 @@ export function helperExe() {
   return candidates.find((p) => { try { return statSync(p).isFile(); } catch { return false; } }) || null;
 }
 
+/** Exit code of the clipboard modes when another program held the clipboard for the whole wait (windows/Setup/Clip.cs). */
+export const CLIPBOARD_BUSY = 2;
+/** --clipboard wrote the text, but the clipboard was held while reading it back (#526): counts as copied. */
+export const CLIPBOARD_UNVERIFIED = 4;
+
+/**
+ * Longest run of the helper: the clipboard modes open the clipboard up to twice (write, read back), each waiting up
+ * to 5 s for a busy one (#526), plus the process start.
+ */
+export const HELPER_EXE_TIMEOUT_MS = 12_000;
+
 /** Runs the own helper in one mode with the text on stdin (no command line, no window); its exit code, null if missing. */
 export function runHelperExe(mode, text) {
   const exe = helperExe();
   if (!exe) return Promise.resolve(null);
   return new Promise((resolve) => {
     const child = spawn(exe, [mode], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
-    const timer = setTimeout(() => { child.kill(); resolve(null); }, 4000);
+    const timer = setTimeout(() => { child.kill(); resolve(null); }, HELPER_EXE_TIMEOUT_MS);
     child.on('error', () => { clearTimeout(timer); resolve(null); });
     child.on('exit', (code) => { clearTimeout(timer); resolve(code); });
     child.stdin.end(Buffer.from(text, 'utf8'));

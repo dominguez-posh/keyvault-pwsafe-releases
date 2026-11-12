@@ -5,7 +5,7 @@
 
 import { h, setChildren, showPinProblem } from '../core/dom.js';
 import { setLanguage, t } from '../core/i18n.js';
-import { call } from '../lib/api.js';
+import { call, unlockError } from '../lib/api.js';
 
 const [requestId = '', choice = ''] = location.hash.slice(1).split(':').map((x) => decodeURIComponent(x));
 const [containerId, itemId, credentialId] = choice.split('|');
@@ -54,17 +54,24 @@ window.addEventListener('focus', () => pin?.focus());
       return;
     }
     busy = true;
+    // #508: the app checks the PIN and signs – the field is locked meanwhile and says so, never looks frozen.
+    pin.disabled = true;
+    problem.hidden = true;
+    status.hidden = false;
     try {
       await call('webauthn:pinApprove', { requestId, containerId, itemId, credentialId, pin: typed });
       // Signed in: the tag shows the success and removes this frame.
     } catch (err) {
-      // Wrong PIN, blocked for a while (countdown), covered: the request stays open, the frame stays.
-      showPinProblem(problem, err.message);
-      pin.focus();
+      // Wrong PIN, blocked for a while (countdown), covered, no answer in time: the request stays open, the frame stays.
+      showPinProblem(problem, unlockError(err));
     } finally {
       busy = false;
+      status.hidden = true;
+      pin.disabled = false;
+      pin.focus();
     }
   });
-  setChildren(main, [h('label', {}, t('App-PIN eingeben, um diese Anmeldung zu erlauben')), pin, problem]);
+  const status = h('div', { class: 'busy', role: 'status', hidden: true }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), t('Entsperre …'));
+  setChildren(main, [h('label', {}, t('App-PIN eingeben, um diese Anmeldung zu erlauben')), pin, status, problem]);
   if (document.hasFocus()) pin.focus();
 })();

@@ -81,7 +81,7 @@ test('export PIN: exportItems checks the confirmation in the main process before
   const body = src.slice(src.indexOf('async exportItems('), src.indexOf('async changelog('));
   assert.match(body, /^async exportItems\(containerId, pinToken\) \{\s*requireOpen\(\);\s*exportPin\.consume\(containerId, pinToken\);/);
   assert.ok(body.indexOf('exportPin.consume') < body.indexOf('showSaveDialog'), 'checked before the save dialog');
-  assert.match(src, /confirmExportPin: \(containerId, pin\) => exportPin\.confirm\(containerId, pin\)/);
+  assert.match(src, /confirmExportPin: \(containerId, pin\) => \{\s*requireOpen\(\);[^\n]*\n\s*return exportPin\.confirm\(containerId, pin\);/, '#477: only in the unlocked app');
   const guards = readFileSync(new URL('../desktop/main/guards.js', import.meta.url), 'utf8');
   assert.match(guards, /new ExportPinGate\(\{ settings: \(\) => config\.get\(\), guard: pinGuard,/, 'the same counter as unlocking');
   const backup = readFileSync(new URL('../desktop/main/api/backup.js', import.meta.url), 'utf8');

@@ -16,6 +16,12 @@ const card = (label) => `[...document.querySelectorAll(".detail-pane .field-card
 
 export async function fieldHoverCheck(ctx) {
   const { js, sleep, fail, save, openItem, win, clipboardHas, setAdmin, isAdmin } = ctx;
+  // #499: a partial run reaches the first copy without the clipboard step before it. The helper program (a process start,
+  // the clipboard may be held by another program for a moment) is ready or the check says so – it is not blamed on the card.
+  const marker = `kv-hover-ready-${Date.now()}`;
+  if (!(await until(async () => (await ctx.copyViaHelperExe(marker)) && (await clipboardHas(marker)), 20000, 500))) {
+    return fail('the clipboard is not usable within 20 s (Keevault-Update.exe --clipboard fails: missing in windows/out, or another program holds the clipboard); the copy checks cannot run');
+  }
   await save({ type: 'login', title: 'Smoke Hover', username: 'hover-user', password: 'Hover-Pass-1', totp: TOTP_SECRET, urls: ['https://one.hover.example', 'https://two.hover.example'],
     fields: [{ name: 'Mandanten-ID', value: 'tenant-4711', type: 'text', hidden: false }, { name: 'Primäre Domäne', value: '', type: 'text', hidden: false }] });
   await openItem('Smoke Hover');
@@ -80,12 +86,12 @@ export async function fieldHoverCheck(ctx) {
       if (!/^\d{3} \d{3}$/.test(totp.code) || !/^\d+$/.test(totp.timer)) fail(`TOTP: no current code with countdown ${JSON.stringify(totp)}`);
       if (totp.secret) fail('TOTP: the secret is in the card');
       let copied = false;
-      for (let i = 0; i < 2 && !copied; i++) {
+      for (let i = 0; i < 3 && !copied; i++) {
         await js('document.querySelector(".detail-pane .totp-field > label")?.click()');
         const code = (await js('document.querySelector(".detail-pane .totp-field .value.totp")?.textContent || ""')).replace(/\s/g, '');
         for (let j = 0; j < 8 && !copied; j++) { await sleep(300); copied = !!code && await clipboardHas(code); }
       }
-      if (!copied) fail('TOTP: a click on the card did not copy the current code');
+      if (!copied) fail(`TOTP: a click on the card did not copy the current code (toast: ${await js('JSON.stringify([...document.querySelectorAll(".toast")].map((e) => e.textContent))')}, dialogs: ${await js('JSON.stringify([...document.querySelectorAll("dialog[open]")].map((d) => d.innerText.slice(0, 80)))')})`);
       if (await clipboardHas(TOTP_SECRET)) fail('TOTP: the click copied the secret (#469)');
     }
     await widthCheck();

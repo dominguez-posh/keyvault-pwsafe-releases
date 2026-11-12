@@ -15,6 +15,7 @@ import { diag } from './diag.js';
 import { requireOpen } from './guards.js';
 import { actor, changed, send } from './session.js';
 import { helperExe } from './typing.js';
+import { detectOneDrive, parseRegistryRoots } from '../onedrive-detect.js';
 
 // ---------------------------------------------------------------- personal vault
 // Free file vault for one person: in a synchronised folder (OneDrive, iCloud, Dropbox …) or on a network drive, never
@@ -44,8 +45,37 @@ function syncClientRunning(provider) {
   });
 }
 
+/**
+ * Location of a folder or file: the helper's answer (Cloud Files API, drive type); when that says local or fails,
+ * OneDrive signals as a fallback – UserFolder in the registry, the OneDrive* variables, Cloud Files attributes (#514).
+ */
+async function locateRaw(target) {
+  const info = await locateHelper(target);
+  if (info?.kind === 'cloud' || info?.kind === 'network' || demo || smokeTest || process.platform !== 'win32') return info;
+  const found = detectOneDrive(target, { registryRoots: await registryRoots(), attrs: await folderAttributes(target) });
+  return found ? { ...found, file: info?.file ?? false } : info;
+}
+
+/** UserFolder of every OneDrive account (HKCU), empty when none or unreadable. */
+function registryRoots() {
+  return new Promise((resolve) => {
+    execFileCb('reg', ['query', 'HKCU\\Software\\Microsoft\\OneDrive\\Accounts', '/s', '/v', 'UserFolder'], { windowsHide: true, timeout: 5000 }, (err, out) => resolve(err ? [] : parseRegistryRoots(String(out))));
+  });
+}
+
+/** Attribute bits of the folder (or the folder of a file) via PowerShell; null when unknown. */
+function folderAttributes(target) {
+  return new Promise((resolve) => {
+    const script = '$p=$env:KV_LOCATE_PATH; if (-not (Test-Path -LiteralPath $p -PathType Container)) { $p=Split-Path -LiteralPath $p }; [int](Get-Item -LiteralPath $p -Force).Attributes';
+    execFileCb('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: 5000, env: { ...process.env, KV_LOCATE_PATH: String(target) } }, (err, out) => {
+      const n = parseInt(String(out).trim(), 10);
+      resolve(err || Number.isNaN(n) ? null : n);
+    });
+  });
+}
+
 /** Location of a folder or file via Keevault-Update.exe --location (Cloud Files API, drive type). */
-function locateRaw(target) {
+function locateHelper(target) {
   // Smoke tests: a temporary folder stands in for a network drive (never the user's real OneDrive).
   if (smokeTest && process.env.KVPWSAFE_TEST_REMOTE && path.resolve(target).startsWith(path.resolve(process.env.KVPWSAFE_TEST_REMOTE))) return Promise.resolve(process.env.KVPWSAFE_TEST_PROVIDER ? { kind: 'cloud', provider: process.env.KVPWSAFE_TEST_PROVIDER, providerStatus: 'idle', inSync: true } : { kind: 'network', file: false });
   // Demo: its own OneDrive stand-in in the demo profile (the personal vault wizard never touches the real one).
@@ -85,7 +115,7 @@ export async function refreshFileLocations() {
   return changedAny;
 }
 
-const demoOneDrive = () => {
+export const demoOneDrive = () => {
   const dir = path.join(app.getPath('userData'), 'OneDrive - Demo');
   mkdirSync(dir, { recursive: true });
   return dir;

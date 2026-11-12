@@ -3,6 +3,7 @@
 import { h, icon, iconButton, setChildren, toast, formatDateTime } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
 import { sharedNames, shownVaultHost } from '../../../extension/core/session-meta.js';
+import { vaultIcon, vaultLook } from '../../../extension/core/ui-vault.js';
 import { call } from './ipc.js';
 import { panes } from './layout.js';
 import { busyContainers, items, logos, st, ui } from './state.js';
@@ -145,7 +146,7 @@ export function containerIcon(c) {
   if (c.personal) return icon('user');
   if (logos.get(c.id)) return h('img', { class: 'container-logo', src: logos.get(c.id), alt: '' });
   if (c.kind === 'file') return icon('note');
-  return icon(c.protected ? 'shield' : 'vault');
+  return vaultIcon(c, c.protected ? 'shield' : 'vault'); // #480: symbol and colour of the vault's settings
 }
 
 export function renderSidebar() {
@@ -176,7 +177,7 @@ export function renderSidebar() {
       ondragend: () => { setDraggedVault(null); } },
       h('button', {
         class: `nav ${ui.containerId === c.id ? 'active' : ''}`,
-        title: [c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
+        title: [vaultLook(c).description, c.vaultUrl || c.path, c.error?.message, t('Rechtsklick: alle Funktionen')].filter(Boolean).join('\n'),
         onclick: () => select({ view: 'container', containerId: c.id }),
       // Personal vault: the person first, then where it lives (OneDrive, iCloud, Dropbox …); other vaults the other way round.
       }, ...(c.personal ? [containerIcon(c), sourceBadge(c)] : [sourceBadge(c), containerIcon(c)]), h('span', { class: 'nav-label' }, c.name,

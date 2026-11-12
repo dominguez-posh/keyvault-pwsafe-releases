@@ -63,12 +63,17 @@ const send = (method, params = {}, sessionId) => new Promise((resolve, reject) =
 const evaluate = async (sessionId, expression) => (await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId)).result?.value;
 
 /** Opens the demo in light/dark and de/en at the app's screenshot size (1200×780 at 125 %, like the app's shots). */
-async function openDemo({ lang, theme }) {
+async function openDemo({ lang, theme, phone }) {
   const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
   await send('Runtime.enable', {}, sessionId);
   await send('Page.enable', {}, sessionId);
-  await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 780, deviceScaleFactor: 1.25, mobile: false }, sessionId);
+  if (phone) {
+    // A phone: narrow screen, touch, no Windows platform (the app's "frameless" window mode is for Windows only).
+    await send('Emulation.setDeviceMetricsOverride', { width: phone.width, height: phone.height, deviceScaleFactor: 2, mobile: true }, sessionId);
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }, sessionId);
+    await send('Emulation.setUserAgentOverride', { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36', platform: 'Linux armv81' }, sessionId);
+  } else await send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 780, deviceScaleFactor: 1.25, mobile: false }, sessionId);
   await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] }, sessionId);
   await send('Page.navigate', { url: `${origin}/demo/desktop/renderer/index.html?lang=${lang}` }, sessionId);
   for (let i = 0; i < 60; i++) {
@@ -145,6 +150,114 @@ for (const lang of ['de', 'en']) {
     }
   }
   await send('Target.closeTarget', { targetId });
+}
+
+// The demo on a phone (#438): 360×740 and 390×844, German and English. No horizontal overflow in any state, the menu is
+// reachable and slides in, an entry opens as its own page and "Back" returns to the list, tap targets are at least 44 px,
+// and the personal vault opens with the demo PIN. --mobile-shots=<dir> writes demo-mobil-<w>x<h>-<lang>-<state>.png.
+const PHONES = [{ width: 360, height: 740 }, { width: 390, height: 844 }];
+for (const phone of PHONES) {
+  for (const lang of ['de', 'en']) {
+    const tag = `Handy ${phone.width}×${phone.height} ${lang}`;
+    console.log(tag);
+    const { targetId, sessionId } = await openDemo({ lang, theme: 'light', phone });
+    const ev = (expr) => evaluate(sessionId, expr);
+    const shot = async (state) => {
+      if (!arg('mobile-shots')) return;
+      mkdirSync(arg('mobile-shots'), { recursive: true });
+      const { data } = await send('Page.captureScreenshot', { format: 'png' }, sessionId);
+      writeFileSync(join(arg('mobile-shots'), `demo-mobil-${phone.width}x${phone.height}-${lang}-${state}.png`), Buffer.from(data, 'base64'));
+    };
+    // A real touch at the centre of the first visible element that matches (and whose text matches).
+    const tap = async (selector, text = '') => {
+      if (process.env.DEMO_DEBUG) console.log('  tap', selector, text);
+      const pt = await ev(`(() => {
+        const re = new RegExp(${JSON.stringify(text)});
+        const el = [...document.querySelectorAll(${JSON.stringify(selector)})].find((e) => e.checkVisibility({ visibilityProperty: true }) && re.test(e.textContent));
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      })()`);
+      if (!pt) return false;
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [pt] }, sessionId);
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sessionId);
+      await sleep(600);
+      return true;
+    };
+    const overflow = (state) => ev(`(() => {
+      const w = innerWidth, bad = [];
+      if (document.documentElement.scrollWidth > w) bad.push('Seite ' + document.documentElement.scrollWidth);
+      for (const el of document.querySelectorAll('.shell > *, .shell .list-pane > *, .shell .detail-pane > *, .shell .detail-pane .item-detail > *, dialog[open], .main-menu')) {
+        if (!el.checkVisibility({ visibilityProperty: true })) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && (r.right > w + 1 || r.left < -1)) bad.push((el.className || el.tagName) + ' ' + Math.round(r.left) + '..' + Math.round(r.right));
+      }
+      for (const el of document.querySelectorAll('.list-pane, .detail-pane')) if (el.checkVisibility() && el.scrollWidth > el.clientWidth + 1) bad.push('waagerecht scrollbar in ' + el.className);
+      return bad.join('; ');
+    })()`).then((bad) => { if (bad) errors.push(`Demo (${tag}, ${state}): Überlauf: ${bad}`); });
+    const tapSizes = (state) => ev(`(() => {
+      const bad = [];
+      for (const el of document.querySelectorAll('button, a[href], select, input:not([type="hidden"]), summary, [role="button"], .row-item, .nav, .folder-row')) {
+        if (!el.checkVisibility({ visibilityProperty: true })) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0 || r.height === 0 || r.right < 0 || r.left > innerWidth || r.bottom < 0 || r.top > innerHeight) continue;
+        if (el.matches('input[type="checkbox"], input[type="radio"]') && el.closest('label')?.getBoundingClientRect().height >= 44) continue;
+        if (el.closest('.splitter, .drag-strip') || el.closest('button, .nav')?.contains(el) && el.closest('button, .nav') !== el) continue;
+        if (Math.min(r.width, r.height) < 43.5) bad.push((el.className || el.tagName).toString().slice(0, 30) + '[' + (el.getAttribute('aria-label') || el.textContent).trim().slice(0, 24) + '] ' + Math.round(r.width) + '×' + Math.round(r.height));
+      }
+      return [...new Set(bad)].slice(0, 6).join('; ');
+    })()`).then((bad) => { if (bad) errors.push(`Demo (${tag}, ${state}): Tippfläche unter 44 px: ${bad}`); });
+
+    await shot('liste');
+    await overflow('Start');
+    await tapSizes('Start');
+    // Menu: reachable, slides in, closes after a choice
+    if (!(await tap('.m-menu-btn'))) errors.push(`Demo (${tag}): Menü-Knopf nicht erreichbar`);
+    else {
+      const open = await ev(`(() => { const r = document.querySelector('.sidebar').getBoundingClientRect(); return document.querySelector('.shell').classList.contains('m-nav-open') && r.left >= 0 && r.right <= innerWidth && r.width > 200; })()`);
+      if (!open) errors.push(`Demo (${tag}): Menü klappt nicht auf`);
+      await shot('menue');
+      await overflow('Menü offen');
+      await tapSizes('Menü offen');
+      if (!(await tap('.sidebar .nav', 'Team Infrastruktur'))) errors.push(`Demo (${tag}): Tresor im Menü nicht antippbar`);
+      if (await ev(`document.querySelector('.shell').classList.contains('m-nav-open')`)) errors.push(`Demo (${tag}): Menü bleibt nach der Auswahl offen`);
+    }
+    // Entry: open (list → detail), back (detail → list)
+    if (!(await ev(`!!document.querySelector('.list li.row-item[data-key]')`))) await tap('.list li', 'Monitoring');
+    if (!(await tap('.list li.row-item[data-key]'))) errors.push(`Demo (${tag}): kein Eintrag in der Liste`);
+    else {
+      const state = await ev(`(() => {
+        const q = (s) => document.querySelector(s);
+        return JSON.stringify({ detail: q('.shell').classList.contains('m-detail'), title: q('.detail-pane .item-head h2')?.textContent || '',
+          listHidden: !q('.list-pane').checkVisibility(), detailShown: q('.detail-pane').checkVisibility(), back: !!q('.m-back-btn')?.checkVisibility() });
+      })()`).then((v) => JSON.parse(v));
+      if (!state.detail || !state.title || !state.listHidden || !state.detailShown || !state.back) errors.push(`Demo (${tag}): Eintrag öffnet nicht als eigene Seite ${JSON.stringify(state)}`);
+      await shot('eintrag');
+      await overflow('Eintrag');
+      await tapSizes('Eintrag');
+      if (!(await tap('.m-back-btn'))) errors.push(`Demo (${tag}): Zurück-Knopf nicht antippbar`);
+      const back = await ev(`document.querySelector('.list-pane').checkVisibility() && !document.querySelector('.detail-pane').checkVisibility() && !document.querySelector('.shell').classList.contains('m-detail')`);
+      if (!back) errors.push(`Demo (${tag}): Zurück führt nicht zur Liste`);
+    }
+    // Personal vault with the demo PIN
+    await tap('.m-menu-btn');
+    await tap('.personal-slot .nav');
+    const pin = (await ev(`document.querySelector('.unlock-panel .demo-hint')?.textContent || ''`)).match(/\d{6}/)?.[0];
+    if (!pin) errors.push(`Demo (${tag}): Demo-PIN wird auf dem Handy nicht angezeigt`);
+    else {
+      await shot('persoenlich-gesperrt');
+      await overflow('Persönlich gesperrt');
+      await tapSizes('Persönlich gesperrt');
+      await ev(`(() => { const i = document.querySelector('.unlock-panel form input'); i.value = ${JSON.stringify(pin)}; i.form.requestSubmit(); })()`);
+      await sleep(1000);
+      const n = await ev(`window.pwsafe.invoke('items').then((r) => r.result.filter((x) => /personal/.test(x.containerId)).length)`);
+      if (n < 3) errors.push(`Demo (${tag}): „Persönlich“ lässt sich auf dem Handy mit der Demo-PIN nicht öffnen (Einträge: ${n})`);
+      await shot('persoenlich');
+      await overflow('Persönlich offen');
+      await tapSizes('Persönlich offen');
+    }
+    await send('Target.closeTarget', { targetId });
+  }
 }
 
 if (out) {

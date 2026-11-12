@@ -8,13 +8,15 @@ import { vaultHost } from '../../extension/core/keyvault.js';
 import { OfflineMirror } from '../offline.js';
 import { setLanguage, t } from '../../extension/core/i18n.js';
 import { demo, smokeTest } from './boot.js';
-import { auth, bridge, config, files, mcp, opened, setOpened, setVault, vault, win, windows } from './state.js';
+import { auth, bridge, config, files, mcp, opened, setOpened, setVault, setWindowLocked, vault, win, windowLocked, windows } from './state.js';
 import { cancelQuestions } from './agents.js';
 import { lastBackup, pendingRestore, setLastBackup, setPendingRestore } from './backup.js';
 import { busySince, diag, timedFetch, timedToken } from './diag.js';
 import { scheduleSettingsSync } from './settings-sync.js';
 import { applyShortcuts, selectedKey, setSelectedKey } from './typing.js';
 import { viewerId } from './private.js';
+import { clearCopyRules } from './vault-rules.js';
+import { pinGuard } from './guards.js';
 
 export class DemoAuth {
   account = null;
@@ -37,7 +39,9 @@ export class DemoAuth {
   }
 }
 
-export const send = (data) => win?.webContents.send('event', data);
+// #507: while the window is locked alone, nothing about the vaults reaches it (loading, progress with counts or names).
+const QUIET_WHILE_WINDOW_LOCKED = new Set(['busy', 'progress', 'mcpTrusted']);
+export const send = (data) => (windowLocked && QUIET_WHILE_WINDOW_LOCKED.has(data?.type) ? undefined : win?.webContents.send('event', data));
 export const signedIn = () => !!auth.account;
 export const actor = () => auth.account?.username || process.env.USERNAME || process.env.USER || '';
 
@@ -157,8 +161,10 @@ export function lockIfWindowsLocked() {
 }
 
 export async function lockNow() {
+  pinGuard.consume(); // a PIN entered before locking must not open the app afterwards
   mcp?.revoke();
   cancelQuestions();
+  clearCopyRules(); // #480
   if (!opened && !auth.account) return;
   clearInterval(reconcileTimer);
   if (opened && !offlineMode) await vault.flushFastIndex().catch(() => {});
@@ -176,6 +182,7 @@ export async function lockNow() {
     keptVault = false;
   }
   setOpened(false);
+  setWindowLocked(false); // #507: locking ends the session for the window and the extension alike
   setSelectedKey(null);
   setLastBackup(null);
   setPendingRestore(null);
@@ -202,14 +209,38 @@ export async function refreshAll({ quick = false } = {}) {
   // Marked Key Vaults connect by themselves only when the user turned that on (demo and smoke: always).
   const discover = !!(config.get().autoDiscover || demo || smokeTest);
   const options = { configured: configuredContainers(), hidden: config.get().hiddenContainers, discover };
-  const { discoverError } = await vault.refreshContainers(quick ? { ...options, tenants: false, access: false } : options);
-  if (mirrorWanted()) offlineMirror().setContainers(await vault.containers());
-  // Index secrets first (a few GETs however big the vault); the full listing reconciles in the background.
-  await vault.refreshIndexFast();
-  completeInBackground(vault, quick ? options : null);
-  rememberTenants().catch(() => {});
-  return discoverError;
+  const listed = vaultListRun();
+  try {
+    const { discoverError } = await vault.refreshContainers(quick ? { ...options, tenants: false, access: false } : options);
+    if (!quick) listed();
+    if (mirrorWanted()) offlineMirror().setContainers(await vault.containers());
+    // Index secrets first (a few GETs however big the vault); the full listing reconciles in the background.
+    await vault.refreshIndexFast();
+    completeInBackground(vault, quick ? options : null, listed);
+    rememberTenants().catch(() => {});
+    return discoverError;
+  } catch (e) {
+    listed();
+    throw e;
+  }
 }
+
+/**
+ * The vault list is being searched (#511 review): from the start of a refresh until all tenants are through (after
+ * unlocking that is in the background). Meanwhile the vaults the user sees may lack some of theirs.
+ * → done(), to call once when it is through (more calls do nothing).
+ */
+let vaultListRuns = 0;
+export function vaultListRun() {
+  vaultListRuns++;
+  let open = true;
+  return () => {
+    if (open) vaultListRuns--;
+    open = false;
+  };
+}
+/** No vault search running: the vaults the user sees are all there are. */
+export const vaultListComplete = () => vaultListRuns === 0;
 
 /** Periodic reconcile while unlocked: the listing checks the index secrets and repairs drift. */
 const RECONCILE_MS = 30 * 60_000;
@@ -221,9 +252,13 @@ function scheduleReconcile() {
   }, RECONCILE_MS);
 }
 
-function completeInBackground(session, options) {
+function completeInBackground(session, options, listed = () => {}) {
   (async () => {
-    if (options) await session.refreshContainers(options);
+    try {
+      if (options) await session.refreshContainers(options);
+    } finally {
+      listed();
+    }
     // Vaults without a resource ID (added by hand or by policy) get their role only here – without it the
     // admin functions (folders, settings) stay hidden.
     await session.refreshAccess().catch(() => {});

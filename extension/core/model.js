@@ -32,6 +32,29 @@ const SOPHOS_LOGO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAA
 // Sophos login: a login flavour (own 'New' entry, logo, portal buttons). With MFA (a TOTP set) the Sophos portals
 // want the password and the one-time code typed together into the password field – see cs:fill (browser only).
 export const isSophosLogin = (item) => item.type === 'login' && !!item.sophos;
+
+/**
+ * #487: the admin flags (Microsoft admin account, Sophos login) change only in the desktop's admin mode. Outside it a
+ * save keeps the stored values (a new entry gets none); a Sophos login keeps its portals when none come along.
+ */
+export function keepAdminFlags(next, stored) {
+  const login = next?.type === 'login';
+  const sophos = login && !!stored?.sophos;
+  const portals = sophos ? (next.portals?.length ? next.portals : stored.portals || []) : [];
+  return { ...next, msAdmin: login && !!stored?.msAdmin, sophos, portals };
+}
+
+/**
+ * #487 (Lucas, 2026-11-10): the type "Server/Gerät" (RDP, TeamViewer, Bastion) is created and edited only in admin mode.
+ * Outside it a stored server keeps its type, connection data and account (favourite, folder, title may change); a new
+ * server entry, or another entry turned into one, is refused.
+ */
+export function keepServer(next, stored) {
+  if (!next) return next;
+  if (stored?.type === 'server') return { ...next, type: 'server', server: stored.server, username: stored.username, password: stored.password };
+  if (next.type === 'server') throw new Error(t('Server und Geräte legst du nur im Admin-Modus an oder änderst sie dort.'));
+  return next;
+}
 /**
  * A login linked to another login (loginLink): user name and password from the linked entry, the one-time code from
  * the entry itself if it has one (e.g. a Sophos portal's own MFA), else from the linked one. Only within the same
@@ -338,8 +361,32 @@ export function itemRpIds(item) {
   return [...new Set((item.passkeys || []).map((p) => p.rpId).filter(Boolean))];
 }
 
+/**
+ * Date of the last real password change (#500), whoever saves (window, extension, MCP, restore of a version): a new
+ * password stamps `now`, an unchanged one keeps the stored date. Edits of the title or notes never count. `stored` is
+ * the entry as saved ({ password, passwordChanged }), null for a new entry; a password of null means it could not be
+ * read. A date sent along in `input` is never taken over (review 0.9.33: it would make an old password look fresh),
+ * and a stored date in the future or before 2000 is dropped.
+ */
+export function stampPasswordChange(input, stored, now = new Date().toISOString()) {
+  const password = String(input?.password ?? '');
+  if (!stored) return password ? now : '';
+  if (stored.password != null && password !== String(stored.password)) return now;
+  return plausibleChange(stored.passwordChanged, now);
+}
+
+const EARLIEST_CHANGE = Date.parse('2000-01-01T00:00:00Z');
+const CLOCK_SKEW = 5 * 60_000;
+
+function plausibleChange(value, now) {
+  const at = Date.parse(String(value || ''));
+  if (!Number.isFinite(at) || at < EARLIEST_CHANGE || at > Date.parse(now) + CLOCK_SKEW) return '';
+  return new Date(at).toISOString();
+}
+
 /** Serializes an item into the secret value, content type and tags. */
-export function serializeItem(input, actor = '') {
+/** existing: the entry is already stored – the actor is then never written as its creator (#482). */
+export function serializeItem(input, actor = '', { existing = false } = {}) {
   const item = normalizeItem(input);
   const now = new Date().toISOString();
   const doc = {
@@ -368,7 +415,7 @@ export function serializeItem(input, actor = '') {
     privateOwner: item.privateOwner || undefined,
     privateOwnerName: item.privateOwner && item.privateOwnerName ? item.privateOwnerName : undefined,
     created: item.created || now,
-    createdBy: item.createdBy || actor,
+    createdBy: existing ? item.createdBy || undefined : item.createdBy || actor,
     updated: now,
     updatedBy: actor,
   };
@@ -400,7 +447,18 @@ export function serializeItem(input, actor = '') {
   if (item.type === 'server' && serverMethods(item).length) tags.sv = serverMethods(item).join(' ');
   // One tag "objectId name" (Key Vault allows 15 tags per secret); sealed in protected vaults like the title.
   if (item.privateOwner) tags.po = truncate([item.privateOwner, item.privateOwnerName].filter(Boolean).join(' '), 150);
+  // #500 review: when the password last changed, as metadata – the compliance view reads it from the listing instead of
+  // every secret value (each read counts in the read alert of #486). Seconds; "c…" = from the creation. Left out when
+  // the 15 tags of Key Vault are used up (the compliance view then estimates from the versions).
+  const changedAt = Date.parse(doc.passwordChanged || '') || Date.parse(doc.created || '');
+  if (item.password && changedAt && Object.keys(tags).length < 15) tags.pc = `${doc.passwordChanged ? '' : 'c'}${Math.floor(changedAt / 1000)}`;
   return { value, contentType: CONTENT_TYPE, tags, doc };
+}
+
+/** The pc tag (see serializeItem) → { at: ms, source: 'password'|'created' } or null. */
+export function passwordChangedTag(tags) {
+  const m = /^(c?)(\d{9,11})$/.exec(String(tags?.pc || ''));
+  return m ? { at: Number(m[2]) * 1000, source: m[1] ? 'created' : 'password' } : null;
 }
 
 const split = (v) => (v ? String(v).split(' ').filter(Boolean) : []);

@@ -85,13 +85,22 @@ export function classifyForcelist(entries) {
   if (!entries) return { state: 'missing', free: '1' };
   const mine = entries.find((e) => e.value.startsWith(`${EXTENSION_ID};`) || e.value === EXTENSION_ID);
   if (mine) {
+    if (!LIST_NAME.test(mine.name)) return { state: 'theirs', name: mine.name };
     if (mine.value === POLICY_VALUE) return { state: 'current', name: mine.name };
     if (mine.value.startsWith(OWN_SOURCE)) return { state: 'own-old', name: mine.name };
     return { state: 'theirs', name: mine.name };
   }
+  return { state: 'missing', free: freeName(entries) };
+}
+
+/** #494: Forcelist value names Keevault writes, replaces or deletes are plain numbers; any other name (e.g. "/va") is foreign. */
+const LIST_NAME = /^\d+$/;
+
+/** The first number not yet used as a value name in a Forcelist. */
+export function freeName(entries) {
   let n = 1;
-  while (entries.some((e) => e.name === String(n))) n++;
-  return { state: 'missing', free: String(n) };
+  while ((entries || []).some((e) => e.name === String(n))) n++;
+  return String(n);
 }
 
 /** Value "ExtensionSettings" of a `reg query base /v ExtensionSettings` output → { type, value } or null. */
@@ -100,14 +109,43 @@ export function parseSettingsValue(stdout) {
   return m ? { type: m[1], value: m[2] } : null;
 }
 
+/** #494: an older update address of ours in ExtensionSettings: the release repo, any tag or latest, an update*.xml. */
+const OWN_OLD_FEED = /^https:\/\/github\.com\/dominguez-posh\/keyvault-pwsafe-releases\/releases\/(?:latest\/download|download\/[A-Za-z0-9._-]+)\/update[A-Za-z0-9._-]*\.xml$/;
+const OWN_FIELDS = ['installation_mode', 'update_url', 'override_update_url'];
+// Only modes that install us: a company blocking or removing Keevault this way stays the company's (fail-closed).
+const OWN_MODES = 'force_installed normal_installed'.split(' ');
+
 /**
- * ExtensionSettings of one browser: 'missing', 'ours' (exactly the fixed value of one of our two feeds) or 'company'.
- * Any other key, other content, another type or unreadable JSON: the whole policy belongs to someone else (#455).
+ * #494 (CTO decision 10.11.): an ExtensionSettings an earlier setup of ours wrote, e.g. the Early Access workaround of
+ * 0.9.29 ({ "<our id>": { update_url: ".../download/v0.9.29/update-ea.xml", override_update_url: true } }). Only our ID
+ * as the one key, only our known fields, update_url to our release repo. It is replaced by the fixed value.
+ */
+function ownOldSettings(value) {
+  let json;
+  try {
+    json = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  if (!json || typeof json !== 'object' || Array.isArray(json) || Object.keys(json).join() !== EXTENSION_ID) return false;
+  const e = json[EXTENSION_ID];
+  if (!e || typeof e !== 'object' || Array.isArray(e) || !Object.keys(e).every((k) => OWN_FIELDS.includes(k))) return false;
+  if (typeof e.update_url !== 'string' || !OWN_OLD_FEED.test(e.update_url)) return false;
+  if ('override_update_url' in e && typeof e.override_update_url !== 'boolean') return false;
+  return !('installation_mode' in e) || OWN_MODES.includes(e.installation_mode);
+}
+
+/**
+ * ExtensionSettings of one browser: 'missing', 'ours' (the fixed value of one of our two feeds, feed set; or an older
+ * value of ours, feed null, #494) or 'company'. Any other key, other content, another type or unreadable JSON: the whole
+ * policy belongs to someone else (#455).
  */
 export function classifySettings(raw) {
   if (raw == null) return { state: 'missing' };
-  const index = raw.type === 'REG_SZ' ? SETTINGS_VALUES.indexOf(String(raw.value).trim()) : -1;
-  return index < 0 ? { state: 'company' } : { state: 'ours', feed: [UPDATE_URL, EARLY_ACCESS_FEED][index] };
+  if (raw.type !== 'REG_SZ') return { state: 'company' };
+  const index = SETTINGS_VALUES.indexOf(String(raw.value).trim());
+  if (index >= 0) return { state: 'ours', feed: [UPDATE_URL, EARLY_ACCESS_FEED][index] };
+  return ownOldSettings(String(raw.value).trim()) ? { state: 'ours', feed: null } : { state: 'company' };
 }
 
 /** A Forcelist value Keevault writes: one of our two feeds, or an older address of ours. */
@@ -116,7 +154,7 @@ const ownForcelistValue = (value) => [POLICY_VALUE, `${EXTENSION_ID};${EARLY_ACC
 /** Forcelist as above, but both of our feeds count as ours: { state: 'ours'|'theirs'|'missing', name, value, free }. */
 function forcelistOfBrowser(entries) {
   const mine = (entries || []).filter((e) => e.value.startsWith(`${EXTENSION_ID};`) || e.value === EXTENSION_ID);
-  if (mine.length) return mine.every((e) => ownForcelistValue(e.value)) ? { state: 'ours', name: mine[0].name, value: mine[0].value } : { state: 'theirs', name: mine[0].name };
+  if (mine.length) return mine.every((e) => ownForcelistValue(e.value) && LIST_NAME.test(e.name)) ? { state: 'ours', name: mine[0].name, value: mine[0].value } : { state: 'theirs', name: mine[0].name };
   return { state: 'missing', free: classifyForcelist(entries).free };
 }
 
@@ -136,24 +174,36 @@ export function parseRegTree(stdout) {
 const fullKey = (k) => k.replace(/^HKLM\\/i, 'HKEY_LOCAL_MACHINE\\').replace(/^HKCU\\/i, 'HKEY_CURRENT_USER\\').toUpperCase();
 
 /**
- * #455: is anything in this policy tree not one of our two entries? machine: the HKLM base, where only the value
- * ExtensionSettings (its content is judged by classifySettings) and Forcelist values of ours may be; per user nothing.
- * Any other value, any subkey (also ExtensionSettings as a key) and any Forcelist entry of another extension: true.
+ * #494 (Lucas 08.11., "gezielt lockern"): the policies of the HKLM base that mean a company manages the extensions of this
+ * browser. Keevault never writes them, so any of them, as a key or as a value, belongs to someone else. The legacy names
+ * (Blacklist/Whitelist) still work in the browsers and count the same.
+ */
+export const COMPANY_EXTENSION_POLICIES = ['ExtensionSettings', 'ExtensionInstallBlocklist', 'ExtensionInstallAllowlist', 'ExtensionAllowedTypes',
+  'ExtensionInstallBlacklist', 'ExtensionInstallWhitelist'];
+const COMPANY_UPPER = COMPANY_EXTENSION_POLICIES.map((n) => n.toUpperCase());
+/** Cloud enrollment written into the base itself (CloudManagementEnrollmentToken, EdgeManagementEnrollmentToken, …). */
+const ENROLLMENT_VALUE = /EnrollmentToken$/i;
+
+/**
+ * Is there a sign of company management in this policy tree? Per user (machine false): anything at all, Keevault never
+ * writes there. In the HKLM base (#494): only the extension policies above (as a subkey, or as a value – the value
+ * ExtensionSettings is judged by classifySettings instead) and enrollment tokens. Foreign Forcelist entries of other
+ * extensions and unrelated policies (LocalNetworkAccessAllowedForUrls, HomepageLocation, …) do not count: Keevault never
+ * touches them and only adds its own Forcelist value next to them.
  */
 export function foreignInTree(stdout, base, machine) {
   const root = fullKey(base);
-  const forcelist = `${root}\\EXTENSIONINSTALLFORCELIST`;
   return parseRegTree(stdout).some(({ key, values }) => {
     const k = key.toUpperCase();
-    if (k === root) return values.some((v) => !(machine && v.name.toLowerCase() === SETTINGS_NAME.toLowerCase()));
-    if (machine && k === forcelist) return values.some((v) => v.type !== 'REG_SZ' || !ownForcelistValue(v.value));
-    return true;
+    if (!machine) return k === root ? values.length > 0 : true;
+    if (k === root) return values.some((v) => ENROLLMENT_VALUE.test(v.name) || (COMPANY_UPPER.includes(v.name.toUpperCase()) && v.name.toUpperCase() !== SETTINGS_NAME.toUpperCase()));
+    return COMPANY_UPPER.some((name) => k === `${root}\\${name}` || k.startsWith(`${root}\\${name}\\`));
   });
 }
 
 /**
  * Policy of one browser: 'none', 'ours' or 'company' (a foreign Forcelist entry or ExtensionSettings anywhere: all of it is theirs).
- * foreign (#455): the company manages this browser elsewhere (per user, cloud, other policies or extensions). Then nothing
+ * foreign (#455): the company manages this browser elsewhere (per user, cloud, extension block or allow lists; #494). Then nothing
  * is created: without entries of ours it is 'company', with them managed is set and only our existing entries are switched.
  */
 export function browserPolicy(entries, rawSettings, foreign = false) {
@@ -195,7 +245,7 @@ export function buildOps(state) {
       // A foreign ExtensionSettings makes the whole policy of that browser the company's (#455).
       if (classifySettings(state.settings?.[browser] ?? null).state === 'company') continue;
       const r = classifyForcelist(state.policies?.[browser] ?? null);
-      // The company manages this browser elsewhere (HKCU, other values or subkeys, cloud; #455): an HKLM Forcelist of ours
+      // The company manages this browser elsewhere (HKCU, extension lists or ExtensionSettings as a key, cloud; #455, #494): an HKLM Forcelist of ours
       // would push its list aside, so nothing is created there; an old entry of ours may still be replaced.
       if (r.state === 'missing' && !state.foreign?.[browser]) ops.push({ kind: 'policy-add', key, name: r.free, value: POLICY_VALUE });
       else if (r.state === 'own-old') ops.push({ kind: 'policy-replace', key, name: r.name, value: POLICY_VALUE });
@@ -212,11 +262,14 @@ export function buildOps(state) {
 export function buildChannelOps(state, channel, create) {
   if (state.policyBlocked) return [];
   return Object.keys(POLICY_KEYS).flatMap((browser) => browserChannelOps(
-    browserPolicy(state.policies?.[browser] ?? null, state.settings?.[browser] ?? null, state.foreign?.[browser]), browser, channel, create));
+    browserPolicy(state.policies?.[browser] ?? null, state.settings?.[browser] ?? null, state.foreign?.[browser]), browser, channel, create, state.settings?.[browser] ?? null));
 }
 
-/** The operations for one browser (p from browserPolicy). Managed by the company elsewhere: only our existing entries are switched, nothing added (#455). */
-export function browserChannelOps(p, browser, channel, create) {
+/**
+ * The operations for one browser (p from browserPolicy). Managed by the company elsewhere: only our existing entries are
+ * switched, nothing added (#455). rawSettings: the ExtensionSettings as read; a replacement only happens while it is still there (#494).
+ */
+export function browserChannelOps(p, browser, channel, create, rawSettings = null) {
   const ops = [];
   if (p.state === 'company' || (p.state === 'none' && !create)) return ops;
   const feed = feedFor(channel);
@@ -225,14 +278,57 @@ export function browserChannelOps(p, browser, channel, create) {
   if (p.forcelist.state === 'missing') { if (!p.managed) ops.push({ kind: 'policy-add', key, name: p.forcelist.free, value: want }); }
   else if (p.forcelist.value !== want) ops.push({ kind: 'policy-replace', key, name: p.forcelist.name, value: want });
   if (p.settings.state === 'missing') { if (!p.managed) ops.push({ kind: 'settings-add', key: POLICY_BASES[browser], name: SETTINGS_NAME, value: settingsValue(feed) }); }
-  else if (p.settings.feed !== feed) ops.push({ kind: 'settings-replace', key: POLICY_BASES[browser], name: SETTINGS_NAME, value: settingsValue(feed) });
+  else if (p.settings.feed !== feed) ops.push({ kind: 'settings-replace', key: POLICY_BASES[browser], name: SETTINGS_NAME, value: settingsValue(feed), old: rawSettings?.value });
   return ops;
 }
 
 /** "Fix now" would change something in this browser (p from browserPolicy). */
 export const canFix = (p, browser, channel) => browserChannelOps(p, browser, channel, true).length > 0;
 
+/** #494: "Neu installieren" is possible in this browser: neither a company policy nor management elsewhere (p from browserPolicy). */
+export const canReinstall = (p) => !!p && p.state !== 'company' && !p.managed;
+
+/**
+ * #494 "Browser-Erweiterung neu installieren": our entries are removed and written anew with the feed of the channel, in
+ * the browsers listed (Edge always, Chrome when installed). Only our own values: the new Forcelist value goes into a free
+ * name first, then our old values are deleted (so the extension is never without its Forcelist entry, which would remove
+ * it with its data); ExtensionSettings is overwritten with the one fixed value, only while it still holds the value read
+ * (missing: only while still missing). A browser with a company policy or managed elsewhere gets nothing; a waiver
+ * (KV_NO_POLICY) means nothing at all.
+ */
+export function buildReinstallOps(state, channel, browsers = Object.keys(POLICY_KEYS)) {
+  if (state.policyBlocked) return [];
+  const feed = feedFor(channel);
+  return browsers.filter((b) => POLICY_KEYS[b]).flatMap((browser) => {
+    const entries = state.policies?.[browser] ?? null;
+    const raw = state.settings?.[browser] ?? null;
+    if (!canReinstall(browserPolicy(entries, raw, state.foreign?.[browser]))) return [];
+    const key = POLICY_KEYS[browser];
+    const own = (entries || []).filter((e) => ownForcelistValue(e.value) && LIST_NAME.test(e.name));
+    const add = { kind: 'policy-add', key, name: freeName(entries), value: `${EXTENSION_ID};${feed}` };
+    const settings = { key: POLICY_BASES[browser], name: SETTINGS_NAME, value: settingsValue(feed) };
+    return [
+      add,
+      ...own.map((e) => ({ kind: 'policy-delete', key, name: e.name, value: e.value, keep: { name: add.name, value: add.value } })),
+      raw == null ? { kind: 'settings-add', ...settings } : { kind: 'settings-replace', ...settings, old: raw.value },
+    ];
+  });
+}
+
+/** After "Neu installieren": in each of these browsers exactly one Forcelist value of ours, and both point to the channel. */
+export function reinstallDone(state, channel, browsers) {
+  const want = `${EXTENSION_ID};${feedFor(channel)}`;
+  return browsers.every((b) => {
+    const p = browserPolicy(state.policies?.[b] ?? null, state.settings?.[b] ?? null, state.foreign?.[b]);
+    if (!canReinstall(p)) return true; // nothing was to be written there
+    const mine = (state.policies?.[b] || []).filter((e) => e.value.startsWith(`${EXTENSION_ID};`) || e.value === EXTENSION_ID);
+    return mine.length === 1 && mine[0].value === want && p.settings.feed === feedFor(channel);
+  });
+}
+
 const SAFE = /^[A-Za-z0-9 \\;:/._-]+$/;
+/** An ExtensionSettings value read before, quoted into the findstr check: JSON without anything cmd.exe or findstr treats specially. */
+const SETTINGS_SAFE = /^[A-Za-z0-9 {}":,._/-]+$/;
 const safe = (s) => {
   if (!SAFE.test(s)) throw new Error('unexpected character in registry argument');
   return s;
@@ -262,8 +358,23 @@ export function elevatedArguments(ops, winDir = windowsFolder()) {
     if (o.kind === 'settings-add' || o.kind === 'settings-replace') {
       // Only one of the two fixed JSON strings, only into the ExtensionSettings value of the two browsers; its quotes are escaped for reg.exe.
       if (!SETTINGS_VALUES.includes(o.value) || o.name !== SETTINGS_NAME || !Object.values(POLICY_BASES).includes(o.key)) throw new Error('unexpected ExtensionSettings operation');
+      // #494: a replacement names the value read before, which must be ours and plain enough for the cmd.exe line.
+      if (o.kind === 'settings-replace' && !(typeof o.old === 'string' && SETTINGS_SAFE.test(o.old) && classifySettings({ type: 'REG_SZ', value: o.old }).state === 'ours')) throw new Error('unexpected ExtensionSettings operation');
       const add = `"${reg}" add ${k} /v ${SETTINGS_NAME} /t REG_SZ /d "${o.value.replace(/"/g, '\\"')}" /f`;
-      return o.kind === 'settings-add' ? `"${reg}" query ${k} /v ${SETTINGS_NAME} >nul 2>&1 || ${add}` : add;
+      if (o.kind === 'settings-add') return `"${reg}" query ${k} /v ${SETTINGS_NAME} >nul 2>&1 || ${add}`;
+      // Only while the whole line still holds the value read before (findstr /X): a policy changed in the meantime stays.
+      return `"${reg}" query ${k} /v ${SETTINGS_NAME} 2>nul | "${winDir}\\System32\\findstr.exe" /L /X /C:"    ${SETTINGS_NAME}    REG_SZ    ${o.old.replace(/"/g, '\\"')}" >nul && ${add}`;
+    }
+    // #494: Forcelist value names only as plain numbers; any other name is foreign and never touched.
+    if (['policy-add', 'policy-replace', 'policy-delete'].includes(o.kind) && (!LIST_NAME.test(String(o.name)) || (o.keep && !LIST_NAME.test(String(o.keep.name))))) throw new Error('unexpected Forcelist value name');
+    if (o.kind === 'policy-delete') {
+      // #494: only a Forcelist value of ours, and only while it still holds the value read before (findstr from the same
+      // folder checks it): a company list rewritten in the meantime keeps its entry under that name.
+      // keep: the new value of ours must be in place first, else the extension would lose its Forcelist entry (and its data).
+      const wants = [UPDATE_URL, EARLY_ACCESS_FEED].map((f) => `${EXTENSION_ID};${f}`);
+      if (!Object.values(POLICY_KEYS).includes(o.key) || !ownForcelistValue(o.value) || !wants.includes(o.keep?.value) || o.keep.name === o.name) throw new Error('unexpected Forcelist deletion');
+      const holds = (name, value) => `"${reg}" query ${k} /v ${safe(name)} 2>nul | "${winDir}\\System32\\findstr.exe" /L /C:"REG_SZ    ${safe(value)}" >nul`;
+      return `${holds(o.keep.name, o.keep.value)} && ${holds(o.name, o.value)} && "${reg}" delete ${k} /v ${safe(o.name)} /f`;
     }
     if (o.kind === 'cert') return `"${reg}" query ${k} /v Blob >nul 2>&1 || "${reg}" add ${k} /v Blob /t REG_BINARY /d ${safe(o.hex)} /f`;
     const add = `"${reg}" add ${k} /v ${safe(o.name)} /t REG_SZ /d "${safe(o.value)}" /f`;
@@ -426,10 +537,29 @@ export async function readPolicies(sys = system) {
   return Object.fromEntries(Object.keys(POLICY_KEYS).map((b) => [b, state.policyBlocked ? waived : browserPolicy(state.policies[b], state.settings[b], state.foreign?.[b])]));
 }
 
+const browserOfKey = (key) => Object.keys(POLICY_KEYS).find((b) => key === POLICY_KEYS[b] || key === POLICY_BASES[b]);
+
+/**
+ * #494: a guarded step found another value than the one read before, so it wrote nothing: after the elevated step a
+ * value it touches holds neither what was read nor what was to be written (a policy changed in the meantime).
+ */
+export function changedMeanwhile(ops, after) {
+  return ops.some((o) => {
+    const b = browserOfKey(o.key);
+    if (o.kind === 'settings-add' || o.kind === 'settings-replace') {
+      const raw = after.settings?.[b] ?? null;
+      const now = raw == null ? null : raw.type === 'REG_SZ' ? raw.value : undefined;
+      return ![o.kind === 'settings-add' ? null : o.old, o.value].includes(now);
+    }
+    if (o.kind === 'policy-add' || o.kind === 'policy-delete') return ![null, o.value].includes((after.policies?.[b] || []).find((e) => e.name === o.name)?.value ?? null);
+    return false;
+  });
+}
+
 /**
  * Points the extension policies to the feed of a channel with one UAC prompt. Resolves { result, company }, result one of:
  * company (nothing of ours to change, nothing written), none (no policy of ours and not asked to create one), aligned,
- * unavailable (no trusted Windows folder), declined, failed, changed. changed only when reading the registry again shows it.
+ * unavailable (no trusted Windows folder), declined, failed, meanwhile (#494), changed. changed only when reading the registry again shows it.
  */
 export async function runChannelSetup(sys = system, winDir = windowsFolder(), { channel = 'stable', create = false } = {}) {
   const state = await readPolicyState(sys);
@@ -442,7 +572,29 @@ export async function runChannelSetup(sys = system, winDir = windowsFolder(), { 
   }
   if (!winDir) return { result: 'unavailable', company };
   const started = await sys.elevate(`${winDir}\\System32\\cmd.exe`, elevatedArguments(ops, winDir));
-  const after = buildChannelOps(await readPolicyState(sys), channel, create);
+  const afterState = await readPolicyState(sys);
+  if (started && changedMeanwhile(ops, afterState)) return { result: 'meanwhile', company };
+  const after = buildChannelOps(afterState, channel, create);
   if (!after.length) return { result: 'changed', company };
   return { result: !started && after.length === ops.length ? 'declined' : 'failed', company };
+}
+
+/**
+ * #494 "Browser-Erweiterung neu installieren" with one UAC prompt: our entries in these browsers removed and written anew
+ * with the feed of the channel. Resolves { result, browsers, company }, result one of: company (nothing of ours may be
+ * written, no prompt), unavailable (no trusted Windows folder), declined, failed, meanwhile, changed. browsers: where it was written.
+ * changed only when reading the registry again shows exactly our one value per browser with the channel's feed.
+ */
+export async function runReinstallSetup(sys = system, winDir = windowsFolder(), { channel = 'stable', browsers = Object.keys(POLICY_KEYS) } = {}) {
+  const state = await readPolicyState(sys);
+  const ops = buildReinstallOps(state, channel, browsers);
+  const company = state.policyBlocked || browsers.some((b) => !canReinstall(browserPolicy(state.policies[b], state.settings[b], state.foreign?.[b])));
+  const written = [...new Set(ops.map((o) => browserOfKey(o.key)))];
+  if (!ops.length) return { result: 'company', browsers: [], company: true };
+  if (!winDir) return { result: 'unavailable', browsers: written, company };
+  const started = await sys.elevate(`${winDir}\\System32\\cmd.exe`, elevatedArguments(ops, winDir));
+  const after = await readPolicyState(sys);
+  if (started && changedMeanwhile(ops, after)) return { result: 'meanwhile', browsers: written, company };
+  if (reinstallDone(after, channel, written)) return { result: started ? 'changed' : 'declined', browsers: written, company };
+  return { result: started ? 'failed' : 'declined', browsers: written, company };
 }

@@ -4,13 +4,15 @@
 
 import { rm } from 'node:fs/promises';
 import { until } from './smoke-wait.js';
+import { personalStorageCheck } from './smoke-personal-storage.js';
 
-const PERSONAL = 'dialog[open].wizard-modal .wizard:not(.vault-wizard)';
+const PERSONAL = 'dialog[open].wizard-modal .wizard:not(.vault-wizard):not(.first-start-wizard)';
+const ACCOUNT = 'dialog[open].wizard-modal .first-start-wizard';
 const count = (js, selector) => js(`document.querySelectorAll(${JSON.stringify(selector)}).length`);
 
 /** What both checks need: the first start again, driven through the personal vault wizard. */
 export function firstStartDriver({ js, sleep, api, config, changed, ensurePin, kvc }) {
-  const before = { personalVaults: config.get().personalVaults, setupOffered: config.get().setupOffered, personalRecoveryPending: config.get().personalRecoveryPending, personalRecoveryRenewed: config.get().personalRecoveryRenewed };
+  const before = { personalVaults: config.get().personalVaults, setupOffered: config.get().setupOffered, personalRecoveryPending: config.get().personalRecoveryPending, personalRecoveryRenewed: config.get().personalRecoveryRenewed, appPin: config.get().appPin, entraUsed: config.get().entraUsed };
   const step = () => js(`[...document.querySelectorAll(${JSON.stringify(`${PERSONAL} .wizard-steps li`)})].findIndex((l) => l.classList.contains("on"))`);
   const click = (selector) => js(`document.querySelector(${JSON.stringify(selector)})?.click(); true`);
   const primary = () => js(`[...document.querySelectorAll(${JSON.stringify(`${PERSONAL} .wizard-buttons .btn.primary`)})].at(-1)?.click(); true`);
@@ -20,13 +22,13 @@ export function firstStartDriver({ js, sleep, api, config, changed, ensurePin, k
   return {
     step, click, primary, atStep,
     /** Where the wizard stopped and what it said: without this a stop at a step tells nothing about why. */
-    stopped: async () => `at step ${await step()}, message: "${await js('document.getElementById("toast")?.textContent || ""')}", personal vaults: ${config.get().personalVaults?.length}`,
+    stopped: async () => `at step ${await step()}, message: "${await js('document.getElementById("toast")?.textContent || ""')}", personal vaults: ${config.get().personalVaults?.length}, buttons: ${await js(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(`${PERSONAL} .wizard-buttons .btn`)})].map((b) => b.textContent + (b.disabled ? " (busy)" : "")))`)}, dialog: "${(await js(`(document.querySelector(${JSON.stringify(PERSONAL)})?.innerText || "").replace(/\\s+/g, " ").slice(0, 400)`))}"`,
     /** The way it happens at a first start: two draws at the same moment, no dialog open, the offer not saved yet. */
-    async trigger() {
+    async trigger(selector = PERSONAL) {
       // In a full run the personal vault flow left its vault: a first start knows no personal vault yet.
       config.update({ setupOffered: false, personalVaults: [] });
       await js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); window.kvSmokeWizards = true; document.querySelector(".shell")?.remove(); window.dispatchEvent(new Event("kvpwsafe-refresh")); window.dispatchEvent(new Event("kvpwsafe-refresh")); true');
-      return until(async () => (await count(js, PERSONAL)) > 0, 4000);
+      return until(async () => (await count(js, selector)) > 0, 4000);
     },
     /** From the start through location and protection: a new vault, or the one already in the folder. */
     async throughProtection(mode = 'create') {
@@ -50,7 +52,7 @@ export function firstStartDriver({ js, sleep, api, config, changed, ensurePin, k
     },
     /** Back to the state before; the following checks work in the demo's team vault again. */
     async restore() {
-      await js('window.kvSmokeWizards = false; window.kvSmokeWindowShown = false; document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); true');
+      await js('window.kvSmokeWizards = false; window.kvSmokeWindowShown = false; window.kvSmokeAccountStep = false; window.kvSmokeSignedOut = false; document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); true');
       await sleep(300);
       await this.removeVault();
       config.update(before);
@@ -74,6 +76,7 @@ export async function firstStartCheck(ctx) {
     await sleep(1200);
     const open = await count(js, PERSONAL);
     if (open !== 1) return fail('firstwizard', `${open} wizards open at the first start`);
+    await personalStorageCheck(ctx, drive); // #516: "OneDrive direkt" shown, greyed out
 
     // Set up to the end: nothing opens after it, the vault exists once.
     await drive.throughProtection();
@@ -114,6 +117,64 @@ export async function firstStartCheck(ctx) {
     await drive.click('dialog[open].wizard-modal .modal-head .icon-btn');
     if (!(await until(() => js('!!document.querySelector("dialog[open] .vault-wizard")'), 3000))) fail('firstwizard', 'team vault wizard does not follow an abort');
     if (await count(js, PERSONAL)) fail('firstwizard', 'personal vault wizard came back after the abort');
+  } finally {
+    await drive.restore();
+  }
+  return undefined;
+}
+
+/**
+ * #515: a fresh profile starts with the Microsoft sign-in, then the App PIN (skipped once, set once), then the rest
+ * (the personal vault wizard; the rest itself is checked by firstStartCheck). The demo is signed in already:
+ * kvSmokeSignedOut makes the step offer the sign-in itself, with the demo's stand-in account.
+ */
+export async function firstAccountCheck(ctx) {
+  const { js, sleep, config } = ctx;
+  const f = (msg) => ctx.fail('firstaccount', msg);
+  const drive = firstStartDriver(ctx);
+  const accountStep = () => js(`[...document.querySelectorAll(${JSON.stringify(`${ACCOUNT} .wizard-steps li`)})].findIndex((l) => l.classList.contains("on"))`);
+  const setPin = (a, b) => js(`(() => { const set = (s, v) => { const i = document.querySelector(${JSON.stringify(ACCOUNT)} + " " + s); if (i) { i.value = v; } return !!i; }; return set(".first-pin", ${JSON.stringify(a)}) && set(".first-pin2", ${JSON.stringify(b)}); })()`);
+  const closeAll = async () => {
+    await js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); true');
+    await until(async () => (await count(js, 'dialog[open]')) === 0, 3000);
+  };
+  const personalNext = () => until(async () => (await count(js, PERSONAL)) > 0 && !(await count(js, ACCOUNT)), 6000);
+  try {
+    config.update({ appPin: null, entraUsed: false });
+    await js('window.kvSmokeAccountStep = true; window.kvSmokeSignedOut = true; true');
+
+    // First pass: sign in, skip the PIN.
+    if (!(await drive.trigger(ACCOUNT))) return f('the sign-in step did not open at the first start');
+    await sleep(600);
+    if (await count(js, PERSONAL)) f('the personal vault wizard opened before the sign-in step');
+    if ((await accountStep()) !== 0) f(`starts at step ${await accountStep()}, not at the sign-in`);
+    if (!(await count(js, `${ACCOUNT} .first-skip-signin`))) f('the sign-in step offers no way on without a Microsoft account');
+    if (!(await count(js, `${ACCOUNT} .first-signin`))) return f('no "Mit Microsoft anmelden" button in the first step');
+    await drive.click(`${ACCOUNT} .first-signin`);
+    if (!(await until(async () => (await accountStep()) === 1, 6000))) return f(`the PIN step did not follow the sign-in (step ${await accountStep()})`);
+    if (!config.get().entraUsed) f('signing in at the first start did not note that Entra is used');
+    if (!(await count(js, `${ACCOUNT} .first-pin-later`))) return f('the PIN step has no "Später"');
+    await drive.click(`${ACCOUNT} .first-pin-later`);
+    if (!(await personalNext())) f('the personal vault wizard did not follow "Später"');
+    if (config.get().appPin) f('"Später" set a PIN');
+    await closeAll(); // the personal vault wizard, then the team vault wizard that follows an abort
+    await closeAll();
+
+    // Second pass: signed in now, set the PIN – too short first (#475), then the one the other checks use.
+    if (!(await drive.trigger(ACCOUNT))) return f('the sign-in step did not open the second time');
+    await sleep(400);
+    if (await count(js, `${ACCOUNT} .first-signin`)) f('signed in, the step still offers to sign in');
+    await drive.click(`${ACCOUNT} .wizard-buttons .btn.primary`);
+    if (!(await until(async () => (await accountStep()) === 1, 4000))) return f('"Weiter" did not lead to the PIN step');
+    await setPin('12345', '12345');
+    await drive.click(`${ACCOUNT} .first-pin-save`);
+    await sleep(600);
+    if (config.get().appPin) f('a PIN of 5 characters was accepted');
+    if (!(await count(js, ACCOUNT))) return f('the step closed after a refused PIN');
+    await setPin('246813', '246813');
+    await drive.click(`${ACCOUNT} .first-pin-save`);
+    if (!(await until(() => !!config.get().appPin, 4000))) f('the PIN was not set');
+    if (!(await personalNext())) f('the personal vault wizard did not follow the PIN');
   } finally {
     await drive.restore();
   }

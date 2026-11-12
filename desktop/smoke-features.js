@@ -12,14 +12,14 @@ import { autotypeFallbackCheck } from './smoke-autotype-fallback.js';
 import { multiClearCheck } from './smoke-multi.js';
 import { dropTargetCheck } from './smoke-drop-target.js';
 import { passkeyPinAgentCheck, passkeyPinBrowserCheck, passkeyPinSettingCheck, passkeyPinWindowsCheck } from './smoke-passkey-pin.js';
-import { deleteRefusedCheck, folderFirstCheck, renameCheck } from './smoke-delete-refused.js';
+import { deleteRefusedCheck, folderFirstCheck, renameCheck, vaultProfileCheck } from './smoke-delete-refused.js';
 import { moveAssetsCheck } from './smoke-move-assets.js';
 import { cutPasteCheck } from './smoke-cut-paste.js';
 import { deleteRaceCheck } from './smoke-delete-race.js';
 import { agentAdmissionCheck } from './smoke-agent-admission.js';
 import { versionChannelCheck, versionMixCheck } from './smoke-version.js';
 import { offlineDeleteCheck } from './smoke-offline.js';
-import { firstStartCheck } from './smoke-first-start.js';
+import { firstAccountCheck, firstStartCheck } from './smoke-first-start.js';
 import { recoveryKeyCheck } from './smoke-recovery-key.js';
 import { shareHintCheck } from './smoke-share-hint.js';
 import { extensionHintCheck } from './smoke-ext-hint.js';
@@ -29,8 +29,9 @@ import { versionHistoryCheck } from './smoke-version-history.js';
 import { otpSecretCheck } from './smoke-otp-secret.js';
 import { headingCheck } from './smoke-headings.js';
 import { questionsGone, until } from './smoke-wait.js';
+import { runArea, stopsWhenCancelled } from './smoke-step.js';
 export async function featureChecks(ctx) {
-  const { js, sleep, errors, win, api, vault, config, changed, clipboardHas } = ctx;
+  const { errors, win, api, vault, config, changed, clipboardHas } = ctx, js = stopsWhenCancelled(ctx.js), sleep = stopsWhenCancelled(ctx.sleep); // #529
   const fail = (area, message) => errors.push(`features/${area}: ${message}`);
   const closeDialogs = () => js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); document.querySelector(".context-menu, .main-menu")?.remove(); true');
   // Settings → View (all view settings since #18): menu → Settings → tab "View".
@@ -66,6 +67,7 @@ export async function featureChecks(ctx) {
       }
       for (let i = 0; i < 10 && config.get().adminTools !== on; i++) await sleep(300);
     }
+    if (on && ctx.pinGuard.consume()) fail('admin', 'the PIN left an unlock token behind'); // 0.9.33 review
     await sleep(600);
     if (config.get().adminTools !== on) {
       const why = await js('JSON.stringify({ foot: document.querySelector(".sidebar-foot")?.innerHTML.slice(0, 300), dialogs: [...document.querySelectorAll("dialog[open]")].map((d) => d.innerText.slice(0, 80)), offered: !!document.querySelector(".admin-foot") })');
@@ -101,7 +103,7 @@ export async function featureChecks(ctx) {
     await js(`${find}?.click()`);
     await sleep(600);
   };
-  // Each area at most 45 s: a step that hangs is reported and the run goes on (never a smoke test without an end).
+  // Each area at most 45 s: a step that hangs is reported, cancelled and waited for (#529), then the run goes on.
   const cleanUp = async () => {
     // Newest first: assets and linked logins go before the logins they use (those cannot be deleted while in use).
     for (const id of created.splice(0).reverse()) await vault.deleteItem(kvc.id, id).catch(() => {});
@@ -143,7 +145,7 @@ export async function featureChecks(ctx) {
     ctx.note(`features/${area}`);
     await uiReady();
     try {
-      await Promise.race([fn(), new Promise((_r, reject) => setTimeout(() => reject(new Error('timeout after 45 s')), 45_000))]);
+      await runArea(fn, { limitMs: 45_000 });
     } catch (e) {
       fail(area, e.message);
     }
@@ -170,8 +172,8 @@ export async function featureChecks(ctx) {
     });
 
     // ---- clipboard: the copy button in an entry, the helper program (history markers), auto-type helper mode
-    await step('clipboard', async () => {
-      const login = await save({ type: 'login', title: 'Smoke Copy', username: `copy-${Date.now()}@contoso.com`, password: 'Cp-1' });
+    await step('clipboard', async () => { // #526: the fallback compile (#352, up to 20 s in a full run) runs alongside, judged at the end
+      const fallbackDone = autotypeFallbackCheck((area, msg) => fail(area, msg)), login = await save({ type: 'login', title: 'Smoke Copy', username: `copy-${Date.now()}@contoso.com`, password: 'Cp-1' });
       changed();
       await sleep(700);
       await openItem('Smoke Copy');
@@ -244,7 +246,8 @@ export async function featureChecks(ctx) {
       }
       // Auto-type through the helper: with empty input the mode runs and types nothing.
       if (process.platform === 'win32' && !(await ctx.typeViaHelperExe(''))) fail('autotype', 'Keevault-Update.exe --type not available');
-      await autotypeFallbackCheck((area, msg) => fail(area, msg)); // #352
+      await fallbackDone; // #352, started at the beginning of the area
+      await (await import('./smoke-clipboard-held.js')).heldClipboardCheck({ copyViaHelperExe: ctx.copyViaHelperExe, clipboardHas, fail }); // #526
     });
 
     // ---- main menu: entries open their dialogs, view switches take effect, no bottom-bar setting any more
@@ -393,7 +396,7 @@ export async function featureChecks(ctx) {
     await step('navheading', () => headingCheck({ js, fail: (m) => fail('navheading', m) }));
     // ---- sharing hint in the members view of a file vault (#446)
     await step('sharehint', () => shareHintCheck({ js, fail: (m) => fail('sharehint', m), home: kvc.name }));
-    await step('exthint', () => extensionHintCheck({ js, fail: (m) => fail('exthint', m), simulate: ctx.simulateExtensionClients, simulatePolicy: ctx.simulateExtensionPolicy }));
+    await step('exthint', () => extensionHintCheck({ js, fail: (m) => fail('exthint', m), simulate: ctx.simulateExtensionClients, simulatePolicy: ctx.simulateExtensionPolicy })); await step('extreinstall', async () => (await import('./smoke-ext-reinstall.js')).extensionReinstallCheck({ js, fail: (m) => fail('extreinstall', m), simulate: ctx.simulateExtensionClients, simulatePolicy: ctx.simulateExtensionPolicy, simulateReinstall: ctx.simulateExtensionReinstall })); // #494
 
     // ---- vault order: drag a vault row before another one – the sidebar shows and keeps the new order
     await step('vaultorder', async () => {
@@ -501,13 +504,7 @@ export async function featureChecks(ctx) {
     });
 
     // ---- vault menu: "Infos" directly in the right-click menu of a Key Vault, not in a submenu
-    await step('vaultmenu', async () => {
-      await js(`(() => { const row = [...document.querySelectorAll(".sidebar .nav-row")].find((r) => r.textContent.includes(${JSON.stringify(kvc.name)})); row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 300 })); })()`);
-      await sleep(300);
-      const r = JSON.parse(await js('JSON.stringify({ top: !!document.querySelector(".context-menu > [data-action=info], .context-menu > .context-group > [data-action=info]"), sub: !!document.querySelector(".context-sub [data-action=info]") })'));
-      if (!r.top || r.sub) fail('vaultmenu', `"Infos" not at the top of the vault menu (${JSON.stringify(r)})`);
-      await js('document.querySelector(".context-menu")?.remove()');
-    });
+    await step('vaultmenu', async () => (await import('./smoke-vault-menu.js')).vaultMenuCheck({ js, fail, kvc }));
 
     // ---- import of a KeePass database (.kdbx): vault menu → Import → file → master password + key file → import
     await step('kdbximport', async () => {
@@ -557,6 +554,8 @@ export async function featureChecks(ctx) {
       const intranet = await save({ type: 'login', title: 'Smoke Intranet', urls: ['https://intranet.contoso.com'], loginLink: `${kvc.id}/${domain.id}` });
       const partner = await save({ type: 'login', title: 'Smoke Partner', urls: ['https://partner.contoso.com'], loginLink: `${kvc.id}/${ms.id}` });
       await openItem('Smoke Intranet');
+      // #353: the detail view draws the linked login a moment after the entry opened: wait for it, the checks below still decide.
+      await until(() => js('/Anmeldung über|Signs in with/.test(document.querySelector(".detail-pane")?.innerText || "")'), 6000);
       const shown = await js('document.querySelector(".detail-pane")?.innerText || ""');
       if (!/Anmeldung über|Signs in with/.test(shown) || !shown.includes('Smoke Domain') || !shown.includes('CONTOSO\\smoke')) fail('loginlink', `linked login not shown: ${shown.slice(0, 200)}`);
       if (!(await js('[...document.querySelectorAll(".detail-pane .field label")].some((l) => /^(Passwort|Password)$/.test(l.textContent.trim()))'))) fail('loginlink', 'password of the linked login missing in the detail view');
@@ -566,31 +565,33 @@ export async function featureChecks(ctx) {
       if (!uh || !/^(Öffnen und ausfüllen|Open and fill)$/.test(uh.act) || uh.tab !== 0 || !uh.menu) fail('loginlink', `URL row: ${JSON.stringify(uh)}`);
       globalThis.kvSmokeOpened = 0;
       await js('document.querySelector(".detail-pane .act-row a.url").click()');
-      await sleep(500);
+      await until(() => globalThis.kvSmokeOpened >= 1, 4000); // the click arrived …
+      await sleep(500); // … and a second open, if there is one, shows up in this window (that is the check)
       if (globalThis.kvSmokeOpened !== 1) fail('loginlink', `one click on the URL opened ${globalThis.kvSmokeOpened} times, expected 1`);
       // Editor: the link is chosen, own user name and password are hidden; the stored entry keeps no copy.
+      await until(() => js('!!document.querySelector(".detail-pane .item-hover-menu")'), 4000);
       await js('document.querySelector(".detail-pane .item-hover-menu")?.click()');
-      await sleep(300);
+      await until(() => js('!!document.querySelector(".context-menu [data-action=edit]")'), 4000);
       await js('document.querySelector(".context-menu [data-action=edit]")?.click()');
-      await sleep(500);
+      await until(() => js('!!document.querySelector(".detail-pane .login-link .link-pick-text")'), 5000);
       const ed = JSON.parse(await js('JSON.stringify({ own: !!document.querySelector(".detail-pane .own-login")?.hidden, pick: document.querySelector(".detail-pane .login-link .link-pick-text")?.textContent || "" })'));
       if (!ed.own || ed.pick !== 'Smoke Domain') fail('loginlink', `editor of a linked login: ${JSON.stringify(ed)}`);
       // The type of an existing entry is fixed (#263).
       if (!(await js('!!document.querySelector(".detail-pane select[name=type]")?.disabled'))) fail('loginlink', 'type of an existing entry can be changed');
       // Picker filters (#312): "Current vault" by default, kinds narrow the list (Microsoft: only the Microsoft login).
       await js('document.querySelector(".detail-pane .link-pick[data-name=loginLink]")?.click()');
-      await sleep(400);
+      await until(() => js('!!document.querySelector("dialog[open] .pick-filters") && !!document.querySelector("dialog[open] .link-pick-row")'), 5000);
       const pick = async () => JSON.parse(await js('JSON.stringify({ all: document.querySelector("dialog[open] .pick-filters [data-filter=all] button.on")?.dataset.value, rows: [...document.querySelectorAll("dialog[open] .link-pick-row:not(:disabled) .link-pick-text")].map((e) => e.textContent) })'));
       let pk = await pick();
       if (pk.all !== 'false') fail('loginlink', `picker does not start at the current vault: ${JSON.stringify(pk)}`);
       await js('document.querySelector("dialog[open] .pick-filters [data-filter=kind] button[data-value=microsoft]")?.click()');
-      await sleep(200);
+      await until(async () => !(await pick()).rows.includes('Smoke Domain'), 4000); // the list narrowed
       pk = await pick();
       if (!pk.rows.includes('Smoke MS Link') || pk.rows.includes('Smoke Domain')) fail('loginlink', `Microsoft filter of the picker: ${JSON.stringify(pk.rows)}`);
       await js('document.querySelector("dialog[open] .modal-head .icon-btn")?.click()');
-      await sleep(200);
+      await until(() => js('!document.querySelector("dialog[open]")'), 3000);
       await js('[...document.querySelectorAll(".detail-pane button")].find((b) => /^(Abbrechen|Cancel)$/.test(b.textContent.trim()))?.click()');
-      await sleep(300);
+      await until(() => js('!document.querySelector(".detail-pane select[name=type]")'), 3000); // the editor is closed
       const stored = await vault.getItem(kvc.id, intranet.id);
       if (stored.password || stored.username || stored.loginLink !== `${kvc.id}/${domain.id}`) fail('loginlink', 'linked login stores its own values');
       // In use by another entry (#34): the domain login cannot be deleted until the link is gone.
@@ -715,6 +716,7 @@ export async function featureChecks(ctx) {
     });
 
     // ---- first start (#399): one wizard, nothing starts over after it (desktop/smoke-first-start.js)
+    await step('firstaccount', () => firstAccountCheck({ js, sleep, api, config, changed, kvc, ensurePin: ctx.ensurePin, fail }));
     await step('firstwizard', () => firstStartCheck({ js, sleep, api, config, changed, kvc, ensurePin: ctx.ensurePin, fail }));
     await step('recoverykey', () => recoveryKeyCheck({ js, sleep, api, config, changed, kvc, ensurePin: ctx.ensurePin, fail: (m) => fail('recoverykey', m) }));
 
@@ -769,7 +771,7 @@ export async function featureChecks(ctx) {
       if (!r.free) fail('version', 'the end of the entry lies under the version');
     });
 
-    await step('versionchannel', () => versionChannelCheck({ js, sleep, fail, config, changed }));
+    await step('versionchannel', () => versionChannelCheck({ js, sleep, fail, config, changed, hello: ctx.browserHello }));
 
     // ---- list: right-click on the empty area, entry without the removed bottom toolbar
     await step('list', async () => {
@@ -938,6 +940,7 @@ export async function featureChecks(ctx) {
     await step('multiclear', () => multiClearCheck({ js, sleep, fail, vaultName: kvc.name }));
     await step('droptarget', () => dropTargetCheck({ js, sleep, fail, save, vault, api, kvc, win })); // #491
     await step('deleterefused', async () => { await deleteRefusedCheck({ js, fail, vault, changed, kvc }); await folderFirstCheck({ js, fail }); await renameCheck({ js, fail, vault, api, kvc }); });
+    await step('vaultprofile', () => vaultProfileCheck({ js, fail, vault, api, kvc, bridge: ctx.browserHandlers, save, openItem, ensurePin: ctx.ensurePin })); // #480
     await step('deleterace', () => deleteRaceCheck({ js, fail, vault, changed, kvc }));
     await step('moveassets', () => moveAssetsCheck({ js, fail, vault, api, changed, kvc }));
     await step('cutpaste', () => cutPasteCheck({ js, fail, vault, api, changed, kvc }));
@@ -1402,7 +1405,8 @@ export async function featureChecks(ctx) {
     await step('versionhistory', () => versionHistoryCheck({ js, sleep, fail: (m) => fail('versionhistory', m), save, openItem }));
     // ---- OTP secret (#469): never in the DOM, kept on save, "Erneuern" sets a new one and the code follows
     await step('otpsecret', () => otpSecretCheck({ js, sleep, fail: (m) => fail('otpsecret', m), save, openItem, getItem: (id) => vault.getItem(kvc.id, id) }));
-    await step('fieldhover', async () => (await import('./smoke-field-hover.js')).fieldHoverCheck({ js, sleep, fail: (m) => fail('fieldhover', m), save, openItem, win, clipboardHas, setAdmin, isAdmin: () => !!config.get().adminTools })); // #458
+    await step('fieldhover', async () => (await import('./smoke-field-hover.js')).fieldHoverCheck({ copyViaHelperExe: ctx.copyViaHelperExe, js, sleep, fail: (m) => fail('fieldhover', m), save, openItem, win, clipboardHas, setAdmin, isAdmin: () => !!config.get().adminTools })); // #458
+    await step('adminflags', async () => (await import('./smoke-admin-flags.js')).adminFlagsCheck({ js, sleep, fail: (m) => fail('adminflags', m), save, openItem, getItem: (id) => vault.getItem(kvc.id, id, { fresh: true }), byTitle: async (title) => (await vault.summaries()).find((x) => x.containerId === kvc.id && x.title === title), api, containerId: kvc.id, setAdmin, isAdmin: () => !!config.get().adminTools })); // #487
     await step('nurfuermich', async () => (await import('./smoke-private.js')).privateCheck({ js, sleep, fail: (m) => fail('nurfuermich', m), save, openItem, vault, api, kvc, config, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #476
 
     // ---- PIM on the unlock screen: off by default, switched on in Settings → View, then shown when locked
@@ -1428,6 +1432,10 @@ export async function featureChecks(ctx) {
       await sleep(800);
     });
     await step('machinesetup', async () => (await import('./smoke-machine-setup.js')).machineSetupCheck({ api, fail })); // #395
+    await step('settingsfile', async () => (await import('./smoke-settings-file.js')).settingsFileCheck({ js, sleep, config, vault, changed, ensurePin: ctx.ensurePin, fail, vaultListRun: ctx.vaultListRun })); // #478
+    await step('logging', async () => (await import('./smoke-logging.js')).loggingCheck({ js, sleep, fail: (m) => fail('logging', m), api, vault, kvc, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #486
+    await step('compliance', async () => (await import('./smoke-compliance.js')).complianceCheck({ js, sleep, fail: (m) => fail('compliance', m), api, vault, kvc, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #500
+    await step('tlsenv', async () => (await import('./smoke-tls-env.js')).tlsEnvCheck({ js, api, fail: (m) => fail('tlsenv', m) })); // #517
   } finally {
     await cleanUp();
     config.update({ adminTools: false, theme: 'system', transparency: 'light' });

@@ -119,7 +119,12 @@
   let pinBox = null; // { requestId, guard, loads, ready, show, timer }
   const PIN_FRAME_WAIT = 4000;
 
-  function openPinFrame(use, sw, list) {
+  // #497: keys the user pressed on this page (counted, never read). The PIN frame takes the keyboard (#468) only if
+  // nothing was typed since the click on "Use passkey": a field that appears later must not catch keys meant for the page.
+  let pageKeys = 0;
+  document.addEventListener('keydown', (e) => { if (e.isTrusted) pageKeys++; }, true);
+
+  function openPinFrame(use, sw, list, keysAtClick) {
     const cur = inline;
     const c = cur?.choice;
     if (!c || pinBox) return;
@@ -135,7 +140,7 @@
       use.hidden = true;
       frame.hidden = false;
       box.guard = watch(frame); // visible from now on, not before
-      frame.focus(); // after the user's own click on the visible button (#405)
+      if (pageKeys === keysAtClick) frame.focus(); // #468 at once; #497 not while the user types elsewhere on the page
     };
     pinBox = box;
     frame.addEventListener('load', () => {
@@ -156,7 +161,8 @@
   // the PIN in the extension's frame does, checked against that frame's own visibility (pinframe:clear).
   let pinArmed = null;
   function openPinWhenSeen(guard, use, sw, list, tag) {
-    if (guard?.clear()) return openPinFrame(use, sw, list);
+    const keysAtClick = pageKeys;
+    if (guard?.clear()) return openPinFrame(use, sw, list, keysAtClick);
     if (pinArmed) return;
     const cur = inline;
     const until = Date.now() + PIN_FRAME_WAIT;
@@ -164,7 +170,7 @@
     const tick = () => {
       pinArmed = null;
       if (inline !== cur || pill !== tag || pinBox) return; // answered, cancelled or replaced meanwhile
-      if (guard?.clear()) openPinFrame(use, sw, list);
+      if (guard?.clear()) openPinFrame(use, sw, list, keysAtClick);
       else if (--tries <= 0 || Date.now() >= until) refuse(tag);
       else pinArmed = setTimeout(tick, 100);
     };

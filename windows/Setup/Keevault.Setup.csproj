@@ -28,6 +28,8 @@
     <EmbeddedResource Include="$(Payload)" LogicalName="payload.exe" />
   </ItemGroup>
   <ItemGroup>
+    <!-- JavaScriptSerializer for the native messaging host (NativeHost.cs, #505). -->
+    <Reference Include="System.Web.Extensions" />
     <Resource Include="..\..\desktop\assets\icon.png" Link="icon.png" />
   </ItemGroup>
 

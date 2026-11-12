@@ -8,6 +8,7 @@
 import { t } from '../core/i18n.js';
 import { itemMatchesHost } from '../core/match.js';
 import { filterPasskeys } from '../core/webauthn.js';
+import { reportedStage } from '../core/channel.js';
 
 const HOST = 'com.kvpwsafe.desktop';
 const SNAPSHOT_MAX_AGE = 60_000;
@@ -16,10 +17,19 @@ let seq = 0;
 let online = null; // null: not known yet, false: app not running, true: app reachable
 let hostError = '';
 let lastAttempt = 0;
+// #505: a lost host (an app update ends it, a crash) is started again by itself, so the next click finds a warm port
+// instead of paying the host start. Backoff from 1 s up to 1 min, back to 1 s once the host reports the app online;
+// a host that is missing or keeps failing costs one attempt per minute at most, never a loop.
+const RETRY_MIN = 1000;
+const RETRY_MAX = 60_000;
+let retryDelay = RETRY_MIN;
+let retryTimer = null;
 let hello = null;
 let helloInfo = null; // the last answer to hello, read without waiting
 let snap = null;
 let snapAt = 0;
+// #495: the last snapshot the app sent, readable without waiting (cleared with every event: change, lock, offline).
+let lastSnap = null;
 const pending = new Map();
 const listeners = new Set();
 
@@ -41,6 +51,7 @@ function forget() {
   hello = null;
   helloInfo = null;
   snap = null;
+  lastSnap = null;
 }
 
 function failAll() {
@@ -50,7 +61,10 @@ function failAll() {
 
 function onMessage(msg) {
   if (msg?.event) {
-    if (msg.event === 'online') online = true;
+    if (msg.event === 'online') {
+      online = true;
+      retryDelay = RETRY_MIN;
+    }
     if (msg.event === 'offline') {
       online = false;
       failAll();
@@ -66,9 +80,22 @@ function onMessage(msg) {
   else p.reject(Object.assign(new Error(msg.error?.message || 'Error'), { name: msg.error?.name }));
 }
 
-/** Opens the native port (starts the host). Called at start-up and whenever a request finds no port. */
+function scheduleReconnect() {
+  if (retryTimer) return;
+  const delay = retryDelay;
+  retryDelay = Math.min(retryDelay * 2, RETRY_MAX);
+  retryTimer = setTimeout(() => {
+    retryTimer = null;
+    connect();
+  }, delay);
+}
+
+/** Opens the native port (starts the host). Called at start-up, at browser start, after a lost host (with backoff)
+ * and whenever a request finds no port. */
 export function connect() {
   if (port) return;
+  clearTimeout(retryTimer);
+  retryTimer = null;
   lastAttempt = Date.now();
   hostError = '';
   online = null;
@@ -81,7 +108,17 @@ export function connect() {
     forget();
     failAll();
     emit('offline');
+    scheduleReconnect();
   });
+}
+
+/** #505: warm start. The listeners make the browser start the worker when it starts or installs the extension, so the
+ * host runs before the first click (an open native port keeps the worker alive). Only the port: no hello, no list –
+ * nothing from the app sits in memory before something asks for it. wanted() → Promise<boolean> (false in the demo). */
+export function warmStart(wanted) {
+  const go = () => wanted().then((yes) => { if (yes) connect(); }, () => {});
+  chrome.runtime.onStartup.addListener(go);
+  chrome.runtime.onInstalled.addListener(go);
 }
 
 function request(cmd, args = {}, timeout = 30_000) {
@@ -91,7 +128,7 @@ function request(cmd, args = {}, timeout = 30_000) {
   return new Promise((resolve, reject) => {
     const id = ++seq;
     const timer = setTimeout(() => {
-      if (pending.delete(id)) reject(new Error(t('Keevault-App antwortet nicht')));
+      if (pending.delete(id)) reject(Object.assign(new Error(t('Keevault-App antwortet nicht')), { name: 'TimeoutError' })); // #508
     }, timeout);
     pending.set(id, { resolve: (v) => { clearTimeout(timer); resolve(v); }, reject: (e) => { clearTimeout(timer); reject(e); } });
     // id/cmd last: arguments must never overwrite the request number (the answer is matched by it).
@@ -118,6 +155,12 @@ export function appFeatures() {
   const caps = helloInfo?.caps || [];
   return { history: caps.includes('history'), assets: caps.includes('linkedEntries'), move: caps.includes('move'), passkeyMove: caps.includes('movePasskey') };
 }
+
+/**
+ * #420: the release stage the connected app reports (stable, beta, dev); it unlocks only new functions
+ * (extension/core/channel.js). No app, no hello yet, or an unknown claim: "stable" (Prod).
+ */
+export const appStage = () => reportedStage(helloInfo?.stage);
 
 const needCap = async (cap) => {
   if (!(await ready()).caps?.includes(cap)) throw new Error(t('Die Keevault-App ist zu alt für diese Funktion – bitte die App aktualisieren'));
@@ -151,14 +194,19 @@ export function snapshot() {
     return { ...s, containers: s.containers.map((c) => ({ ...c, kind: 'remote' })) };
   })();
   snap = current;
+  current.then((s) => { if (snap === current) lastSnap = s; }, () => {});
   current.catch(() => {
     if (snap === current) snap = null;
   });
   return current;
 }
 
+/** #495: the last snapshot without waiting – only what the worker already holds in memory, null when there is none. */
+export const cachedSnapshot = () => lastSnap;
+
 const changedHere = (result) => {
   snap = null;
+  lastSnap = null;
   return result;
 };
 

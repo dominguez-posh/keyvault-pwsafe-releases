@@ -8,6 +8,7 @@ import { vaultHost, KV_SCOPE } from '../../../extension/core/keyvault.js';
 import { mapLimit, decodeJwtPayload } from '../../../extension/core/util.js';
 import { t } from '../../../extension/core/i18n.js';
 import { ensureProvider, machineSetupStatus, runMachineSetup } from '../../windows-provider.js';
+import { sharedRead, forgetSharedReads } from '../../shared-read.js';
 import { demo } from '../boot.js';
 import { auth, config, files, opened, vault, win } from '../state.js';
 import { api } from './index.js';
@@ -18,7 +19,9 @@ import { requireFeature, requireOpen } from '../guards.js';
 import { changed, cleanEmail, containerResource, refreshAll, refreshing, send, signedIn } from '../session.js';
 
 /** ARM/Graph for a subscription's tenant: own tenant directly, customer tenants with the guest account. */
-const azureForSubscription = (tenantId) => (!tenantId || tenantId === auth.account?.tenantId ? vault.azure : vault.azureFor({ tenantId }));
+const machineStatus = sharedRead(() => machineSetupStatus()); // #526: settings opened again while the last read runs
+
+const azureForSubscription =(tenantId) => (!tenantId || tenantId === auth.account?.tenantId ? vault.azure : vault.azureFor({ tenantId }));
 
 export const vaultsApi = {
   /** Reloads one container (file from disk, Key Vault from the service). */
@@ -105,11 +108,11 @@ export const vaultsApi = {
   removeMember: async (containerId, principalId) => (await vault.azureForId(containerId)).removeMember(await containerResource(containerId), principalId),
   /** People picker in the directory of the container's tenant (guests included). */
   searchPrincipals: async (query, containerId) => (containerId ? await vault.azureForId(containerId) : vault.azure).searchPrincipals(query),
-  machineSetupStatus: () => machineSetupStatus(),
+  machineSetupStatus: () => machineStatus(),
   /** Elevated device setup (UAC), then retry the per-user provider installation. */
   async runMachineSetup() {
     // Success only counts when the registry shows it afterwards (a declined UAC prompt changes nothing).
-    const r = await runMachineSetup();
+    const r = await runMachineSetup().finally(forgetSharedReads);
     if (r.declined) throw new Error(t('Die Abfrage der Administratorrechte wurde abgelehnt oder abgebrochen – es wurde nichts geändert.'));
     if (!r.ok) throw new Error(t('Die Einrichtung wurde nicht abgeschlossen. Bitte eure IT bitten, das Intune-Skript „Keevault-Geraet-Einrichten.ps1“ auszuführen.'));
     const status = config.get().windowsProvider ? await ensureProvider(`${app.getVersion()}.0`) : null;

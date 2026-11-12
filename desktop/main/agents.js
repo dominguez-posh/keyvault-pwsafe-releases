@@ -5,7 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { t } from '../../extension/core/i18n.js';
 import { demo } from './boot.js';
-import { config, mcp, opened, win } from './state.js';
+import { config, mcp, opened, win, windowLocked } from './state.js';
 import { send } from './session.js';
 import { showWindow } from './window.js';
 import { bringToFront } from './focus.js';
@@ -149,6 +149,21 @@ export async function confirmAgentWrite({ agent, action, title, vault: vaultName
 export const questions = new Map(); // id → resolve
 const refusals = new Map(); // id → the answer that refuses
 const pinQuestions = new Set(); // ids of questions that are answered only with the app PIN (#439)
+// #507 (Lucas 2026-11-10): an agent's question while the window is locked and only the extension unlocked – shown
+// without agent, entry or vault, "Allow" refused until the window is unlocked with the PIN; then the real question.
+const heldQuestions = new Map(); // id → the full question
+const isAgentQuestion = (spec) => String(spec?.kind || '').startsWith('agent-');
+const heldView = (spec) => ({ kind: 'agent-held', held: true, cancel: spec.cancel,
+  title: t('Ein KI-Agent möchte auf Keevault zugreifen'), lead: t('Entsperre zuerst das Fenster mit deiner PIN – danach siehst du die Anfrage.') });
+
+/** The window was unlocked with the PIN (#507): the held agent questions now show what they ask. */
+export function revealHeldQuestions() {
+  for (const [id, spec] of heldQuestions) {
+    heldQuestions.delete(id);
+    send({ type: 'questionClose', id });
+    send({ type: 'question', id, ...spec });
+  }
+}
 let questionSeq = 0;
 
 /**
@@ -158,6 +173,7 @@ let questionSeq = 0;
  */
 export async function answerQuestionFromWindow(id, value, pin) {
   if (!questions.has(id)) return false;
+  if (heldQuestions.has(id) && String(value) !== refusals.get(id)) throw new Error(t('Erst das Fenster mit der PIN entsperren'));
   if (pinQuestions.has(id) && String(value) !== refusals.get(id)) await passkeyPin.check(typeof pin === 'string' ? pin : '');
   const resolve = questions.get(id);
   if (!resolve) return false;
@@ -172,6 +188,7 @@ export function cancelQuestions() {
   for (const [id, resolve] of questions) {
     questions.delete(id);
     pinQuestions.delete(id);
+    heldQuestions.delete(id);
     send({ type: 'questionClose', id });
     resolve(refusals.get(id));
   }
@@ -198,8 +215,10 @@ export function nativeQuestion(spec) {
  */
 export async function askInApp(spec) {
   showWindow();
-  // The native dialog has no field for the PIN: a question that needs one is refused instead.
-  if (spec.pin && (!win || win.webContents.isLoading())) return spec.cancel;
+  const held = windowLocked && isAgentQuestion(spec); // #507
+  // The native dialog has no field for the PIN: a question that needs one is refused instead – and one that must not
+  // show its names yet (#507).
+  if ((spec.pin || held) && (!win || win.webContents.isLoading())) return spec.cancel;
   if (!win || win.webContents.isLoading()) {
     const { options, box } = nativeQuestion(spec);
     const r = await dialog.showMessageBox(win || null, box);
@@ -213,12 +232,14 @@ export async function askInApp(spec) {
       questions.set(id, resolve);
       refusals.set(id, spec.cancel);
       if (spec.pin) pinQuestions.add(id);
-      send({ type: 'question', id, ...spec });
+      if (held) heldQuestions.set(id, spec);
+      send({ type: 'question', id, ...(held ? heldView(spec) : spec) });
       bringToFront(win); // #468: the PIN field in the question can be typed into at once
       // Nobody answers within 5 minutes: treated as the cancel choice (the agent gets a refusal, not a hang).
       setTimeout(() => {
         if (questions.delete(id)) {
           pinQuestions.delete(id);
+          heldQuestions.delete(id);
           send({ type: 'questionClose', id });
           resolve(spec.cancel);
         }
@@ -227,6 +248,7 @@ export async function askInApp(spec) {
   } finally {
     refusals.delete(id);
     pinQuestions.delete(id);
+    heldQuestions.delete(id);
     if (!questions.size && win) {
       win.setAlwaysOnTop(false);
       win.flashFrame(false);

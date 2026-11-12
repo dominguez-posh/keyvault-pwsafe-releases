@@ -10,7 +10,7 @@ import { t } from '../../extension/core/i18n.js';
 import { demo, smokeTest } from './boot.js';
 import { config } from './state.js';
 import { diag } from './diag.js';
-import { helperExe, runHelperExe } from './typing.js';
+import { CLIPBOARD_BUSY, CLIPBOARD_UNVERIFIED, helperExe, runHelperExe } from './typing.js';
 
 let clipboardTimer = null;
 
@@ -41,14 +41,25 @@ export async function copyToClipboard(text, { atLeastSeconds = 0 } = {}) {
   // the text back itself. Electron's clipboard.readText() returns nothing on some machines (2026-11-01: every copy
   // reported "clipboard not available" although it had worked) – so it decides nothing here any more.
   // Without the helper (development without windows/out): the PowerShell helper, which App Control or endpoint
-  // protection may block (then after 1.5 s). Never the plain clipboard on Windows: then the copy fails (#337).
+  // protection may block (then after 6 s: it waits up to 5 s for a busy clipboard itself). Never the plain clipboard
+  // on Windows: then the copy fails (#337). Runs in the background: the window stays usable while the helper waits.
   let verified = false;
   if (process.platform === 'win32') {
     const code = await runHelperExe('--clipboard', text);
-    verified = code === 0;
+    // Exit 4: written, only the read-back met a held clipboard – copied, and the clear timer below must run (#526).
+    if (code === CLIPBOARD_UNVERIFIED) diag('COPY written, read-back skipped: clipboard held by another program');
+    verified = code === 0 || code === CLIPBOARD_UNVERIFIED;
+    // Exit 2: another program held the clipboard for the helper's whole wait (~5 s, #526). The PowerShell helper would
+    // meet the same lock – say so instead, and keep the fallback for the next copy.
+    if (code === CLIPBOARD_BUSY) {
+      diag('COPY refused: clipboard held by another program for 5 s');
+      // An older helper also answered 2 after writing: clear it anyway if the text did land (only this exact text).
+      clearCopied(text).catch(() => {});
+      throw new Error(t('Kopieren nicht möglich: Die geschützte Zwischenablage ist gerade von einem anderen Programm belegt. Bitte noch einmal versuchen.'));
+    }
     if (!verified) {
       diag(`COPY Keevault-Update.exe ${code === null ? 'unavailable' : `exit ${code}`} – fallback`);
-      const ps = !smokeTest && !demo && !psClipboardBlocked && await copyInTime(() => copySecret(text), 1500, () => clearCopied(text));
+      const ps = !smokeTest && !demo && !psClipboardBlocked && await copyInTime(() => copySecret(text), 6000, () => clearCopied(text));
       // Neither helper could copy: an error, never a plain copy – that one would land in Windows' clipboard history
       // and the cloud clipboard (#337).
       if (!ps) {

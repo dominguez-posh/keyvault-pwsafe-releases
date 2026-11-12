@@ -17,6 +17,8 @@ import { refresh, reloadAll, render, setSettingsRev, settingsRev } from './shell
 import { renderSidebar } from './sidebar.js';
 import { openTrash } from './trash.js';
 import { managesAny } from './private.js';
+import { exportSettings, importSettings } from './settings-file.js';
+import { complianceMenuOffered, openCompliance } from './compliance.js';
 
 /** See-through ground (light/strong) as classes on <html>; the main process switches the window material. */
 export function applyViewClass() {
@@ -177,11 +179,14 @@ function mainMenu(anchor) {
     h('div', { class: 'context-sep' }),
     h('div', { class: 'main-menu-pane', role: 'group', 'aria-label': t('Menü') },
       entry('settings', 'settings', t('Einstellungen'), settingsDialog),
+      entry('settings-export', 'download', t('Einstellungen exportieren …'), exportSettings),
+      entry('settings-import', 'upload', t('Einstellungen importieren …'), importSettings),
       entry('reload', 'refresh', t('Neu laden'), refresh),
       h('div', { class: 'main-menu-label' }, t('Werkzeuge')),
       entry('generator', 'key', t('Passwort-Generator'), generatorDialog),
       entry('health', 'shield', t('Passwort-Check'), () => healthDialog(reportCtx()), expiring ? h('span', { class: 'count warn', title: t('Einträge laufen ab') }, expiring) : null),
       st.signedIn ? entry('access', 'users', t('Zugriffsbericht'), () => accessReportDialog(reportCtx())) : null,
+      adminMode() && complianceMenuOffered() ? entry('compliance', 'shield', t('Compliance'), openCompliance) : null,
       entry('trash', 'trash', t('Papierkorb'), openTrash),
       st.releaseSigning ? entry('release-sign', 'key', t('Release signieren'), () => call('signRelease').catch((e) => toast(e.message, 'error'))) : null,
       st.releaseSigning ? entry('release-setup', 'key', t('Release-Schlüssel einrichten'), () => call('setupReleaseKey').catch((e) => toast(e.message, 'error'))) : null,

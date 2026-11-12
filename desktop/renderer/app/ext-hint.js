@@ -7,6 +7,7 @@ import { t, getLanguage } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { openUrl } from './helpers.js';
 import { st } from './state.js';
+import { reinstallBrowserExtension } from './ext-reinstall.js';
 
 const POLL_MS = 30_000;
 let status = null;
@@ -70,6 +71,7 @@ async function recheck(button) {
 // it is closed, so the advice to restart the browser does not vanish like a toast.
 const fixable = () => !!status && (status.state === 'extensionOutdated' || status.state === 'noConnection');
 let fix = null; // { available, company, channel } from the main process, or null
+let reinstall = null; // #494: { available, company, browsers } from the main process, or null
 let fixing = false;
 let result = null; // { kind: 'ok' | 'error', text }
 
@@ -78,6 +80,7 @@ function resultFor(r) {
   if (r.result === 'aligned') return { kind: 'ok', text: t('Die Einrichtung stimmt bereits. Bitte Browser neu starten – falls die Erweiterung danach noch nicht erscheint, den PC neu starten.') };
   if (r.result === 'declined') return { kind: 'error', text: t('Abgebrochen: Die Administratorabfrage wurde nicht bestätigt. Es wurde nichts geändert.') };
   if (r.result === 'company') return { kind: 'error', text: t('Nicht geändert: Die Richtlinie legt deine Firma fest – wende dich an deine IT.') };
+  if (r.result === 'meanwhile') return { kind: 'error', text: t('Nicht übernommen: Die Richtlinie wurde inzwischen geändert. Keevault hat sie nicht überschrieben.') };
   return { kind: 'error', text: t('Auf diesem Gerät kann Keevault die Einrichtung nicht selbst vornehmen.') };
 }
 
@@ -98,6 +101,23 @@ async function applyFix() {
   document.getElementById('ext-result-close')?.focus();
 }
 
+// #494: "Neu installieren" next to "Jetzt beheben" in the popover, and in the hint itself where "Jetzt beheben" is not offered
+// (the policies already fit, yet the extension is missing or old). The result stays in the same notice as for the fix.
+async function applyReinstall() {
+  if (fixing) return;
+  fixing = true;
+  closePopover();
+  drawExtensionHint();
+  try {
+    await reinstallBrowserExtension((r) => { result = r; drawResult(); });
+  } finally {
+    fixing = false;
+  }
+  await refreshExtensionHint();
+  drawResult();
+  document.getElementById('ext-result-close')?.focus();
+}
+
 function drawResult() {
   let box = document.getElementById('ext-result');
   if (!result || !st?.opened) {
@@ -110,7 +130,7 @@ function drawResult() {
   }
   box.className = result.kind;
   box.replaceChildren(
-    icon(result.kind === 'ok' ? 'check' : 'info', 16),
+    icon(result.kind === 'ok' ? 'check' : result.kind === 'progress' ? 'refresh' : 'info', 16),
     h('span', { class: 'text' }, result.text),
     h('button', { type: 'button', class: 'icon-btn', id: 'ext-result-close', 'aria-label': t('Hinweis schließen'), title: t('Hinweis schließen'), onclick: () => { result = null; drawResult(); } }, icon('x', 14)));
   const anchor = document.getElementById('ext-hint') || document.getElementById('app-version');
@@ -137,6 +157,9 @@ function openPopover() {
     actions.push(h('button', { type: 'button', class: 'btn small', onclick: () => openUrl('https://keevault.de/download.html') }, icon('external', 14), t('Download-Seite öffnen')));
   }
   // #455: the company manages the browser (also per user or in the cloud): Keevault creates nothing, the IT distributes the extension.
+  if (fixable() && reinstall?.available) {
+    actions.push(h('button', { type: 'button', class: 'btn small', id: 'ext-reinstall-pop', disabled: fixing, onclick: applyReinstall }, icon('refresh', 14), t('Browser-Erweiterung neu installieren')));
+  }
   if (fixable() && fix?.company) {
     const kb = getLanguage() === 'en' ? 'https://keevault.de/en/knowledge/intune.html' : 'https://keevault.de/wissen/it-verteilung.html';
     actions.push(h('button', { type: 'button', class: 'btn small', id: 'ext-it-kb', onclick: () => openUrl(kb) }, icon('external', 14), t('Verteilung durch die IT')));
@@ -177,9 +200,12 @@ export function drawExtensionHint() {
   const fixButton = fixable() && fix?.available
     ? h('button', { id: 'ext-fix', type: 'button', disabled: fixing, title: t('Stellt die Browser-Richtlinie für Edge und Chrome auf den Update-Kanal „{channel}“. Windows fragt dafür nach Administratorrechten.', { channel: fix.channel === 'beta' ? t('Early Access') : t('Stabil') }), onclick: applyFix }, icon('shield', 12), t('Jetzt beheben'))
     : null;
+  const reinstallButton = !fixButton && fixable() && reinstall?.available
+    ? h('button', { id: 'ext-reinstall', type: 'button', disabled: fixing, title: t('Richtet die Erweiterung in Edge und Chrome neu ein und startet den Browser auf Wunsch neu. Windows fragt dafür nach Administratorrechten.'), onclick: applyReinstall }, icon('refresh', 12), t('Neu installieren'))
+    : null;
   const focused = document.activeElement?.id;
-  hint.replaceChildren(open, ...(fixButton ? [fixButton] : []));
-  if (focused === 'ext-hint-open' || focused === 'ext-fix') document.getElementById(focused)?.focus();
+  hint.replaceChildren(open, ...[fixButton, reinstallButton].filter(Boolean));
+  if (['ext-hint-open', 'ext-fix', 'ext-reinstall'].includes(focused)) document.getElementById(focused)?.focus();
   const r = versionTag.getBoundingClientRect();
   hint.style.setProperty('right', `${Math.max(8, window.innerWidth - r.left + 8)}px`);
   hint.style.setProperty('bottom', `${Math.max(0, window.innerHeight - r.bottom)}px`);
@@ -198,7 +224,12 @@ export async function refreshExtensionHint() {
     } catch {
       fix = null;
     }
-  } else if (!fixable()) fix = null;
+    try {
+      reinstall = await call('extensionReinstallState');
+    } catch {
+      reinstall = null;
+    }
+  } else if (!fixable()) { fix = null; reinstall = null; }
   drawExtensionHint();
   drawResult();
 }

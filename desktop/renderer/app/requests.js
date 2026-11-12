@@ -49,6 +49,12 @@ export async function checkWindowsRequests() {
   }
 }
 
+/** #507: "Ablehnen" on the window's lock screen – refuses every Windows passkey request waiting behind the lock. */
+export async function declineHeldWindowsRequests() {
+  for (const r of await call('windowsRequests')) if (r.held) await call('windowsDecision', r.id, { cancel: true });
+  await checkWindowsRequests();
+}
+
 /**
  * Question from the main process (AI agent wants to connect, read a password or change an entry): a dialog in the
  * app's style – agent badge, request, answers as buttons (the recommended one highlighted). Escape or × = cancel.
@@ -78,7 +84,7 @@ export function questionDialog(q) {
   // During the delay the button only looks disabled: a really disabled button would lose the keyboard focus and get no
   // more key presses. Disabled for real only without a choice, where it can't have the focus.
   const updateAllow = () => {
-    allow.disabled = choice === null;
+    allow.disabled = choice === null || !!q.held; // #507: a held agent question is allowed only after the window's PIN
     allow.setAttribute('aria-disabled', String(!delayPassed));
   };
   const startDelay = () => {
@@ -192,6 +198,7 @@ export function questionDialog(q) {
     close();
   };
   const allow = h('button', { type: 'button', class: 'btn primary', onpointerdown: () => { pressedInTime = delayPassed; }, onclick: async (e) => {
+    if (q.held) return; // #507: allowed only after the window's PIN (the main process refuses it too)
     if (!delayPassed || choice === null || (e.detail > 0 && !pressedInTime)) return;
     if (pinInput) {
       await submitPin();

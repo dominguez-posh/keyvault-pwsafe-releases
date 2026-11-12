@@ -70,7 +70,8 @@ namespace Keevault.Setup
     /// <summary>Short log of the last updates (%LOCALAPPDATA%\keyvault-pwsafe-updater\update.log), for support.</summary>
     internal static class UpdateLog
     {
-        public static readonly string FilePath = System.IO.Path.Combine(
+        // KV_UPDATE_LOG: tests write their own log instead of the user's (#513).
+        public static readonly string FilePath = Environment.GetEnvironmentVariable("KV_UPDATE_LOG") ?? System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "keyvault-pwsafe-updater", "update.log");
 
         public static void Write(string line)
@@ -134,51 +135,91 @@ namespace Keevault.Setup
 
         /// <summary>
         /// Waits until nothing runs from the folder any more; after <paramref name="wait"/> the rest is ended (these are
-        /// Keevault's own processes – the browser reconnects to the new version by itself). Returns what is left over.
+        /// Keevault's own processes – the browser reconnects to the new version by itself). The browser's and the agents'
+        /// connections never end by themselves (#351): asked to quit by UpdateWait.Signal, they get
+        /// <paramref name="helperGrace"/> for it and are ended then. Processes that have ended already are not counted
+        /// (#513: listed while someone holds a handle, but they hold no file). <paramref name="waiting"/> hears what still
+        /// runs after each round. Returns the kinds still running (UpdateWait.Kind), empty when nothing is left.
         /// </summary>
-        public static async Task<List<string>> Release(string dir, TimeSpan wait)
+        public static async Task<List<string>> Release(string dir, TimeSpan wait, TimeSpan helperGrace = default, Action<List<string>> waiting = null)
         {
             if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return new List<string>();
-            var until = DateTime.Now + wait;
+            var start = DateTime.Now;
+            var until = start + wait;
+            var ended = new HashSet<int>(); // each one once: a second end of an exiting process is only refused (#513)
             while (DateTime.Now < until)
             {
-                // #351: the browser's and the agents' connections never end by themselves – ended at once, not waited for.
-                var waitFor = 0;
-                foreach (var p in Find(dir))
+                var running = new List<string>();
+                foreach (var p in Live(dir))
                 {
                     using (p)
                     {
                         var commandLine = HelperProcesses.CommandLine(p.Id);
-                        if (HelperProcesses.IsHelper(commandLine)) End(p, commandLine, "a connection for the browser or an AI agent");
-                        else waitFor++;
+                        if (HelperProcesses.IsHelper(commandLine) && DateTime.Now - start >= helperGrace && ended.Add(p.Id)) End(p, commandLine, "a connection for the browser or an AI agent");
+                        running.Add(UpdateWait.Kind(commandLine));
                     }
                 }
-                if (waitFor == 0) return new List<string>();
+                if (running.Count == 0) return running;
+                waiting?.Invoke(running);
                 await Task.Delay(500);
             }
-            foreach (var p in Find(dir))
+            foreach (var p in Live(dir))
             {
-                using (p) End(p, HelperProcesses.CommandLine(p.Id), "still running from the installation folder");
+                using (p)
+                {
+                    if (ended.Add(p.Id)) End(p, HelperProcesses.CommandLine(p.Id), "still running from the installation folder");
+                }
             }
-            var left = Find(dir);
-            var names = left.Select((p) => $"{p.ProcessName}.exe").Distinct().ToList();
+            for (var i = 0; i < 6; i++)
+            {
+                var still = Live(dir);
+                still.ForEach((p) => p.Dispose());
+                if (still.Count == 0) break;
+                await Task.Delay(500);
+            }
+            var left = Live(dir);
+            var kinds = left.Select((p) => UpdateWait.Kind(HelperProcesses.CommandLine(p.Id))).ToList();
             left.ForEach((p) => p.Dispose());
-            return names;
+            return kinds;
         }
 
-        /// <summary>Ends one process; the log names it with its command line (#351: which ones they were).</summary>
+        /// <summary>The processes from the folder that still run (#513: ended ones may still be listed).</summary>
+        private static List<Process> Live(string dir)
+        {
+            var live = new List<Process>();
+            foreach (var p in Find(dir))
+            {
+                if (UpdateWait.Ended(p.Id)) p.Dispose();
+                else live.Add(p);
+            }
+            return live;
+        }
+
+        /// <summary>
+        /// Ends one process without waiting for it (the caller's loop waits); the log names it with its command line
+        /// (#351: which ones they were).
+        /// </summary>
         private static void End(Process p, string commandLine, string why)
         {
+            UpdateLog.Write($"ending {NameOf(p)} ({p.Id}), {why}: {commandLine ?? "(command line not readable)"}");
             try
             {
-                UpdateLog.Write($"ending {p.ProcessName} ({p.Id}), {why}: {commandLine ?? "(command line not readable)"}");
                 p.Kill();
-                p.WaitForExit(5000);
+            }
+            catch (Win32Exception e) when (e.NativeErrorCode == 5)
+            {
+                // #513: what update.log showed as "Zugriff verweigert" – Windows refuses to end a process that is exiting.
+                UpdateLog.Write($"{NameOf(p)} ({p.Id}) is exiting already{(UpdateWait.Ended(p.Id) ? " and has ended" : ", waiting for it")}");
             }
             catch (Exception e)
             {
-                UpdateLog.Write($"could not end {p.ProcessName} ({p.Id}): {e.Message}");
+                UpdateLog.Write($"could not end {NameOf(p)} ({p.Id}): {e.Message}");
             }
+        }
+
+        private static string NameOf(Process p)
+        {
+            try { return p.ProcessName; } catch { return "process"; }
         }
     }
 }

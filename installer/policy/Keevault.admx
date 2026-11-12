@@ -12,6 +12,8 @@
       <definition name="SUPPORTED_Keevault_0_6_2" displayName="$(string.SUPPORTED_Keevault_0_6_2)" />
       <definition name="SUPPORTED_Keevault_0_7_0" displayName="$(string.SUPPORTED_Keevault_0_7_0)" />
       <definition name="SUPPORTED_Keevault_0_7_10" displayName="$(string.SUPPORTED_Keevault_0_7_10)" />
+      <definition name="SUPPORTED_Keevault_0_9_8" displayName="$(string.SUPPORTED_Keevault_0_9_8)" />
+      <definition name="SUPPORTED_Keevault_0_9_33" displayName="$(string.SUPPORTED_Keevault_0_9_33)" />
     </definitions>
   </supportedOn>
   <categories>
@@ -93,6 +95,16 @@
         </enum>
       </elements>
     </policy>
+    <policy name="UpdateChannel" class="Both" displayName="$(string.UpdateChannel)" explainText="$(string.UpdateChannel_Help)" presentation="$(presentation.UpdateChannel)" key="Software\Policies\Keevault">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_9_8" />
+      <elements>
+        <enum id="UpdateChannel" valueName="UpdateChannel" required="true">
+          <item displayName="$(string.UpdateChannel_Stable)"><value><string>stable</string></value></item>
+          <item displayName="$(string.UpdateChannel_Beta)"><value><string>beta</string></value></item>
+        </enum>
+      </elements>
+    </policy>
     <policy name="SelfUpdate" class="Both" displayName="$(string.SelfUpdate)" explainText="$(string.SelfUpdate_Help)" key="Software\Policies\Keevault" valueName="SelfUpdate">
       <parentCategory ref="Keevault" />
       <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
@@ -122,6 +134,12 @@
     <policy name="WindowsProvider" class="Both" displayName="$(string.WindowsProvider)" explainText="$(string.WindowsProvider_Help)" key="Software\Policies\Keevault" valueName="WindowsProvider">
       <parentCategory ref="Keevault" />
       <supportedOn ref="SUPPORTED_Keevault_0_7_10" />
+      <enabledValue><decimal value="1" /></enabledValue>
+      <disabledValue><decimal value="0" /></disabledValue>
+    </policy>
+    <policy name="WindowHello" class="Both" displayName="$(string.WindowHello)" explainText="$(string.WindowHello_Help)" key="Software\Policies\Keevault" valueName="WindowHello">
+      <parentCategory ref="Keevault" />
+      <supportedOn ref="SUPPORTED_Keevault_0_9_33" />
       <enabledValue><decimal value="1" /></enabledValue>
       <disabledValue><decimal value="0" /></disabledValue>
     </policy>

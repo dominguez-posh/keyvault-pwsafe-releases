@@ -89,7 +89,16 @@ export async function checkSignInPages({ send, events, open, sw, waitFor, check,
   const inOwn = async (expression) => (await send('Runtime.evaluate', { expression, returnByValue: true }, own.sessionId)).result.value;
   const stored = async () => (await contentCall(own.sessionId, 'cs:fill', ids(httpEntry)))?.result?.password;
   const clickUpdate = async () => {
-    const { model } = await send('DOM.getBoxModel', { nodeId: await shadowNode(own.sessionId, 'kvpwsafe-ui', '.banner .b.primary') }, own.sessionId);
+    // #490: the bar slides in: click only once its button stands still (same box twice, 200 ms apart), not at a guessed time.
+    const box = async () => (await send('DOM.getBoxModel', { nodeId: await shadowNode(own.sessionId, 'kvpwsafe-ui', '.banner .b.primary') }, own.sessionId)).model.border.join(',');
+    let model = null;
+    for (let i = 0, last = ''; i < 30 && !model; i++) {
+      const now = await box().catch(() => '');
+      if (now && now === last) model = { border: now.split(',').map(Number) };
+      last = now;
+      if (!model) await ownPause(200);
+    }
+    if (!model) return check(false, '#411 Speichern-Leiste: die Schaltfläche kam nicht zur Ruhe');
     const [x, y] = [(model.border[0] + model.border[4]) / 2, (model.border[1] + model.border[5]) / 2];
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 }, own.sessionId);
     await ownPause(1500);
@@ -102,7 +111,8 @@ export async function checkSignInPages({ send, events, open, sw, waitFor, check,
   await inOwn('document.getElementById("cj").remove(), true');
   await ownPause(1200);
   await clickUpdate();
-  check(await stored() === 'F2-Neu-1', '#411 Speichern-Leiste: Klick auf sichtbare Leiste speichert nicht');
+  await waitFor(async () => (await stored()) === 'F2-Neu-1', 6000); // the save goes through the extension: wait for it, not a pause
+  check(await stored() === 'F2-Neu-1','#411 Speichern-Leiste: Klick auf sichtbare Leiste speichert nicht');
 
   // Confirmed fill (#412): the tab has moved on from the origin in the confirmation, nothing goes there. The right origin
   // tells this from a fill that never works.

@@ -44,8 +44,10 @@ export async function checkJobBoundToTab(h, part) {
  */
 export async function checkStartPage(h) {
   const sp = await h.open(`http://login.microsoftonline.com:${h.port}/ms?sp`);
-  const json = await h.evaluate(h.optionsSession, `chrome.tabs.query({}).then((ts) => ts.find((x) => (x.url || "").includes("/ms?sp"))?.id)
-    .then((id) => chrome.storage.session.get("tabTrust:" + id).then((s) => JSON.stringify(s["tabTrust:" + id] || null)))`);
+  // #490: the extension records the tab's trust a moment after the page is complete: wait for the record itself (limit and
+  // the message below if it never comes), not for a fixed time.
+  const json = await h.waitFor(() => h.evaluate(h.optionsSession, `chrome.tabs.query({}).then((ts) => ts.find((x) => (x.url || "").includes("/ms?sp"))?.id)
+    .then((id) => chrome.storage.session.get("tabTrust:" + id).then((s) => (s["tabTrust:" + id] ? JSON.stringify(s["tabTrust:" + id]) : "")))`), 8000);
   const state = JSON.parse(json || 'null');
   h.check(state?.ok === true && state?.auto === false, `#426 start_page im Browser: Auftrag ja, gemerktes Konto nein erwartet (${json})`);
   await h.sleep(6500); // the countdown of the remembered account is 3 s
@@ -66,8 +68,8 @@ export async function checkForeignRedirect(h) {
   await h.evaluate(portal.sessionId, `document.body.insertAdjacentHTML('beforeend', ${JSON.stringify(`<a id="kv429" style="position:fixed;left:10px;top:10px;width:200px;height:60px;display:block" href="${link}">x</a>`)}), true`);
   await h.tap(portal.sessionId, 110, 40);
   await h.sleep(6500); // the countdown of the remembered account is 3 s
-  const json = await h.evaluate(h.optionsSession, `chrome.tabs.query({}).then((ts) => ts.find((x) => (x.url || "").includes("/ms?r429"))?.id)
-    .then((id) => chrome.storage.session.get("tabTrust:" + id).then((s) => JSON.stringify(s["tabTrust:" + id] || null)))`);
+  const json = await h.waitFor(() => h.evaluate(h.optionsSession, `chrome.tabs.query({}).then((ts) => ts.find((x) => (x.url || "").includes("/ms?r429"))?.id)
+    .then((id) => chrome.storage.session.get("tabTrust:" + id).then((s) => (s["tabTrust:" + id] ? JSON.stringify(s["tabTrust:" + id]) : "")))`), 8000);
   const state = JSON.parse(json || 'null');
   h.check(state && state.ok === false && state.auto === false, `#429 Weiterleitung über fremde Seite gilt als vertraut (${json})`);
   h.check(JSON.stringify(await h.evaluate(portal.sessionId, 'signedIn')) === '{}', '#429 Weiterleitung über fremde Seite: gemerktes Konto meldet sich ohne Klick an');

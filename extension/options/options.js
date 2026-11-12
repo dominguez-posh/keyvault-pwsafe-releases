@@ -2,6 +2,7 @@ import { h, icon, iconButton, toast, confirmDialog, modal } from '../core/dom.js
 import { importDialog } from '../core/ui-import.js';
 import { setLanguage, t, LANGUAGES } from '../core/i18n.js';
 import { call } from '../lib/api.js';
+import { vaultDescription, vaultIcon } from '../core/ui-vault.js';
 
 const content = document.getElementById('content');
 const progressListeners = new Set();
@@ -55,9 +56,10 @@ function containers() {
     return h('span', { class: 'badge warn' }, t('Kein Datenzugriff'));
   };
   const rows = st.containers.map((c) => h('div', { class: 'container-row' },
-    icon(c.source === 'file' ? 'note' : c.protected ? 'shield' : 'vault', 20),
+    c.source === 'file' ? icon('note', 20) : vaultIcon(c, c.protected ? 'shield' : 'vault', 20), // #480: symbol and colour of the vault
     h('div', { class: 'row-text' },
       h('div', { class: 'row-title' }, c.name, accessBadge(c)),
+      vaultDescription(c, 'row-sub vault-description'),
       h('div', { class: 'row-sub' }, c.count != null ? t('{count} Einträge', { count: c.count }) : ''))));
   const importButton = h('button', { class: 'btn', disabled: !st.open, onclick: () => importDialog({
     containers: st.containers.filter((c) => c.access?.write !== false && !c.error && !c.locked).map((c) => ({ id: c.id, name: c.name })),

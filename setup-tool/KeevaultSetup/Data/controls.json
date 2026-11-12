@@ -1,0 +1,43 @@
+{
+  "schema": "keevault-setup-controls",
+  "version": "2026.11.2",
+  "note": "Decision Lucas 2026-11-11: CISA SCuBA in full, CIS only as a hint. Every check is worded by Keevault. CISA references stay; CIS numbers are only an unverified mapping (field cis) without CIS texts, until the terms of use are clarified (#501).",
+  "frameworks": {
+    "keevault": { "name": "Keevault-Empfehlung", "edition": "" },
+    "scuba-aad": { "name": "CISA SCuBA Microsoft Entra ID Baseline", "edition": "1.x" },
+    "cis-azure": { "name": "CIS Microsoft Azure Foundations Benchmark", "edition": "2.0.0", "unverified": true },
+    "cis-m365": { "name": "CIS Microsoft 365 Foundations Benchmark", "edition": "3.1.0", "unverified": true }
+  },
+  "controls": [
+    { "id": "vault-rbac", "framework": "keevault", "control": "", "cis": { "framework": "cis-azure", "control": "8.6" }, "check": "vaultRbac",
+      "title": ["Tresore nutzen Azure RBAC", "Vaults use Azure RBAC"],
+      "why": ["Keevault teilt über Rollen; Zugriffsrichtlinien umgehen die Gruppen.", "Keevault shares through roles; access policies bypass the groups."] },
+    { "id": "vault-recoverable", "framework": "keevault", "control": "", "cis": { "framework": "cis-azure", "control": "8.5" }, "check": "vaultRecoverable",
+      "title": ["Tresore sind wiederherstellbar (Soft-Delete und Purge-Schutz)", "Vaults are recoverable (soft delete and purge protection)"],
+      "why": ["Gelöschte Einträge und Tresore lassen sich zurückholen.", "Deleted entries and vaults can be restored."] },
+    { "id": "vault-logging", "framework": "keevault", "control": "", "cis": { "framework": "cis-azure", "control": "5.1.5" }, "check": "vaultLogging",
+      "title": ["Zugriffe auf die Tresore werden protokolliert (AuditEvent)", "Access to the vaults is logged (AuditEvent)"],
+      "why": ["Nachvollziehbar, wer wann welches Passwort gelesen hat (#486).", "Shows who read which password when (#486)."] },
+    { "id": "vault-private", "framework": "keevault", "control": "", "cis": { "framework": "cis-azure", "control": "8.7" }, "check": "vaultPrivate",
+      "title": ["Tresore nur über private Endpunkte erreichbar", "Vaults reachable only through private endpoints"],
+      "why": ["Begründete Abweichung möglich: Keevault-Geräte greifen ohne VPN zu; dann Anmeldung mit bedingtem Zugriff absichern.", "A justified deviation is possible: Keevault devices connect without VPN; then protect the sign-in with Conditional Access."] },
+    { "id": "secret-expiry", "framework": "keevault", "control": "", "cis": { "framework": "cis-azure", "control": "8.3" }, "check": "secretExpiry",
+      "title": ["Secrets haben ein Ablaufdatum", "Secrets have an expiry date"],
+      "why": ["Begründete Abweichung: Keevault-Einträge sind Passwörter, die nicht selbst ablaufen; Wechsel über die Passwortänderung und den Verlauf.", "Justified deviation: Keevault items are passwords that do not expire themselves; rotation through password changes and the history."] },
+    { "id": "ga-count", "framework": "scuba-aad", "control": "MS.AAD.7.1v1", "cis": { "framework": "cis-m365", "control": "1.1.3" }, "check": "globalAdmins", "min": 2, "max": 8,
+      "title": ["2 bis 8 globale Administratoren", "2 to 8 Global Administrators"],
+      "why": ["Wer global administriert, kann sich jede Tresor-Rolle geben.", "Whoever is Global Administrator can give themselves any vault role."] },
+    { "id": "phishing-resistant", "framework": "scuba-aad", "control": "MS.AAD.3.1v1", "check": "phishingResistantMfa",
+      "title": ["Phishing-resistente MFA für alle Benutzer (bedingter Zugriff)", "Phishing-resistant MFA for all users (Conditional Access)"],
+      "why": ["Die Entra-Anmeldung öffnet die Tresore; Passkeys/FIDO2 schützen sie.", "The Entra sign-in opens the vaults; passkeys/FIDO2 protect it."] },
+    { "id": "legacy-auth", "framework": "scuba-aad", "control": "MS.AAD.1.1v1", "check": "legacyAuthBlocked",
+      "title": ["Ältere Authentifizierung ist blockiert", "Legacy authentication is blocked"],
+      "why": ["Ältere Protokolle umgehen MFA.", "Legacy protocols bypass MFA."] },
+    { "id": "user-consent", "framework": "scuba-aad", "control": "MS.AAD.5.2v1", "check": "userConsent",
+      "title": ["Nur Administratoren stimmen Apps zu", "Only administrators consent to apps"],
+      "why": ["Eine fremde App mit Benutzerzustimmung könnte im Namen der Person auf Tresore zugreifen.", "A foreign app with user consent could reach vaults on the person's behalf."] },
+    { "id": "pim-permanent", "framework": "scuba-aad", "control": "MS.AAD.7.4v1", "check": "manual",
+      "title": ["Keine dauerhaft aktiven hochprivilegierten Rollen (PIM)", "No permanently active highly privileged roles (PIM)"],
+      "why": ["Im Entra Admin Center unter Privileged Identity Management prüfen; braucht Entra ID P2.", "Check in the Entra admin center under Privileged Identity Management; needs Entra ID P2."] }
+  ]
+}

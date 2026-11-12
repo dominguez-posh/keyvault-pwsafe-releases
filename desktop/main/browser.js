@@ -3,8 +3,10 @@
 import { app } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { BrowserBridge, launchPath, pipePath, registerNativeHost, unregisterNativeHost } from '../bridge.js';
+import { BrowserBridge, launchPath, pipePath, protectPipe, registerNativeHost, unregisterNativeHost } from '../bridge.js';
+import { diag } from './diag.js';
 import { mcpHostScript } from '../mcp.js';
+import { quitWatch } from '../helper-quit.js';
 import { itemMatchesHost } from '../../extension/core/match.js';
 import { t } from '../../extension/core/i18n.js';
 import { ORIGIN as WINDOWS_ORIGIN, rememberDesktopCommand } from '../windows-provider.js';
@@ -12,9 +14,11 @@ import { appRoot, demo, devIsolated } from './boot.js';
 import { bridge, config, opened, setBridge, vault, win } from './state.js';
 import { approveAgent, askInApp, mcpHandlers, mcpScriptPath } from './agents.js';
 import { api } from './api/index.js';
-import { passkeyPin, requireOpen } from './guards.js';
+import { adminFlagsGuard, passkeyPin, requireOpen } from './guards.js';
 import { effectiveRpId, getAssertion } from '../../extension/core/webauthn.js';
 import { copyToClipboard } from './clipboard.js';
+import { storedVaultSettings } from '../../extension/core/vault-settings.js';
+import { checkCopy, checkLeaveToPersonal, checkRequired, noteServed } from './vault-rules.js';
 import { confirmInCard } from './confirm-card.js';
 import { changed, lockNow, send } from './session.js';
 import { extensionOutdated, extensionStatus } from '../versions.js';
@@ -22,6 +26,8 @@ import { restoreStoredKeys, withoutPasskeyKeys } from '../passkey-keys.js';
 import { hostIn, setSignInJobs, signInFor, signInJobs } from './signin.js';
 import { windowsHandlers } from './windows-passkeys.js';
 import { browserItemHandlers, ITEM_CAPS } from '../browser-items.js';
+import { helperExe } from './typing.js';
+import { appStageNow } from './extension-channel.js';
 
 async function approveBrowser(origin) {
   const s = config.get();
@@ -44,13 +50,19 @@ async function approveBrowser(origin) {
 
 // The extension works through the desktop app for every container (Key Vault and file): sign-in, tenants and
 // keys stay here, the extension needs no configuration of its own.
-const forBrowser = (c) => ({
+const forBrowser = (c, looks = {}) => ({
   id: c.id, name: c.name, source: c.kind, sources: ['file'], locked: !!c.locked, protected: !!c.protected,
   error: c.error ? { status: c.error.status || 0, message: c.error.message } : null, access: c.access || null,
   // #479: lets the extension show the host next to a name that comes from the vault itself.
-  vaultUrl: c.vaultUrl || null, metaName: c.metaName || null,
+  vaultUrl: c.vaultUrl || null, metaName: c.metaName || null, tagName: c.tagName || null,
+  // #480: colour, symbol and short description of the vault (nothing else of its settings).
+  look: looks[c.id] ? { color: looks[c.id].look.color, icon: looks[c.id].look.icon, description: looks[c.id].look.description } : null,
 });
-const browserContainers = async () => (opened ? (await vault.containers()).map(forBrowser) : []);
+const browserContainers = async () => {
+  if (!opened) return [];
+  const looks = await storedVaultSettings(vault);
+  return (await vault.containers()).map((c) => forBrowser(c, looks));
+};
 
 const INDEX_MAX_AGE = 5 * 60_000;
 const SNAPSHOT_PAGE = 500;
@@ -82,10 +94,12 @@ let simulatedClients = null;
 export function simulateExtensionClients(list) { simulatedClients = list; }
 
 /** #454: state of the browser extension for the hint at the bottom right. */
-export function currentExtensionStatus() {
-  const clients = simulatedClients || (bridge ? [...bridge.clients] : []);
+export function currentExtensionStatus(clients = extensionClients()) {
   return extensionStatus(clients, app.getVersion());
 }
+
+/** The connected bridge clients (or the simulated ones); #494 tells a client that came after a browser restart apart. */
+export const extensionClients = () => simulatedClients || (bridge ? [...bridge.clients] : []);
 
 /** #439: an item saved by the browser gets the stored private keys of its passkeys back. */
 const withStoredPasskeyKeys = (containerId, item) => restoreStoredKeys(item, () => vault.getItem(containerId, item.id, { fresh: true }));
@@ -108,7 +122,7 @@ export const confirmBrowserMove = async ({ from, to, entries }) => (await askInA
   cancel: 'deny',
 })) === 'allow';
 
-const itemHandlers = browserItemHandlers({ vault: liveVault, requireOpen, changed, movePasskey: (args) => api.movePasskey(args), confirm: confirmBrowserMove });
+const itemHandlers = browserItemHandlers({ vault: liveVault, requireOpen, changed, movePasskey: (args) => api.movePasskey(args), confirm: confirmBrowserMove, checkMove: checkLeaveToPersonal });
 
 export const browserHandlers = {
   ...itemHandlers,
@@ -126,7 +140,8 @@ export const browserHandlers = {
   hello: async (_msg, client) => {
     noteExtension(client);
     send({ type: 'extensionChanged' });
-    return { version: app.getVersion(), caps: APP_CAPS, opened, pinSet: !!config.get().appPin, passkeyPin: passkeyPin.state(), containers: await browserContainers() };
+    // stage (#420): the extension unlocks new functions by it (extension/core/channel.js), never security functions.
+    return { version: app.getVersion(), stage: appStageNow(), caps: APP_CAPS, opened, pinSet: !!config.get().appPin, passkeyPin: passkeyPin.state(), containers: await browserContainers() };
   },
   // Everything the extension lists in one answer, straight from the cache (never waits for Azure when there is a
   // cache); outdated vaults are reloaded afterwards and announced with "changed".
@@ -161,6 +176,8 @@ export const browserHandlers = {
   copy: async ({ text }) => {
     requireOpen();
     if (typeof text !== 'string' || !text || text.length > 100_000) throw new Error(t('Nichts zu kopieren'));
+    // #480: a value from a vault that wants the app PIN for copying is copied in the app (PIN there), not from the browser.
+    await checkCopy(text).catch((e) => { throw e.name === 'CopyPinRequired' ? new Error(t('Dieser Tresor verlangt beim Kopieren die App-PIN – bitte in der Keevault-App kopieren.')) : e; });
     await copyToClipboard(text);
     return true;
   },
@@ -175,13 +192,14 @@ export const browserHandlers = {
   // #439: no private passkey key goes to the browser; save puts the stored ones back.
   item: async ({ containerId, itemId }) => {
     requireOpen();
-    return withoutPasskeyKeys(await vault.getItem(containerId, itemId, { fresh: true }));
+    return withoutPasskeyKeys(await noteServed(containerId, await vault.getItem(containerId, itemId, { fresh: true })));
   },
   // Changes from the browser show up in the app (and other browsers) at once.
   // #466: the saved item has the stored keys back – the answer goes without them, like item.
   save: async ({ containerId, item, expectedVersion }) => {
     requireOpen();
-    const saved = await vault.saveItem(containerId, await withStoredPasskeyKeys(containerId, item), { expectedVersion });
+    await checkRequired(containerId, item); // #480: required fields of the vault
+    const saved = await vault.saveItem(containerId, await withStoredPasskeyKeys(containerId, await adminFlagsGuard(containerId, item, { browser: true })), { expectedVersion });
     changed();
     return withoutPasskeyKeys(saved);
   },
@@ -244,18 +262,31 @@ export async function applyBrowserIntegration() {
       const launch = viaShell
         ? { cmd: path.join(process.env.SystemRoot || 'C:\\Windows', 'explorer.exe'), args: ['kvpwsafe://open'] }
         : { cmd: launchPath(), args: app.isPackaged ? [] : [appRoot] };
-      await registerNativeHost({ userData: app.getPath('userData'), extensionIds: s.extensionIds, launch });
+      // #505: the installed app answers the browser through the small relay (Keevault-Update.exe, starts in a fraction of
+      // the time of Keevault.exe as Node); it accepts the pipe only from this program. Without it: host.cjs as before.
+      const relayExe = viaShell ? helperExe() : null;
+      const relay = relayExe ? { exe: relayExe, server: process.execPath } : null;
+      await registerNativeHost({ userData: app.getPath('userData'), extensionIds: s.extensionIds, launch, relay });
     } else await unregisterNativeHost();
     if (s.windowsProvider) await rememberDesktopCommand(launchPath(), app.isPackaged ? '' : `"${appRoot}"`).catch(() => {});
   }
   if (s.mcpEnabled && !demo) {
     await fs.mkdir(path.dirname(mcpScriptPath()), { recursive: true });
-    await fs.writeFile(mcpScriptPath(), mcpHostScript(pipePath(app.getPath('userData')), app.getVersion()));
+    await fs.writeFile(mcpScriptPath(), mcpHostScript(pipePath(app.getPath('userData')), app.getVersion()) + quitWatch()); // #513: quits before an update
   }
   if ((s.browserIntegration || s.windowsProvider || s.mcpEnabled) && !demo) {
     if (!bridge) {
-      setBridge(new BrowserBridge({ userData: app.getPath('userData'), handlers: bridgeHandlers, approve: approveBrowser }));
-      await bridge.start();
+      const server = new BrowserBridge({ userData: app.getPath('userData'), handlers: bridgeHandlers, approve: approveBrowser });
+      try {
+        await server.start();
+      } catch (e) {
+        // #511: Node creates the pipe as its first instance: a name another process holds already fails here. No server
+        // then (browser, Windows passkeys and agents stay without the app), noted in the diagnosis log; tried again at the next change.
+        diag(`BRIDGE no pipe server: ${e.code === 'EADDRINUSE' ? 'the pipe name is held by another process' : e.code || e.message}`);
+        return;
+      }
+      setBridge(server);
+      await protectPipe(server.path, helperExe(), diag, server);
     }
   } else {
     bridge?.stop();

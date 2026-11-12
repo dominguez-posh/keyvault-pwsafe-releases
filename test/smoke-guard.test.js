@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { startSmokeGuard, SMOKE_DEADLINE_MS, SLOWEST_RUN_ON_RECORD_MS } from '../desktop/main/smoke-guard.js';
+import { startSmokeGuard, deadlineFor, SMOKE_DEADLINE_MS, SLOWEST_RUN_ON_RECORD_MS } from '../desktop/main/smoke-guard.js';
+import { SMOKE_AREAS } from '../desktop/smoke-areas.js';
 
 const guardUrl = new URL('../desktop/main/smoke-guard.js', import.meta.url).href;
 const noFolder = join(tmpdir(), `kvpwsafe-no-such-folder-${process.pid}`, 'demo.png');
@@ -95,8 +96,10 @@ test('an invalid deadline value does not switch the deadline off', async () => {
   await guard.run(async () => {}); // clears the timer
 });
 
-test('#397: the deadline is 8 minutes, the slowest run on record ends in time and a hanging one does not', async (t) => {
-  assert.equal(SMOKE_DEADLINE_MS, 8 * 60_000);
+test('#397/#526: the deadline grows with the areas, the slowest run on record ends in time and a hanging one does not', async (t) => {
+  assert.equal(SMOKE_DEADLINE_MS, 4 * 60_000 + 10_000 * SMOKE_AREAS.length);
+  assert.ok(SMOKE_DEADLINE_MS > 8 * 60_000, 'never shorter than the 480 s both 0.9.33 full runs hit');
+  assert.equal(deadlineFor(['--demo', '--smoke-test', '--only=mainmenu']), 8 * 60_000, 'a partial run keeps the former 480 s');
   assert.ok(SLOWEST_RUN_ON_RECORD_MS < SMOKE_DEADLINE_MS);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const slow = inProcess();
@@ -109,7 +112,7 @@ test('#397: the deadline is 8 minutes, the slowest run on record ends in time an
   hanging.guard.note('features/x');
   t.mock.timers.tick(SMOKE_DEADLINE_MS);
   assert.deepEqual(hanging.exits, [1]);
-  assert.match(hanging.lines[0], /^SMOKE FAIL\nrun did not finish within 480 s, last stage: features\/x/);
+  assert.ok(hanging.lines[0].startsWith(`SMOKE FAIL\nrun did not finish within ${SMOKE_DEADLINE_MS / 1000} s, last stage: features/x`), hanging.lines[0]);
 });
 
 test('#397: a partial run never says SMOKE OK, a failed one says what it was', async () => {

@@ -23,6 +23,8 @@ import { trashDialog } from './trash.js';
 import { exportDialog, licenseDialog, licenses, logoDialog, renameContainerDialog, vaultSettingsDialog } from './vault-dialogs.js';
 import { addContainerDialog, vaultWizard } from './vault-wizard.js';
 import { pasteAction } from './cut-paste.js';
+import { complianceAction } from './compliance.js';
+import { canEditProfile, vaultProfileDialog } from './vault-profile.js';
 
 /** Problems with the access (shown as a tag right of the name); the regular levels are a symbol before it (roleMark). */
 export function accessBadge(c) {
@@ -120,7 +122,7 @@ export const featureAllowed = (c, feature) => c.kind !== 'keyvault' || !!c.acces
 
 // The vault menu keeps every function but folds the rarely used ones into two submenus.
 const VAULT_GROUPS = [
-  { action: 'group-manage', icon: 'settings', label: 'Verwaltung', members: ['vault-settings', 'mcp-scope', 'license', 'logo', 'rename', 'migrate', 'changelog'] },
+  { action: 'group-manage', icon: 'settings', label: 'Verwaltung', members: ['vault-settings', 'compliance', 'mcp-scope', 'license', 'logo', 'rename', 'migrate', 'changelog'] },
   { action: 'group-data', icon: 'download', label: 'Daten', members: ['import', 'export', 'backup', 'restore', 'trash'] },
 ];
 
@@ -170,6 +172,9 @@ function containerActionsFlat(c) {
     isFile && !c.secure && ready ? { action: 'migrate', icon: 'key', label: t('In abgesichertes Format umwandeln (nur Passkey)'), onClick: () => migrateDialog(c) } : null,
     c.secure ? { action: 'changelog', icon: 'clock', label: t('Änderungsprotokoll'), disabled: !ready, onClick: () => changelogDialog(c) } : null,
     settings,
+    complianceAction(c),
+    // #480: appearance, contact, rules and protection defaults for everyone – Verwalter only.
+    canEditProfile(c) ? { action: 'vault-profile', icon: 'edit', label: t('Tresor-Vorgaben (Verwalter)'), disabled: !!c.error, onClick: () => vaultProfileDialog(c) } : null,
     mcpScopeAction(c.id, ''),
     c.kind === 'keyvault' ? { action: 'info', icon: 'info', label: t('Infos'), disabled: !!c.error, onClick: () => infoDialog(c) } : null,
     c.kind === 'keyvault' || c.kind === 'file' ? { action: 'health', icon: 'shield', label: t('Passwort-Check'), disabled: !ready, onClick: () => healthDialog(reportCtx(c.id)) } : null,
@@ -178,7 +183,7 @@ function containerActionsFlat(c) {
     may('logo') ? { action: 'logo', icon: 'image', label: t('Logo des Tresors'), disabled: !canWrite, onClick: () => logoDialog(c) } : null,
     may('rename') ? { action: 'rename', icon: 'edit', label: t('Umbenennen'), disabled: !!c.error || (isFile && !ready) || !canRenameVault(c), title: canRenameVault(c) ? undefined : t('Du brauchst Verwaltungsrechte auf dem Tresor.'), onClick: () => renameContainerDialog(c) } : null,
     may('import') ? { action: 'import', icon: 'upload', label: t('Importieren'), disabled: !canWrite, onClick: () => openImport(c) } : null,
-    (!isFile || c.personal) && may('export') ? { action: 'export', icon: 'download', label: t('Einträge exportieren (CSV)'), disabled: !ready, onClick: () => exportDialog(c) } : null,
+    (!isFile || c.personal) && may('export') && !c.vaultSettings?.protect?.noExport ? { action: 'export', icon: 'download', label: t('Einträge exportieren (CSV)'), disabled: !ready, onClick: () => exportDialog(c) } : null,
     { action: 'trash', icon: 'trash', label: t('Papierkorb'), disabled: !ready, onClick: () => trashDialog(c) },
     { action: 'license', icon: 'key', label: t('Lizenz'), disabled: !ready, onClick: () => licenseDialog(c) },
     isFile ? null : { action: 'backup', icon: 'download', label: t('Backup erstellen (Owner)'), disabled: !!c.error, onClick: () => backupDialog(c) },

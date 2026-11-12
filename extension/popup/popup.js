@@ -5,11 +5,14 @@ import { itemMatchesHost, urlScore, pageOrigin } from '../core/match.js';
 import { faviconToDataUrl } from '../core/image.js';
 import { itemHosts, resolveLogin } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
-import { call, copy } from '../lib/api.js';
+import { call, copy, unlockError } from '../lib/api.js';
 import { buildItemLink } from '../core/links.js';
 import { sharedNames, vaultChoiceLabel } from '../core/session-meta.js';
+import { vaultDot } from '../core/ui-vault.js';
 import { linkedAssetsDialog, moveDialog, movePasskeyDialog } from './item-move.js';
 import { openWebUrl } from './open-url.js';
+import { errorView, refreshingNote, showLoading } from './loading.js';
+import { getSettings } from '../lib/settings.js';
 
 /** Links from an entry: only http(s), anything else is refused with a message (open-url.js). */
 const openEntryUrl = (url) => openWebUrl(url, { open: (u) => chrome.tabs.create({ url: u }), notify: (m) => toast(m, 'error') });
@@ -26,6 +29,7 @@ let host = null;
 let items = [];
 let listTab = null;
 let query = '';
+let unlocking = false; // #508: an unlock with the PIN is running (the busy button stays)
 // How well each entry of this website fits the page path (urlScore) – loaded for the few matching entries only.
 const siteScores = new Map();
 const scoreKey = (s) => `${s.containerId}/${s.id}`;
@@ -62,11 +66,23 @@ function renderTop() {
   topActions.replaceChildren(...buttons);
 }
 
-async function reload() {
-  st = await call('state');
+// #495: a load started later (retry, new event) wins; durations of the last load for the smoke test (window.kvLoadTimes).
+let loadToken = 0;
+window.kvLoadTimes = {};
+
+async function reload({ step } = {}) {
+  const my = loadToken;
+  const started = performance.now();
+  const next = await call('state');
+  if (my !== loadToken) return undefined;
+  window.kvLoadTimes.state = Math.round(performance.now() - started);
+  st = next;
   setLanguage(st.settings.language);
   renderTop();
+  if (!st.open && unlocking) return undefined; // #508: an app event mid-unlock keeps the busy button (no fresh, empty form)
   if (!st.open) return st.demo || st.desktop?.connected ? renderLocked() : renderOffline();
+  step?.(t('Lade Tresore …'));
+  const listStarted = performance.now();
   const [list, ctx] = await Promise.all([
     call('items').catch((e) => {
       toast(e.message, 'error');
@@ -74,10 +90,46 @@ async function reload() {
     }),
     tab?.id ? call('tabContext', { tabId: tab.id }).catch(() => null) : null,
   ]);
+  if (my !== loadToken) return undefined;
+  window.kvLoadTimes.items = Math.round(performance.now() - listStarted);
   items = list;
   host = ctx?.host || null;
   if (!listTab) listTab = ctx?.matches?.length ? 'site' : 'all';
   return renderList();
+}
+
+/**
+ * #495: opening the popup. The loading state is there at once (popup.html); the last list the worker holds is shown
+ * marked "wird aktualisiert" while the fresh state loads; an error ends in a readable state with "Erneut versuchen".
+ */
+async function load() {
+  const my = ++loadToken;
+  const loading = showLoading(view, { onRetry: load });
+  try {
+    const started = performance.now();
+    const cached = await call('peek').catch(() => null);
+    if (my !== loadToken) return;
+    window.kvLoadTimes = { peek: Math.round(performance.now() - started), cached: !!cached };
+    if (cached) showCached(cached);
+    await reload({ step: cached ? null : loading.step });
+  } catch (e) {
+    if (my === loadToken) setView(errorView(e.message, load));
+  } finally {
+    loading.done();
+  }
+}
+
+function showCached({ state: known, items: list }) {
+  st = known;
+  setLanguage(st.settings.language);
+  items = list;
+  renderTop();
+  // The tab is chosen with the fresh state (it knows the page's matches); until then the whole list.
+  const chosen = listTab;
+  listTab = listTab || 'all';
+  renderList();
+  listTab = chosen;
+  view.prepend(refreshingNote());
 }
 
 /** The extension works only through the running app. */
@@ -93,23 +145,39 @@ function renderOffline() {
     h('p', { class: 'muted' }, missing
       ? t('Die Erweiterung arbeitet nur zusammen mit der Desktop-App. Installiere Keevault auf diesem Computer.')
       : t('Die Erweiterung arbeitet nur zusammen mit der Desktop-App. Starte Keevault – danach geht es hier sofort weiter.')),
-    missing ? h('a', { class: 'btn primary', href: 'https://keevault.de/download.html', target: '_blank', rel: 'noopener' }, t('Keevault herunterladen')) : start));
+    missing ? h('a', { class: 'btn primary', href: 'https://keevault.de/download.html', target: '_blank', rel: 'noopener' }, t('Keevault herunterladen')) : start,
+    // #495: after starting or installing the app by hand, without closing the popup.
+    h('button', { type: 'button', class: 'btn load-retry', onclick: load }, icon('refresh', 15), t('Erneut versuchen'))));
 }
 
 function renderLocked(error) {
   // With an app PIN the vault unlocks right here (silent sign-in in the app, no window).
   const pinSet = !st.demo && !!st.desktop?.pinSet;
   const pin = pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), 'aria-label': t('PIN') }) : null;
-  const button = h('button', { class: 'btn primary', onclick: async () => {
+  // #508: unlocking can take a while (silent sign-in, then the vaults): the button says what is going on, the field is
+  // locked meanwhile; a wrong PIN or a timeout comes back as a clear message above the field.
+  const here = pinSet || st.demo;
+  const busy = (label) => button.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), label);
+  const button = h('button', { class: 'btn primary', 'aria-live': 'polite', onclick: async () => {
+    if (pin && !pin.value) return pin.focus();
     button.disabled = true;
+    if (pin) pin.disabled = true;
+    if (here) busy(t('Entsperre …'));
+    unlocking = true;
     try {
       if (pin) await call('unlockPin', { pin: pin.value });
       else await call('unlock');
-      if (st.demo) await reload();
+      unlocking = false;
+      if (here) {
+        busy(t('Lade Tresore …'));
+        await reload();
+      }
     } catch (e) {
-      renderLocked(e.message);
+      unlocking = false;
+      renderLocked(unlockError(e));
     }
-  } }, icon('unlock'), pinSet || st.demo ? t('Entsperren') : t('In der Desktop-App entsperren'));
+    return undefined;
+  } }, icon('unlock'), here ? t('Entsperren') : t('In der Desktop-App entsperren'));
   pin?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') button.click();
   });
@@ -176,7 +244,8 @@ function renderList() {
       avatar(s.title, 'avatar', s.icon),
       h('div', { class: 'row-text' },
         h('div', { class: 'row-title' }, s.title, s.rpIds.length ? h('span', { class: 'badge passkey', title: t('Passkey') }, icon('key', 11)) : null),
-        h('div', { class: 'row-sub' }, [s.username, containerName(s.containerId)].filter(Boolean).join(' · '))),
+        // #480: the vault's colour as a dot before the line naming it.
+        h('div', { class: 'row-sub' }, vaultDot(st.containers.find((c) => c.id === s.containerId)), [s.username, containerName(s.containerId)].filter(Boolean).join(' · '))),
       h('div', { class: 'row-actions', onclick: (e) => e.stopPropagation() },
         matchesSite(s) ? iconButton('fill', t('Ausfüllen'), () => fillItem(s)) : null,
         s.username || s.loginLinked ? iconButton('user', t('Benutzername kopieren'), async () => copy(s.loginLinked ? (await usableItem(s.containerId, s.id)).username : s.username, t('Benutzername'))) : null,
@@ -493,9 +562,10 @@ chrome.runtime.onMessage.addListener((m) => {
 });
 
 (async () => {
+  setLanguage((await getSettings().catch(() => ({}))).language || 'auto');
   [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    await reload();
+    await load();
     // Just saved a passkey on a website: continue with that entry in edit mode (title, folder, logo, …).
     const { editAfter } = await chrome.storage.session.get('editAfter').catch(() => ({}));
     if (editAfter && Date.now() - editAfter.at < 60_000 && st?.open) {

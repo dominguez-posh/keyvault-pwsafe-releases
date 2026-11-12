@@ -7,14 +7,24 @@ import { dialog } from 'electron';
 import { t } from '../../extension/core/i18n.js';
 import { canFix, readPolicies, runChannelSetup, windowsFolder } from '../machine-setup.js';
 import { config, win } from './state.js';
+import { buildKind } from '../build-kind.js';
+import { sharedRead, forgetSharedReads } from '../shared-read.js';
+import { appStage, extensionFeedChannel } from '../../extension/core/channel.js';
 
 /** Smoke only: { policies: { edge, chrome } of browserPolicy(), run({ channel, create }) → { result } } instead of the registry and the UAC call. */
 let simulated = null;
 export function simulateExtensionPolicy(sim) { simulated = sim; }
 
-const currentChannel = () => (config.get().updateChannel === 'beta' ? 'beta' : 'stable');
+/** #420: the stage of this app (dev fixed in the build, else the effective setting with policy); told to the extension in hello. */
+export const appStageNow = () => appStage(buildKind(), config.get().updateChannel);
+// The extension's policy feed (#455): Early Access for Early Access and Dev (#420, a Dev build ignores the setting).
+export const currentChannel = () => extensionFeedChannel(appStageNow());
 const channelLabel = (channel) => (channel === 'beta' ? t('Early Access') : t('Stabil'));
-const read = () => (simulated ? simulated.policies : readPolicies());
+const registryRead = sharedRead(() => readPolicies()); // #526: one registry read at a time for all callers
+const read = () => (simulated ? simulated.policies : registryRead());
+/** #494: the same policies for "Neu installieren"; in the smoke run the stand-in, never the device's registry. */
+export const extensionPolicies = read;
+export const policySimulated = () => !!simulated;
 const supported = () => !!simulated || (process.platform === 'win32' && !!windowsFolder());
 // #455: canFix also knows a browser the company manages elsewhere: there only our existing entries may be switched.
 const fixable = (p, channel) => canFix(p.edge, 'edge', channel) || canFix(p.chrome, 'chrome', channel);
@@ -65,7 +75,7 @@ export async function applyExtensionChannel({ reason }) {
     });
     if (r.response !== 0) return { result: 'declined' };
   }
-  const r = await runSetup({ channel, create: reason === 'fix' });
+  const r = await runSetup({ channel, create: reason === 'fix' }).finally(forgetSharedReads);
   if (r.result === 'declined') return { result: 'declined' }; // UAC declined: nothing changed
   if (r.result === 'unavailable' || r.result === 'failed') {
     throw new Error(t('Die Einrichtung wurde nicht abgeschlossen. Bitte eure IT bitten, das Intune-Skript „Keevault-Geraet-Einrichten.ps1“ auszuführen.'));

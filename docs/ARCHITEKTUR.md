@@ -46,6 +46,7 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `passkey-window.js` | Verstecktes Fenster für WebAuthn mit PRF, Ausliefern der App-Dateien |
 | `personal.js` | Persönlicher Tresor: Speicherort, Anlegen, Schlüssel an die PIN gebunden |
 | `settings-sync.js` | Einstellungen, die im persönlichen Tresor mitwandern |
+| `settings-copy.js` | Einstellungen als Datei (#478): Kopie im OneDrive, Frage bei der Ersteinrichtung, Export/Import; Allowlist und strenge Prüfung in `desktop/settings-file.js` |
 | `clipboard.js` | Kopieren von Geheimnissen ohne Verlauf und Cloud, Ausschluss von der Fehlerberichterstattung |
 | `typing.js` | Auto-Type, globale Tastenkürzel, ausgewählter Eintrag |
 | `signin.js` | Ein-Klick-Anmeldung über die Erweiterung (Microsoft, Bastion, Admin Center) |
@@ -68,8 +69,11 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `api/folders.js` | Ordner und ihre Symbole |
 | `api/backup.js` | Backup und Wiederherstellung |
 | `api/admin.js` | Admin-Werkzeuge: Microsoft-Anmeldung, Admin Center, Verbindungen zu Assets |
+| `api/logging.js` | Protokollierung in Log Analytics (#486): Stand, Probelauf, Einrichten (nur Admin-Modus, nur Verwalter) |
+| `api/compliance.js` | Compliance (#500): Rollen, frühere Mitglieder, Passwortalter der Einträge als Metadaten, feste KQL-Abfragen in Log Analytics (nur Admin-Modus, nur Verwalter) |
 | `api/integrations.js` | Windows-Passkey-Anbieter und KI-Agenten |
 | `api/reports.js` | Passwort-Check, Zugriffsbericht, Berichte speichern |
+| `api/settings-file.js` | Einstellungen exportieren und importieren (Vorschau, Bestätigung), OneDrive-Frage beim ersten Start |
 | `api/release.js` | Release signieren und Release-Schlüssel einrichten (nur in der installierten App, nie über MCP oder Browser) |
 
 ### Fenster: `desktop/renderer/app/`
@@ -103,10 +107,14 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `trash.js` | Papierkorb |
 | `vault-menu.js` | Menü eines Tresors und wann welche Funktion angeboten wird |
 | `vault-dialogs.js` | Dialoge eines Tresors: Lizenz, Name, Logo, Tresor-Einstellungen, Export |
+| `logging.js` | Abschnitt „Protokollierung“ der Tresor-Einstellungen und Einrichtungsdialog mit Probelauf (#486) |
+| `compliance.js` | Compliance (#500): „Person ausgeschieden“, „Alte Passwörter“, CSV ohne geheime Werte |
+| `compliance-reports.js` | Compliance mit Log Analytics (#500): „Protokoll-Auswertung“, Tabelle und CSV-Export der Ansicht |
 | `vault-wizard.js` | Key-Vault-Tresor hinzufügen und anlegen |
 | `share.js` | Tresor teilen |
 | `file-vaults.js` | Datei-Tresore: anlegen, Passkey, Mitglieder, Änderungsprotokoll |
 | `personal.js` | Persönlicher Tresor: Assistent, erster Start |
+| `first-start.js` | Erster Start (#515): Microsoft-Anmeldung, dann App-PIN (überspringbar) |
 | `protection.js` | Zusätzlicher Schutz für die gemeinsamen Dialoge |
 | `backup.js` | Backup und Wiederherstellung |
 | `admin-tools.js` | Admin-Werkzeuge: Verbindungen, Admin Center, Passkeys verschieben |
@@ -115,6 +123,7 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `health.js` | Kontext der Berichte, Erinnerung an abgelaufene Einträge |
 | `updates.js` | Updates und Hinweis auf eine zweite Installation |
 | `settings.js` | Einstellungsdialog |
+| `settings-file.js` | Einstellungen exportieren/importieren (Menü, Vorschau) und die OneDrive-Frage beim ersten Start (#478) |
 | `help.js` | Hilfe, Bug melden, Feature-Wunsch |
 
 Daneben liegen wie bisher `reports.js` (Berichte) und `progress.js` (Fortschrittskarte).
@@ -163,6 +172,10 @@ Wert (JSON):
 
 Tags (für Listen ohne Werte): `kvpwsafe=item`, `t` Typ, `n` Titel, `u` Benutzername, `h` Hosts, `rp` Passkey-RP-IDs,
 `f` Ordner, `fav`, `otp`. Andere Secrets im selben Vault werden ignoriert.
+
+Metadaten des Tresors: Secret `pws-container` (`{ format: "kvpwsafe-container", v, id, name, logo, license, settings, … }`,
+`core/session-meta.js`). `settings` (#480) hält die Tresor-Vorgaben `{ v, look, contact, rules, protect }`
+(`core/vault-settings.js`); geschrieben wird immer per Lesen–Mergen–Schreiben, unbekannte Felder bleiben erhalten.
 
 Jede Änderung erzeugt eine neue Secret-Version (Verlauf). Löschen ist Soft Delete (Papierkorb, 90 Tage).
 Vor dem Speichern vergleicht die App die aktuelle Version mit der geladenen; bei Abweichung meldet sie einen

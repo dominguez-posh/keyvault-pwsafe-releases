@@ -53,39 +53,44 @@ async function sameNameCheck({ js, fail, vault, kvc }) {
   // no error, not locked). When the other vault is not one of them in this run, the choice is checked on this one.
   const choosable = async (id) => { const c = await vault.container(id); return c.access?.write !== false && !c.error && !c.locked; };
   const otherChoosable = await choosable(other.id);
-  await vaultNameHostCheck({ js, fail, vault, other, choice: otherChoosable });
-  if (!otherChoosable) {
-    if (!(await choosable(kvc.id))) fail('rename', 'no Key Vault in the demo that the vault choice lists');
-    else await vaultNameHostCheck({ js, fail, vault, other: kvc, choice: true });
+  // #485: the same for a name from the ARM tag (tagName), which anyone with tag write access sets.
+  for (const from of ['metaName', 'tagName']) {
+    await vaultNameHostCheck({ js, fail, vault, other, choice: otherChoosable, from });
+    if (!otherChoosable) {
+      if (!(await choosable(kvc.id))) fail('rename', 'no Key Vault in the demo that the vault choice lists');
+      else await vaultNameHostCheck({ js, fail, vault, other: kvc, choice: true, from });
+    }
   }
 }
 
 // #479 review: a name that comes from the vault (metaName) and differs from the Key Vault's own name always shows the
-// host, in the sidebar and in the vault choice of the new-entry editor.
-async function vaultNameHostCheck({ js, fail, vault, other, choice }) {
+// host, in the sidebar and in the vault choice of the new-entry editor. #485: also a name from the ARM tag (tagName).
+async function vaultNameHostCheck({ js, fail, vault, other, choice, from = 'metaName' }) {
   const stored = (await vault.store.get('containers')) || [];
   const own = stored.find((x) => x.id === other.id);
   if (!own) return;
-  const saved = { name: own.name, metaName: own.metaName };
+  const saved = { name: own.name, metaName: own.metaName, tagName: own.tagName };
   own.name = 'Smoke Fremdname';
-  own.metaName = 'Smoke Fremdname';
+  own.metaName = from === 'metaName' ? 'Smoke Fremdname' : null;
+  own.tagName = from === 'tagName' ? 'Smoke Fremdname' : null;
   await vault.store.set('containers', stored);
   try {
     await js('window.dispatchEvent(new Event("kvpwsafe-refresh")); true');
     const host = JSON.stringify(other.id);
     const inSidebar = await until(() => js(`[...document.querySelectorAll(".sidebar .nav-host")].some((e) => e.textContent === ${host})`), 5000);
-    if (!inSidebar) fail('rename', 'name from the vault: host not shown in the sidebar');
+    if (!inSidebar) fail('rename', `name from the vault (${from}): host not shown in the sidebar`);
     await js('document.querySelector(".context-menu")?.remove(); document.querySelector(".new-split .new-more")?.click(); document.querySelector(".context-menu [data-action=new-login]")?.click(); true');
     const options = `[...(document.querySelector(".detail-pane select[name=container]")?.options || [])].map((o) => o.value + "=" + o.textContent)`;
     const listed = await until(() => js(`${options}.length > 0`), 4000);
     if (!listed) fail('rename', 'new-entry editor without vault choice');
     else if (choice && !(await js(`${options}.includes(${JSON.stringify(`${other.id}=Smoke Fremdname (${other.id})`)})`))) {
-      fail('rename', `name from the vault: host missing in the vault choice (${await js(`${options}.join("|")`)})`);
+      fail('rename', `name from the vault (${from}): host missing in the vault choice (${await js(`${options}.join("|")`)})`);
     }
     await js('[...document.querySelectorAll(".detail-pane button")].find((b) => /^(Abbrechen|Cancel)$/.test(b.textContent.trim()))?.click(); true');
   } finally {
     own.name = saved.name;
     own.metaName = saved.metaName;
+    own.tagName = saved.tagName;
     await vault.store.set('containers', stored);
     await js('window.dispatchEvent(new Event("kvpwsafe-refresh")); true');
   }

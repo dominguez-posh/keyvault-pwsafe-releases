@@ -2,7 +2,7 @@
 
 import { h, icon, avatar, setChildren, toast, passkeySuccess, showPinProblem } from '../core/dom.js';
 import { setLanguage, t } from '../core/i18n.js';
-import { call } from '../lib/api.js';
+import { call, unlockError } from '../lib/api.js';
 
 const main = document.getElementById('main');
 const footer = document.getElementById('footer');
@@ -102,13 +102,21 @@ function lockedView(details, next) {
   const unlockButton = button(t('Entsperren'), () => guard(async () => {
     if (!pin) return unlockThen(next);
     if (!pin.value) return pin.focus();
+    // #508: busy button and a locked field while the app unlocks, then a clear message on a wrong PIN or a timeout.
+    const busy = (label) => unlockButton.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), label);
     unlockButton.disabled = true;
+    pin.disabled = true;
+    msg.replaceChildren();
+    busy(t('Entsperre …'));
     try {
       await call('unlockPin', { pin: pin.value });
+      busy(t('Lade Tresore …'));
       await waitForState((s) => s.open);
       await next();
     } catch (e) {
-      msg.replaceChildren(error(e.message));
+      msg.replaceChildren(error(unlockError(e)));
+      unlockButton.replaceChildren(t('Entsperren'));
+      pin.disabled = false;
       pin.value = '';
       pin.focus();
       unlockButton.disabled = false;

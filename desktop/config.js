@@ -26,6 +26,7 @@ const DEFAULTS = {
   appPin: null,
   pinGuard: null, // wrong PIN attempts { failures, blockedUntil } – survives a restart
   requirePin: false,
+  windowHello: false, // #512: Windows Hello lifts the window lock besides the PIN – only through setWindowHello (with the PIN)
   passkeyPin: true, // #439: every passkey use asks for the app PIN (on by default; the policy RequirePin makes it fixed)
   trayHintShown: false,
   autoTypeKeys: 'CommandOrControl+Shift',
@@ -103,6 +104,10 @@ const DEFAULTS = {
   settingsSync: true,
   settingsSyncedAt: 0, // time of the settings last taken from or written to the personal vault
   settingsLocalAt: 0, // time of the last change here to a setting that travels with the personal vault
+  // #478: a copy of the travelling settings (no secrets) in OneDrive\Keevault\Keevault-Einstellungen.json. Device only.
+  // null = not asked yet: nothing is written until the user says yes (asked once, also after the update).
+  settingsCopy: null,
+  settingsCopyPending: false, // the first start still asks whether to take the settings found there: no copy until then
 };
 // Travel with the personal vault to the user's other devices. Not: PIN, device keys, what is installed on this device
 // (browser integration, passkey provider, autostart), admin mode and the approvals for AI agents.
@@ -110,7 +115,8 @@ export const SYNC_KEYS = ['containers', 'hiddenContainers', 'containerOrder', 'd
   'clipboardSeconds', 'unlockPrompt', 'language', 'zoom', 'transparency', 'theme', 'sourceBadges', 'autoTypeKeys', 'updateMode',
   'updateChannel', 'breakGlass', 'autoDiscover', 'signInWindows', 'pimOnLock', 'adminPim', 'adminOffered'];
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'updateChannel', 'mcpEnabled', 'offlineMirror',
-  'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer'];
+  'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer',
+  'windowHello']; // #512: only false is enforced (the organization forbids Windows Hello; switching on stays the user's, with the PIN)
 
 export class Config {
   constructor() {
@@ -142,6 +148,7 @@ export class Config {
     const s = { ...DEFAULTS, ...installed, ...presets, ...this.user };
     const enforced = [];
     for (const key of ORG_KEYS) {
+      if (key === 'windowHello' && this.org[key] !== false) continue; // #512: never forced on
       if (this.org[key] !== undefined && this.org[key] !== '') {
         s[key] = this.org[key];
         enforced.push(key);
@@ -168,6 +175,7 @@ export class Config {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify(this.user, null, 2));
     if (travels) this.onSyncChange?.();
+    this.onChange?.();
     return this.get();
   }
 

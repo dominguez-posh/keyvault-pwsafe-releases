@@ -20,7 +20,8 @@ import { setLanguage, t } from './core/i18n.js';
 import { createDemoBackend } from './core/demo.js';
 import * as auth from './lib/auth.js';
 import { getSettings, updateSettings } from './lib/settings.js';
-import { app, appFeatures, connect as connectApp, onEvent as onAppEvent, snapshot, status as appStatus } from './lib/desktop.js';
+import { app, appFeatures, appStage, cachedSnapshot, connect as connectApp, onEvent as onAppEvent, snapshot, status as appStatus, warmStart } from './lib/desktop.js';
+import { devDemoDelay, peekState, withCounts } from './lib/popup-peek.js';
 import { pinFrameCommands, pinPageCommand } from './lib/pin-frame.js';
 import { moveHandlers } from './lib/popup-moves.js';
 
@@ -63,10 +64,9 @@ const ready = (async () => {
       fetch: (url, init) => demo.fetch(url, init),
       actor: async () => (await auth.account())?.username || '', viewer: async () => (await auth.account())?.localAccountId || '', // viewer: #476
     });
-  } else {
-    connectApp();
-  }
+  } else connectApp();
 })().catch(() => {});
+warmStart(() => ready.then(() => !demo)); // #505: the port is open before the first click (not in the demo)
 
 /** Usable: the app runs and is unlocked (demo: signed in). */
 async function isOpen() {
@@ -93,8 +93,7 @@ async function requireOpen() {
 async function containerList() {
   if (!demo) {
     const s = await snapshot().catch(() => null);
-    if (!s?.opened) return [];
-    return s.containers.map((c) => ({ ...c, count: c.locked ? null : s.summaries.filter((x) => x.containerId === c.id).length }));
+    return s?.opened ? withCounts(s) : [];
   }
   const index = await vault.index();
   return (await vault.containers()).map((c) => ({ ...c, count: index[c.id]?.items.length ?? null, error: c.error || index[c.id]?.error || null }));
@@ -107,7 +106,7 @@ async function state() {
   const open = await isOpen();
   const features = demo ? { history: true, assets: true, move: true, passkeyMove: true } : appFeatures();
   return {
-    demo: !!demo,
+    demo: !!demo, stage: demo ? 'stable' : appStage(), // #420: release stage of the app (switches only new functions, extension/core/channel.js)
     // #464: history, linked assets, moving: in the demo always, with the app only when it reports the capability (else the popup hides them).
     canHistory: features.history, canAssets: features.assets, canMove: features.move, canMovePasskey: features.passkeyMove,
     desktop,
@@ -840,7 +839,9 @@ async function importItems({ containerId, items }) {
 const showApp = () => (demo ? null : unlock());
 
 const pageCommands = {
-  state: () => state(),
+  state: async () => { if (demo) await devDemoDelay(); return state(); },
+  // #495: the last list without waiting for the app (popup-peek.js); the popup marks it "wird aktualisiert".
+  peek: async () => (demo ? null : peekState(cachedSnapshot(), { settings: await getSettings(), features: appFeatures(), extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version })),
   unlock: () => unlock(),
   unlockPin: ({ pin }) => unlockPin(pin),
   lock: () => lock(),

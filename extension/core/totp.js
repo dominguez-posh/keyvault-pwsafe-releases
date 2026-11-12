@@ -68,3 +68,18 @@ export async function totpCode(input, now = Date.now()) {
   const code = await hotp(cfg.secret, Math.floor(seconds / cfg.period), cfg.digits, cfg.algorithm);
   return { code, remaining: cfg.period - (seconds % cfg.period), period: cfg.period };
 }
+
+/** Is `code` the TOTP code of `input` for the previous, current or next period? (copy rules, #480 review) */
+export async function totpMatches(input, code, now = Date.now()) {
+  let cfg;
+  try {
+    cfg = typeof input === 'string' ? parseTotp(input) : input;
+  } catch {
+    return false;
+  }
+  if (!cfg || typeof code !== 'string' || !code) return false;
+  for (const at of [now - cfg.period * 1000, now, now + cfg.period * 1000]) {
+    if ((await totpCode(cfg, at)).code === code) return true;
+  }
+  return false;
+}

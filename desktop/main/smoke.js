@@ -1,6 +1,6 @@
 // Smoke test of the whole app (CI and development): npm run smoke. Never runs in a normal start.
 
-import { app } from 'electron';
+import { app, powerMonitor, powerSaveBlocker } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { hashPin } from '../pin.js';
@@ -9,32 +9,36 @@ import { featureChecks } from '../smoke-features.js';
 import { smokeRelease } from './api/release.js';
 import { areaSelection } from '../smoke-areas.js';
 import { plantedOrgFileTaken } from '../org-file.js';
-import { downgradeCheck, fileSwapCheck, rejectedCheck, rollbackCheck } from '../smoke-file-swap.js';
+import { downgradeCheck, fileSwapCheck, foreignKeyCheck, rejectedCheck, rollbackCheck } from '../smoke-file-swap.js';
+import { acceptOlderCheck } from '../smoke-accept-older.js';
 import { t } from '../../extension/core/i18n.js';
 import { appRoot, demo, missingFiles, screenshot, smokeGuard } from './boot.js';
 import { config, files, mcp, opened, updater, vault, win, windows } from './state.js';
 import { hintContent, hintsShown } from './hint-window.js';
 import { askInApp, chooseAgentMicrosoft, questions, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, nativeQuestion, trustAgentEntry, waitForUnlock } from './agents.js';
-import { api } from './api/index.js';
+import { api, WINDOW_LOCKED_API } from './api/index.js';
 import { browserHandlers, confirmBrowserMove, noteExtension, simulateExtensionClients } from './browser.js';
-import { simulateExtensionPolicy } from './extension-channel.js';
+import { simulateExtensionPolicy, simulateExtensionReinstall } from './extension-reinstall.js';
 import { copyViaHelperExe } from './clipboard.js';
 import { pinGuard } from './guards.js';
 import { createPersonal, refreshFileLocations, usePersonal } from './personal.js';
-import { changed, emptyPagesHint, lockIfWindowsLocked, lockNow, send } from './session.js';
+import { changed, emptyPagesHint, lockIfWindowsLocked, lockNow, send, vaultListRun } from './session.js';
 import { syncSettings } from './settings-sync.js';
 import { adminCenterUrl, lastAdminUrl, setSignInJobs, signInFor, signInJobs } from './signin.js';
 import { autoTypeCalls, globalAutoType, runHelperExe, typeViaHelperExe } from './typing.js';
 import { startInNormalMode } from './window.js';
 import { screenshotProblem, windowViolations } from './smoke-windows.js';
+import { windowLockCheck } from './smoke-window-lock.js';
+import { windowHelloCheck } from './smoke-window-hello.js';
+import { LOCKED_AT_START, watchSmokeSession } from '../smoke-session.js';
 
 async function virtualAuthenticator(contents) {
   const dbg = contents.debugger;
   dbg.attach('1.3');
   await dbg.sendCommand('WebAuthn.enable', { enableUI: false });
-  await dbg.sendCommand('WebAuthn.addVirtualAuthenticator', {
+  contents.kvAuthenticator = (await dbg.sendCommand('WebAuthn.addVirtualAuthenticator', { // id for checks that set a credential aside (#526)
     options: { protocol: 'ctap2', ctap2Version: 'ctap2_1', transport: 'usb', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true },
-  });
+  })).authenticatorId;
 }
 
 export function runSmokeTest() {
@@ -42,7 +46,7 @@ export function runSmokeTest() {
   smokeGuard.collect(() => [...errors, ...missingFiles.map((f) => `missing file: ${f}`), ...windowViolations]);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   win.webContents.on('console-message', (e) => {
-    if (e.level === 'error') errors.push(e.message);
+    if (e.level === 'error') errors.push(e.message + ' @' + e.sourceId + ':' + e.lineNumber);
   });
   win.webContents.on('did-fail-load', (_e, code, desc) => errors.push(`load failed: ${code} ${desc}`));
   // The passkey window gets a virtual authenticator (with PRF); every ceremony is started automatically.
@@ -85,6 +89,8 @@ export function runSmokeTest() {
   });
   win.webContents.once('did-finish-load', () => setTimeout(() => smokeGuard.run(async () => {
     smokeGuard.note('checks');
+    // Locked Windows session: no clipboard for anyone (#526) – stop with the cause instead of 15 minutes of timeouts.
+    if (watchSmokeSession({ monitor: powerMonitor, blocker: powerSaveBlocker, errors, stage: smokeGuard.stage }).lockedAtStart) throw new Error(LOCKED_AT_START);
     // --only (#397): the areas that are left out, full run: all of them.
     const areas = areaSelection();
     if (areas.partial && !demo) errors.push('--only needs --demo');
@@ -225,6 +231,8 @@ export function runSmokeTest() {
         await api.setPin({ current: '258013', next: null });
         await pinLengthCheck({ api, config, hashPin, lockNow, sleep, js, isOpened: () => opened, errors }); // #475
         if (config.get().appPin) errors.push('pin: not removed');
+        await windowLockCheck({ js, sleep, errors }); // #507: unlocked through the extension, the window stays locked
+        await windowHelloCheck({ js, sleep, errors }); // #512: Windows Hello (simulated) lifts the window lock besides the PIN
       } catch (e) {
         errors.push(`pin flow: ${e.message}`);
       }
@@ -266,7 +274,8 @@ export function runSmokeTest() {
         if (movedItem?.folder !== 'Partner/Contoso' || !(await api.folders(id)).includes('Partner/Contoso')) errors.push('folders: rename did not move entries/subfolders');
         await api.renameFolder(id, 'Partner', '');
         if ((await files.summaries(id)).find((s) => s.title === 'Contoso VPN')?.folder !== 'Contoso') errors.push('folders: delete did not move content up');
-        await fileSwapCheck({ files, js, sleep, errors, dir: app.getPath('userData'), changed }); await downgradeCheck({ files, errors, file: secured, id }); await rollbackCheck({ files, errors, file: secured, id }); await rejectedCheck({ files, errors, file: secured, id }); // #404, #430, #432, #433
+        await fileSwapCheck({ files, js, sleep, errors, dir: app.getPath('userData'), changed }); await downgradeCheck({ files, errors, file: secured, id }); await rollbackCheck({ files, errors, file: secured, id }); await rejectedCheck({ files, errors, file: secured, id }); await foreignKeyCheck({ files, errors, file: secured, id }); // #404, #430, #432, #433, #521
+        await acceptOlderCheck({ api, files, config, js, sleep, errors, changed, file: secured, id, lockedApi: WINDOW_LOCKED_API, pinGuard }); // #435, 0.9.33 review
       } catch (e) {
         errors.push(`secured flow: ${e.message}`);
       }
@@ -650,9 +659,14 @@ export function runSmokeTest() {
           if (await files.updateKeyring(r.id, { type: 'createInvite' }, 'x').then(() => true, () => false)) errors.push('personal: invitation was allowed');
           const pwEntry = files.get(r.id).keyring?.entries?.find((e) => e.type === 'password');
           if (pwEntry && await files.updateKeyring(r.id, { type: 'removeEntry', entryId: pwEntry.id }, 'x').then(() => true, () => false)) errors.push('personal: master password could be removed');
-          const shared = (await vault.containers()).find((x) => x.kind === 'keyvault' && !x.error);
+          const shared = (await vault.containers()).find((x) => x.kind === 'keyvault' && !x.error && !x.locked); if (!shared) errors.push('personal: no open shared vault for the move checks'); // #526: not the one the protection flow locked
           const sharedItem = shared && (await vault.index())[shared.id]?.items?.[0];
           if (sharedItem && await vault.moveItem(shared.id, r.id, sharedItem.id).then(() => true, () => false)) errors.push('personal: entry moved in from a shared vault');
+          // #519: nor a passkey (its private key) through the window API's movePasskey.
+          const pkOwn = await vault.saveItem(r.id, { type: 'login', title: 'Passkey-Ziel-519', username: '' });
+          const pkShared = shared && await vault.saveItem(shared.id, { type: 'login', title: 'Passkey-519', username: 'u', passkeys: [{ credentialId: 'smoke-519', rpId: 'example.com', privateKey: 'x', userName: 'u' }] }).catch((e) => void errors.push(`personal: #519 setup ${e.message}`));
+          if (pkShared && await api.movePasskey({ from: { containerId: shared.id, id: pkShared.id }, to: { containerId: r.id, id: pkOwn.id }, credentialId: 'smoke-519' }).then(() => true, () => false)) errors.push('personal: passkey moved in from a shared vault (#519)');
+          await Promise.all([pkShared && vault.deleteItem(shared.id, pkShared.id), vault.deleteItem(r.id, pkOwn.id)]);
           if (c.name !== t('Persönlich')) errors.push(`personal: named "${c.name}" instead of "${t('Persönlich')}"`);
           // More structure through folders inside it.
           await vault.saveItem(r.id, { title: 'Steuer', username: 'me', password: 'x', folder: 'Geschäft' });
@@ -867,7 +881,7 @@ export function runSmokeTest() {
       // Feature checks of the recent functions (desktop/smoke-features.js) – the normal run only, views keep their state.
       if (!view) {
         await featureChecks({
-          js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe,
+          js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe, vaultListRun, browserHandlers,
           areas,
           note: smokeGuard.note,
           clipboardHas: async (text) => (await runHelperExe('--clipboard-clear', text)) === 0,
@@ -892,7 +906,7 @@ export function runSmokeTest() {
           browserPasskeyCandidates: (msg) => browserHandlers.passkeyCandidates(msg),
           noteExtension,
           simulateExtensionClients,
-          simulateExtensionPolicy,
+          simulateExtensionPolicy, simulateExtensionReinstall,
           waitForUnlock,
           release: smokeRelease,
           lockIfWindowsLocked,
@@ -903,7 +917,7 @@ export function runSmokeTest() {
             pinGuard.restore(null);
             return '246813';
           },
-          resetPinGuard: () => { pinGuard.restore(null); config.update({ pinGuard: null }); },
+          resetPinGuard: () => { pinGuard.restore(null); config.update({ pinGuard: null }); }, pinGuard,
           openQuestionIds: () => [...questions.keys()],
           windows,
           startInNormalMode,
