@@ -31,6 +31,7 @@ const mayOffer = (i, c) => !creators.has(i.key) || mayMakePrivate({ createdBy: c
 export function privacyActions(i, c, canWrite) {
   if (!adminMode() || !offered(c) || i.type === 'server') return [];
   if (!isPrivate(i)) {
+    if (c?.vaultSettings?.protect?.private === 'forbid') return []; // #480: the vault forbids it (main process refuses too)
     const why = i.folder ? ROOT_ONLY() : !mayOffer(i, c) ? OWN_ONLY() : '';
     return [{ action: 'private-on', icon: 'lock', label: t('Nur für mich'), disabled: !canWrite || !!why, title: why,
       onClick: () => makePrivate(i, c) }];

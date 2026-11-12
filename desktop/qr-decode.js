@@ -55,3 +55,20 @@ export function findQrText(jsQR, rgba, width, height) {
   }
   return '';
 }
+
+/**
+ * #497: at most one screenshot per interval. The window asks for a scan only on a click on the scan button; a script in
+ * the window (XSS) must not photograph the screen in a loop. take() → true when a scan may run now.
+ */
+export const SCAN_INTERVAL_MS = 2000;
+export function scanThrottle(intervalMs = SCAN_INTERVAL_MS, now = Date.now) {
+  let last = -Infinity;
+  return {
+    take() {
+      const t = now();
+      if (t - last < intervalMs) return false;
+      last = t;
+      return true;
+    },
+  };
+}

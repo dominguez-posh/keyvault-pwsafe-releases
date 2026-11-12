@@ -64,7 +64,7 @@ function actionRegex(pattern) {
   return new RegExp(`^${escaped}$`, 'i');
 }
 
-function allowed(permissions, action, data) {
+export function allowed(permissions, action, data) {
   const key = data ? 'dataActions' : 'actions';
   const notKey = data ? 'notDataActions' : 'notActions';
   return permissions.some((p) => (p[key] || []).some((a) => actionRegex(a).test(action))
@@ -157,6 +157,7 @@ export class AzureClient {
     );
     return rows.map((r) => ({
       name: cleanVaultName(r.displayName) || r.name,
+      tagName: cleanVaultName(r.displayName), // #485: the name came from the ARM tag (anyone with tag write access sets it)
       vaultUrl: normalizeVaultUrl(r.vaultUri || r.name),
       resourceId: r.id,
       location: r.location,
@@ -174,6 +175,7 @@ export class AzureClient {
     );
     return rows.map((r) => ({
       name: cleanVaultName(r.displayName) || r.name,
+      tagName: cleanVaultName(r.displayName), // #485: the name came from the ARM tag (anyone with tag write access sets it)
       vaultUrl: normalizeVaultUrl(r.vaultUri || r.name),
       resourceId: r.id,
       resourceGroup: r.resourceGroup,

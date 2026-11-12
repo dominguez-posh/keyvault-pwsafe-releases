@@ -234,6 +234,9 @@ buildStep('Richtlinien-Vorlagen (ADMX für GPO/Intune + Intune-Skript)', () => {
   run(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-a', '-cf', zip, '-C', stage, ...readdirSync(stage)]);
 });
 
+// The portable setup tool for admins (#501): a release asset, so the signed manifest covers it through SHA256SUMS.txt.
+buildStep('Einrichtungstool (ZIP)', () => run(process.execPath, [R('scripts/pack-setup-tool.mjs')]));
+
 // --- 5. Assets ------------------------------------------------------------------------------------------------------
 const setup = R(`release/Keevault-Setup-${version}.exe`);
 // The website links to releases/latest/download/Keevault-Setup.exe: the setup window in Keevault's design with the

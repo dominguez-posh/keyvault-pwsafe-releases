@@ -12,11 +12,12 @@ import { isNetworkError } from '../../offline.js';
 import { t } from '../../../extension/core/i18n.js';
 import { removeProvider } from '../../windows-provider.js';
 import { demo, smokeTest } from '../boot.js';
-import { auth, config, files, mcp, opened, setOpened, updater, vault, win } from '../state.js';
+import { auth, config, files, mcp, opened, setOpened, setWindowLocked, updater, vault, win, windowLocked } from '../state.js';
 import { api } from './index.js';
 import { applyBrowserIntegration } from '../browser.js';
 import { applyExtensionChannel } from '../extension-channel.js';
 import { diag } from '../diag.js';
+import { tlsEnvAtStart } from '../../tls-env.js';
 import { windowLogLine } from '../../../extension/core/log-mask.js';
 import { appSigningRefusal } from '../release-gate.js';
 import { pinGuard, requireOpen, requirePin } from '../guards.js';
@@ -27,23 +28,85 @@ import {
   setKeptVault, setOfflineMode, signedIn,
 } from '../session.js';
 import { syncSettings } from '../settings-sync.js';
+import { windowHelloOn } from '../window-hello.js';
 import { applyShortcuts } from '../typing.js';
 import { applyStartWithWindows, applyView, setTitleBarDimmed, titleBarColors, titleBarDimmed } from '../window.js';
 import { buildKind } from '../../build-kind.js';
+import { revealHeldQuestions } from '../agents.js';
+import { lockScreenRefused, lockScreenSettings } from '../../window-lock-settings.js';
 import { setupWindowsProvider } from '../windows-passkeys.js';
+import { storedVaultSettings } from '../../../extension/core/vault-settings.js';
+
+/**
+ * Opens the vault session: silent sign-in with a PIN (a Microsoft window only when the tenant insists), then the
+ * vaults. Not part of the API: only `unlock` calls it, after the PIN check.
+ */
+async function openSession({ entra, background }) {
+  if (entra) {
+    // With a PIN the silent sign-in from the encrypted token cache is enough; the Microsoft window only
+    // appears when the tenant demands it (e.g. expired MFA). An unlock prompt enforced by policy stays.
+    const silent = !!config.get().appPin && !config.get().enforced.includes('unlockPrompt');
+    const canOffline = mirrorWanted() && offlineMirror().ready && (await offlineMirror().exists());
+    if (canOffline && !net.isOnline()) return api.unlockOffline();
+    try {
+      await auth.unlock(silent ? 'none' : config.get().unlockPrompt);
+    } catch (e) {
+      if (canOffline && isNetworkError(e)) return api.unlockOffline();
+      throw e;
+    }
+    if (!config.get().entraUsed) config.update({ entraUsed: true });
+    if (!background) {
+      win?.show();
+      win?.focus();
+    }
+  }
+  // Same account and kept data: show the state from memory at once, refresh in the background (concurrent
+  // edits in the vault stay safe – every save checks the entry's version and reports a conflict).
+  const kept = keptVault && entra && (auth.account?.homeAccountId || null) === keptAccount;
+  setKeptVault(false);
+  if (!kept) newSession();
+  setOpened(true);
+  if (!smokeTest && !demo) warmUpAutoType();
+  applyShortcuts();
+  if (kept) {
+    refreshAll({ quick: true }).then(() => { if (opened) changed(); }).catch(() => {});
+    changed();
+    return api.state();
+  }
+  const discoverError = await refreshAll({ quick: true });
+  changed();
+  return { ...(await api.state()), discoverError };
+}
+
+/** The state the window gets while only the extension is unlocked: what the lock screen needs, no vault data. */
+function lockedWindowState(all) {
+  const settings = lockScreenSettings(all, forcedLanguage()); // allowlist (#507 review N3)
+  return {
+    ownApp: entraSettings(all).ownApp, signedIn: false, opened: false, windowLocked: true, hasFiles: all.fileContainers.length > 0,
+    pinSet: !!all.appPin, pinShort: !!all.appPin?.short, offline: false, offlineAt: null, signInMode: auth.useBroker?.() ? 'windows' : 'browser',
+    requirePin: !!all.requirePin, passkeyPinFixed: !!all.requirePin, account: null, containers: [], recoveryPending: [], recoveryRenewed: [], settings,
+    version: app.getVersion(), build: buildKind(), autoUpdates: updater ? updater.mode() === 'auto' : false, updateKind: updater?.kind || 'dev',
+    passkeyAvailable: process.platform === 'win32' || !!demo, smoke: !!smokeTest, releaseSigning: false, platform: process.platform,
+    helloUnlock: windowHelloOn(), // #512: the lock screen offers Windows Hello besides the PIN
+  };
+}
 
 export const appApi = {
   async state() {
     const settings = config.get();
+    // #507: session open for the extension only – the window learns that it is locked and nothing else (no vault, no
+    // name, no account); the lock screen asks for the PIN.
+    if (windowLocked) return lockedWindowState(settings);
     const containers = opened ? await vault.containers() : (await files.containers()).map((c) => ({ ...c, kind: 'file' }));
     const index = opened && signedIn() ? await vault.index() : {};
     const out = [];
+    const looks = opened ? await storedVaultSettings(vault) : {}; // #480: settings last read from each vault
     for (const c of containers) {
       let count = index[c.id]?.items.length ?? null;
       if (c.kind === 'file' && !c.locked && !c.error) count = (await files.summaries(c.id)).length;
       // Vault settings decide which functions non-admins see (null: file vault or not readable).
       const policy = opened && c.kind === 'keyvault' && !c.error ? (await vault.policy(c.id).catch(() => null))?.features ?? null : null;
-      out.push({ ...c, count, policy, error: c.error || index[c.id]?.error || null });
+      out.push({ ...c, count, policy, error: c.error || index[c.id]?.error || null, vaultSettings: c.kind === 'keyvault' ? looks[c.id] || null : null });
     }
     return {
       ownApp: entraSettings(settings).ownApp,
@@ -57,6 +120,7 @@ export const appApi = {
       signInMode: auth.useBroker?.() ? 'windows' : 'browser',
       requirePin: !!settings.requirePin,
       passkeyPinFixed: !!settings.requirePin,
+      windowHello: windowHelloOn(), // #512
       account: auth.account ? { name: auth.account.name, username: auth.account.username, tenantId: auth.account.tenantId, id: auth.account.localAccountId || '' } : null,
       containers: out,
       recoveryPending: pendingRecoveryIds(),
@@ -70,10 +134,18 @@ export const appApi = {
       smoke: !!smokeTest, // tests: no dialogs that open by themselves
       releaseSigning: !appSigningRefusal(app, { demo, smoke: smokeTest }), // menu entries "Release signieren"
       platform: process.platform,
+      tlsEnvWarning: tlsEnvAtStart.warn, // #517: the window tells the user once
     };
   },
   updateSettings: async (patch) => {
+    // #507 (review N2): the window locked alone changes only its lock screen's settings and sees nothing else.
+    if (windowLocked && lockScreenRefused(patch).length) throw new Error(t('Das gesperrte Fenster ändert nur Sprache und Ansicht'));
     const before = config.get();
+    // #420: a Dev build has no channel choice; its stage is fixed in the build.
+    if (buildKind().dev && patch && Object.hasOwn(patch, 'updateChannel')) {
+      patch = { ...patch };
+      delete patch.updateChannel;
+    }
     // Admin mode is switched on only through activateAdminMode (with the app PIN) – never through a settings patch.
     if (patch?.adminTools === true && before.adminTools !== true) throw new Error(t('Den Admin-Modus aktiviert nur „Admin-Modus aktivieren“ mit deiner PIN.'));
     // #472 (review): the app PIN, its wrong-attempt counter and the personal device keys change only through the PIN functions.
@@ -108,7 +180,7 @@ export const appApi = {
       }
       if (signedIn()) refreshAll().then(() => changed()).catch(() => {});
     }
-    return config.get();
+    return windowLocked ? lockScreenSettings(config.get(), forcedLanguage()) : config.get();
   },
   /** entra: also sign in to Microsoft Entra ID (Key Vault containers). */
   // #439: one after the other – parallel guesses must not slip past the attempt lock.
@@ -143,6 +215,7 @@ export const appApi = {
     }
     if (!config.get().appPin) throw new Error(t('Für den Admin-Modus brauchst du eine App-PIN – lege sie unter Einstellungen fest.'));
     await api.verifyPin(String(pin || ''));
+    pinGuard.consume(); // the PIN switched admin mode on – it opens nothing afterwards
     config.update({ adminTools: true, pimButton: false, showOthersPrivate: false });
     diag('ADMIN mode on');
     return config.get();
@@ -167,7 +240,7 @@ export const appApi = {
     if (next == null) {
       if (s.requirePin) throw new Error(t('Eure Organisation verlangt eine PIN'));
       if (personalPaths().length) throw new Error(t('Der persönliche Tresor braucht eine App-PIN'));
-      config.update({ appPin: null });
+      config.update({ appPin: null, windowHello: false }); // #512: Windows Hello only besides a PIN
       return api.state();
     }
     config.update({ appPin: await hashPin(next) });
@@ -177,43 +250,28 @@ export const appApi = {
     await bindPersonalKeys({ force: true }).catch(() => config.update({ personalDeviceKeys: {} }));
     return api.state();
   },
-  /** background: unlocked from the browser extension (PIN) – the window stays where it is. */
+  /**
+   * background: unlocked from the browser extension (PIN) – the session opens for the extension, the window keeps its
+   * lock screen (#507). The window's own unlock then only lifts that lock: same PIN check, no second sign-in.
+   */
   async unlock({ entra = true, background = false } = {}) {
     requirePin();
-    if (entra) {
-      // With a PIN the silent sign-in from the encrypted token cache is enough; the Microsoft window only
-      // appears when the tenant demands it (e.g. expired MFA). An unlock prompt enforced by policy stays.
-      const silent = !!config.get().appPin && !config.get().enforced.includes('unlockPrompt');
-      const canOffline = mirrorWanted() && offlineMirror().ready && (await offlineMirror().exists());
-      if (canOffline && !net.isOnline()) return api.unlockOffline();
-      try {
-        await auth.unlock(silent ? 'none' : config.get().unlockPrompt);
-      } catch (e) {
-        if (canOffline && isNetworkError(e)) return api.unlockOffline();
-        throw e;
-      }
-      if (!config.get().entraUsed) config.update({ entraUsed: true });
-      if (!background) {
-        win?.show();
-        win?.focus();
-      }
-    }
-    // Same account and kept data: show the state from memory at once, refresh in the background (concurrent
-    // edits in the vault stay safe – every save checks the entry's version and reports a conflict).
-    const kept = keptVault && entra && (auth.account?.homeAccountId || null) === keptAccount;
-    setKeptVault(false);
-    if (!kept) newSession();
-    setOpened(true);
-    if (!smokeTest && !demo) warmUpAutoType();
-    applyShortcuts();
-    if (kept) {
-      refreshAll({ quick: true }).then(() => { if (opened) changed(); }).catch(() => {});
+    if (opened && windowLocked && !background) {
+      setWindowLocked(false);
+      win?.show();
+      win?.focus();
       changed();
+      revealHeldQuestions(); // agents' questions waiting behind the lock now show what they ask
       return api.state();
     }
-    const discoverError = await refreshAll({ quick: true });
-    changed();
-    return { ...(await api.state()), discoverError };
+    // Set before the session opens: the window, told "changed" on the way, must never see it open for a moment.
+    if (background && !opened) setWindowLocked(true);
+    try {
+      return await openSession({ entra, background });
+    } catch (e) {
+      if (!opened) setWindowLocked(false);
+      throw e;
+    }
   },
   /** Read-only session from the encrypted mirror (no network): the last state the app has seen. */
   async unlockOffline() {
@@ -231,6 +289,8 @@ export const appApi = {
   },
   async signIn() {
     await auth.unlock(config.get().unlockPrompt);
+    // Signed in once (first start #515, vault wizard, sidebar): the next start offers Entra on the lock screen.
+    if (!config.get().entraUsed) config.update({ entraUsed: true });
     win?.show();
     win?.focus();
     const discoverError = await refreshAll({ quick: true });
@@ -257,7 +317,8 @@ export const appApi = {
    */
   claimFirstStart() {
     if (config.get().setupOffered) return false;
-    config.update({ personalOffered: true, setupOffered: true });
+    // #478: no OneDrive copy of the settings until the first start asked whether to take the ones found there.
+    config.update({ personalOffered: true, setupOffered: true, settingsCopyPending: true });
     return true;
   },
 

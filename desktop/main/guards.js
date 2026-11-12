@@ -4,7 +4,9 @@ import { LockedError } from '../auth.js';
 import { PinGuard } from '../pin.js';
 import { PasskeyPinGate } from '../passkey-pin.js';
 import { ExportPinGate } from '../export-pin.js';
+import { CopyPinGate } from '../copy-pin.js';
 import { POLICY_LABELS } from '../../extension/core/session.js';
+import { keepAdminFlags, keepServer } from '../../extension/core/model.js';
 import { t } from '../../extension/core/i18n.js';
 import { config, opened, vault } from './state.js';
 
@@ -38,6 +40,9 @@ export const passkeyPin = new PasskeyPinGate({
 /** #473: a plaintext export asks for the app PIN (see ../export-pin.js); the same counter as unlocking. */
 export const exportPin = new ExportPinGate({ settings: () => config.get(), guard: pinGuard, save: passkeyPin.save });
 
+/** #480: copying from a vault whose settings want the app PIN (see ../copy-pin.js); the same counter as unlocking. */
+export const copyPin = new CopyPinGate({ settings: () => config.get(), guard: pinGuard, save: passkeyPin.save });
+
 /** Unlocking needs a freshly verified PIN once one is set. */
 export function requirePin() {
   if (config.get().appPin && !pinGuard.consume()) {
@@ -59,4 +64,16 @@ export async function requireFeature(containerId, feature) {
     throw new Error(t('Diese Funktion hat ein Admin des Tresors nicht freigeschaltet: {feature}', { feature: t(POLICY_LABELS[feature]) }));
   }
   return c;
+}
+
+/**
+ * #487: admin flags (msAdmin, sophos) and server entries change only in admin mode; otherwise – and always from the browser, whose popup has
+ * no admin options – a save keeps the stored values. → the item to save
+ */
+export async function adminFlagsGuard(containerId, item, { browser = false } = {}) {
+  if (!item || (!browser && config.get().adminTools === true)) return item;
+  // Only the vault the save goes to; a read error stops the save instead of clearing the stored flags (review #487).
+  const stored = item.id ? await vault.getItem(containerId, item.id, { fresh: true }) : null;
+  // Lucas, 2026-11-10: server entries likewise – outside admin mode their server data stays as stored, none is created.
+  return keepAdminFlags(keepServer(item, stored), stored);
 }

@@ -18,7 +18,7 @@ export const distFiles = (version) => ['kvpwsafe-extension.crx', 'update.xml', `
 export const releaseAssets = (version) => [
   `release/Keevault-Setup-${version}.exe`, 'release/Keevault-Setup.exe', `release/Keevault-${version}.msi`, 'release/Keevault.msi',
   `release/Keevault-${version}.msix`, 'release/Keevault.msix', 'release/Keevault-Zertifikat.cer', `release/Keevault-Setup-${version}.exe.blockmap`,
-  'release/Keevault-Geraet-Einrichten.ps1', 'release/Keevault-Richtlinien.zip', ...distFiles(version).map((n) => `release/${n}`),
+  'release/Keevault-Geraet-Einrichten.ps1', 'release/Keevault-Richtlinien.zip', `release/Keevault-Einrichtungstool-${version}.zip`, ...distFiles(version).map((n) => `release/${n}`),
   `release/Keevault-${version}-sbom.cdx.json`,
 ];
 

@@ -9,6 +9,7 @@ import { answerQuestionFromWindow, mcpScriptPath, mcpTrusted } from '../agents.j
 import { currentExtensionStatus } from '../browser.js';
 import { applyExtensionChannel, extensionFixState } from '../extension-channel.js';
 import { restoreAfterWindowsRequest } from '../windows-passkeys.js';
+import { extensionReinstallState, reinstallExtension, restartBrowsersAndCheck } from '../extension-reinstall.js';
 
 export const integrationsApi = {
   // #454: browser extension status for the hint at the bottom right
@@ -16,6 +17,10 @@ export const integrationsApi = {
   // #455: what the hint may offer, and "Fix now" (UAC) – the policies are pointed to the feed of the app's update channel
   extensionFixState: () => extensionFixState(),
   extensionFix: () => applyExtensionChannel({ reason: 'fix' }),
+  // #494: "Browser-Erweiterung neu installieren" (UAC at once), then the restart the window asked about, with the connection check
+  extensionReinstallState: () => extensionReinstallState(),
+  extensionReinstall: () => reinstallExtension(),
+  extensionRestartBrowsers: (browsers) => restartBrowsersAndCheck(browsers),
   // Windows passkey provider
   windowsRequests: () => windows.list(),
   windowsDecision: async (id, decision) => {

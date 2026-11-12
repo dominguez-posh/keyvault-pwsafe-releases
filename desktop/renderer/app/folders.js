@@ -5,6 +5,7 @@ import { t } from '../../../extension/core/i18n.js';
 import { pickImage } from '../../../extension/core/image.js';
 import { MAX_FOLDER_DEPTH } from '../../../extension/core/model.js';
 import { FOLDER_ICONS, MAX_FOLDER_IMAGE, isFolderImage } from '../../../extension/core/folder-icons.js';
+import { orderFolders } from '../../../extension/core/vault-settings.js';
 import { call } from './ipc.js';
 import { explicitFolders, folderIconMap, items, ui } from './state.js';
 import { field, writable } from './helpers.js';
@@ -31,7 +32,8 @@ export function folderRows(container, list, row, rerender) {
   const cur = all.has(ui.folder) ? ui.folder : '';
   const prefix = cur ? `${cur}/` : '';
   const inside = (f) => list.filter((i) => i.folder === f || (i.folder || '').startsWith(`${f}/`)).length;
-  const children = [...all].filter((f) => f.startsWith(prefix) && f !== cur && !f.slice(prefix.length).includes('/')).sort((a, b) => a.localeCompare(b));
+  // #480: in the order the vault's settings give, the rest alphabetically.
+  const children = orderFolders([...all].filter((f) => f.startsWith(prefix) && f !== cur && !f.slice(prefix.length).includes('/')), container.vaultSettings);
   const open = (f) => {
     ui.folder = f;
     rerender();

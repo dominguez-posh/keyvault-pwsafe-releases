@@ -13,7 +13,9 @@ export async function pinLengthCheck({ api, config, hashPin, lockNow, sleep, js,
   await api.unlock({ entra: true });
   if (!isOpened()) errors.push('pin: old 4-character PIN no longer unlocks');
   if (!(await api.state()).pinShort) errors.push('pin: old short PIN not marked');
+  await api.verifyPin('2580'); // 0.9.33 review: locking clears a PIN entered just before
   await lockNow();
+  if (await api.unlock({ entra: true }).then(() => true, () => false)) errors.push('pin: a PIN entered before locking unlocked afterwards');
   await sleep(800);
   if (!(await js(`!!document.querySelector('.pin-short')`))) errors.push('pin: lock screen shows no notice for the short PIN');
   await api.verifyPin('2580');

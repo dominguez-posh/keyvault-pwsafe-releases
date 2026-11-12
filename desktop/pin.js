@@ -16,7 +16,8 @@ export const isShortPin = (pin) => String(pin ?? '').length < MIN_PIN_LENGTH;
 
 // #472 (review): settings that only the PIN functions write (setPin, verifyPin, the PIN guard, binding the personal
 // vault). A settings patch from the window must not set, clear or replace them, not even with null.
-export const PIN_ONLY_SETTINGS = Object.freeze(['appPin', 'pinGuard', 'personalDeviceKeys']);
+// #512: windowHello likewise – switched on only through setWindowHello with the PIN.
+export const PIN_ONLY_SETTINGS = Object.freeze(['appPin', 'pinGuard', 'personalDeviceKeys', 'windowHello']);
 
 /** The PIN-only keys a settings patch tries to write (empty: the patch may go through). */
 export const pinOnlyKeys = (patch) => (patch && typeof patch === 'object'

@@ -82,7 +82,7 @@ test('472 review: both PIN dialogs check the open requests before Enter confirms
 });
 
 test('472 review: settings patches with PIN-only keys are refused', async () => {
-  assert.deepEqual([...PIN_ONLY_SETTINGS], ['appPin', 'pinGuard', 'personalDeviceKeys']);
+  assert.deepEqual([...PIN_ONLY_SETTINGS], ['appPin', 'pinGuard', 'personalDeviceKeys', 'windowHello']); // #512: windowHello
   assert.deepEqual(pinOnlyKeys({ appPin: null }), ['appPin'], 'clearing the PIN');
   assert.deepEqual(pinOnlyKeys({ appPin: { hash: 'x' } }), ['appPin']);
   assert.deepEqual(pinOnlyKeys({ pinGuard: null, zoom: 1 }), ['pinGuard']);

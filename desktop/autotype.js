@@ -36,9 +36,12 @@ public static class KvAutoType {
   }
 
   public static void SetSecretClipboard(string text) {
+    // Another program (clipboard monitor, history, sync) may hold it: up to ~5 s, pauses 25 ms doubling to 250 ms
+    // (#526, same as windows/Setup/Clip.cs).
     bool open = false;
-    for (int i = 0; i < 20 && !(open = OpenClipboard(IntPtr.Zero)); i++) Thread.Sleep(25);
-    if (!open) throw new Exception("clipboard busy");
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    for (int pause = 25; !(open = OpenClipboard(IntPtr.Zero)) && watch.ElapsedMilliseconds < 5000; pause = Math.Min(pause * 2, 250)) Thread.Sleep(pause);
+    if (!open) throw new Exception("clipboard held by another program");
     try {
       EmptyClipboard();
       SetClipboardData(13, Global(System.Text.Encoding.Unicode.GetBytes(text + "\0"))); // CF_UNICODETEXT
@@ -190,7 +193,8 @@ public static class KvAutoType {
 `;
 
 // The helper stays running (compiling the C# part takes seconds): one line per value, base64 (UTF-8).
-const SCRIPT = `Add-Type -TypeDefinition @'\n${SOURCE}\n'@
+// #526: no progress records – with -EncodedCommand they go to stderr as CLIXML, which nobody reads here.
+const SCRIPT = `$ProgressPreference = 'SilentlyContinue'\nAdd-Type -TypeDefinition @'\n${SOURCE}\n'@
 [Console]::Out.WriteLine('ready')
 while ($null -ne ($line = [Console]::In.ReadLine())) {
   try {

@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseClientVersion } from './versions.js';
+import { quitWatch } from './helper-quit.js';
 
 export const HOST_NAME = 'com.kvpwsafe.desktop';
 // Firefox identifies extensions by their gecko ID (manifest browser_specific_settings), not by an origin.
@@ -36,9 +37,12 @@ export function pipePath(userData) {
 // launch: { cmd, args } – how to start the app (packaged: the exe or the MSIX alias; development: electron + folder).
 export const hostScript = (pipe, launch = { cmd: process.execPath, args: [] }) => HOST_SCRIPT
   .replace('__PIPE__', JSON.stringify(pipe))
-  .replace('__LAUNCH__', JSON.stringify(launch));
+  .replace('__LAUNCH__', JSON.stringify(launch)) + quitWatch();
 
 const HOST_SCRIPT = `// Keevault native messaging host (generated). Relays between the browser and the desktop app.
+// #517: TLS switches from the environment never reach this process or what it starts (the app via launch()).
+delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+delete process.env.SSLKEYLOGFILE;
 const net = require('net');
 const { spawn } = require('child_process');
 const PIPE = __PIPE__;
@@ -140,8 +144,19 @@ const firefoxDir = () => (process.platform === 'darwin'
   ? path.join(os.homedir(), 'Library/Application Support/Mozilla/NativeMessagingHosts')
   : path.join(os.homedir(), '.mozilla/native-messaging-hosts'));
 
-/** Writes host script, launcher and manifest and registers them for Edge and Chrome (current user only). */
-export async function registerNativeHost({ userData, extensionIds, launch }) {
+/** #505: options of the small relay (Keevault-Update.exe, windows/Setup/NativeHost.cs) in native-host\relay.txt: the pipe,
+ * how to start the app and which program must serve the pipe (checked on every connection). Chrome and Edge start the
+ * relay directly with only the origin as argument, so the options live in this file (one "key=value" per line). */
+export function relayOptions({ pipe, launch, server }) {
+  const clean = (v) => String(v).replace(/[\r\n]/g, '');
+  return [`pipe=${clean(pipe)}`, `server=${clean(server)}`, `launch=${clean(launch.cmd)}`,
+    ...(launch.args || []).map((a) => `launch-arg=${clean(a)}`)].join('\r\n') + '\r\n';
+}
+
+/** Writes host script, launcher and manifest and registers them for Edge and Chrome (current user only).
+ * relay: { exe, server } – the small native host (#505) instead of Keevault.exe running host.cjs as Node; host.cjs is
+ * written either way and stays the host without a relay (MSIX, development, other systems). */
+export async function registerNativeHost({ userData, extensionIds, launch, relay = null }) {
   const dir = path.join(userData, 'native-host');
   await fs.mkdir(dir, { recursive: true });
   const script = path.join(dir, 'host.cjs');
@@ -154,16 +169,22 @@ export async function registerNativeHost({ userData, extensionIds, launch }) {
     launcher = path.join(dir, 'host.sh');
     await fs.writeFile(launcher, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
   }
+  let chromeHost = launcher;
+  if (process.platform === 'win32' && relay?.exe && relay?.server) {
+    await fs.writeFile(path.join(dir, 'relay.txt'), relayOptions({ pipe: pipePath(userData), launch, server: relay.server }));
+    chromeHost = relay.exe;
+  }
   const manifest = {
     name: HOST_NAME,
     description: 'Keevault',
-    path: launcher,
+    // #505: Chrome and Edge start the relay directly (no cmd.exe); a registration with host.cmd is replaced at the next start.
+    path: chromeHost,
     type: 'stdio',
     allowed_origins: extensionIds.map((id) => `chrome-extension://${id}/`),
   };
   const manifestPath = path.join(dir, `${HOST_NAME}.json`);
   await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-  // Firefox: same host, own manifest format (allowed_extensions with gecko IDs).
+  // Firefox: host.cjs (the relay knows only the chrome-extension:// start), own manifest format (allowed_extensions with gecko IDs).
   const firefoxManifest = { name: HOST_NAME, description: 'Keevault', path: launcher, type: 'stdio', allowed_extensions: [GECKO_ID] };
   const firefoxManifestPath = path.join(dir, `${HOST_NAME}.firefox.json`);
   await fs.writeFile(firefoxManifestPath, JSON.stringify(firefoxManifest, null, 2));
@@ -178,6 +199,31 @@ export async function registerNativeHost({ userData, extensionIds, launch }) {
     await fs.mkdir(firefoxDir(), { recursive: true });
     await fs.writeFile(path.join(firefoxDir(), `${HOST_NAME}.json`), JSON.stringify(firefoxManifest, null, 2));
   }
+}
+
+/**
+ * #511: the pipe's own access list, set right after it listens: the current user only, nobody over the network
+ * (Keevault-Update.exe --pipe-acl, windows/Setup/PipeAcl.cs; Node offers no way to pass one). Until then, a few hundred ms,
+ * the default list applies. log(text) gets the result for the diagnosis log. Elsewhere (Unix socket) nothing to do.
+ * bridge: the BrowserBridge serving the pipe. Once the list is set, the connections it accepted until then are closed
+ * (#511 review): they may come from someone the default list let in. Hosts connect again by themselves.
+ */
+export function protectPipe(pipe, exe, log = () => {}, bridge = null) {
+  if (process.platform !== 'win32') return Promise.resolve(true);
+  if (!exe) {
+    log('BRIDGE pipe ACL not set: Keevault-Update.exe missing');
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    execFile(exe, ['--pipe-acl', pipe], { windowsHide: true, timeout: 10_000 }, (error, _out, stderr) => {
+      log(error ? `BRIDGE pipe ACL not set: ${String(stderr || error.message).trim()}` : 'BRIDGE pipe ACL set (current user only, no network)');
+      if (!error && bridge) {
+        const early = bridge.closeClients();
+        if (early) log(`BRIDGE closed ${early} connection(s) accepted before the pipe ACL was set`);
+      }
+      resolve(!error);
+    });
+  });
 }
 
 export async function unregisterNativeHost() {
@@ -212,10 +258,17 @@ export class BrowserBridge {
   }
 
   stop() {
-    for (const c of this.clients) c.socket.destroy();
-    this.clients.clear();
+    this.closeClients();
     this.server?.close();
     this.server = null;
+  }
+
+  /** Closes every connection accepted so far (the server keeps listening). → how many. */
+  closeClients() {
+    const count = this.clients.size;
+    for (const c of this.clients) c.socket.destroy();
+    this.clients.clear();
+    return count;
   }
 
   broadcast(event) {

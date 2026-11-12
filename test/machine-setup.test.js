@@ -198,7 +198,11 @@ const subkeyTree = (b) => {
 const deviceCompanyCases = {
   'policy only per user (HKCU)': { trees: userTrees },
   'ExtensionSettings as a subkey': { trees: { [POLICY_BASES.edge]: subkeyTree('edge'), [POLICY_BASES.chrome]: subkeyTree('chrome') } },
-  'Forcelist entry of another extension': { lists: { edge: [entry('1', 'abcdefghijklmnopabcdefghijklmnop;https://x.example/u.xml')], chrome: [entry('1', 'abcdefghijklmnopabcdefghijklmnop;https://x.example/u.xml')] } },
+  // #494: a Forcelist entry of another extension no longer counts; an allow list in HKLM does.
+  'extension allow list in HKLM': { trees: Object.fromEntries(['edge', 'chrome'].map((b) => {
+    const base = POLICY_BASES[b].replace(/^HKLM/, 'HKEY_LOCAL_MACHINE');
+    return [POLICY_BASES[b], `\r\n${base}\r\n\r\n${base}\\ExtensionInstallAllowlist\r\n    1    REG_SZ    abcdefghijklmnopabcdefghijklmnop\r\n`];
+  })) },
   'cloud enrollment token': {
     trees: { [POLICY_BASES.edge]: '\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Edge\r\n    EdgeManagementEnrollmentToken    REG_SZ    t\r\n' },
     marks: { 'HKLM\\SOFTWARE\\Policies\\Google\\Update CloudManagementEnrollmentToken': '    CloudManagementEnrollmentToken    REG_SZ    t\r\n' },

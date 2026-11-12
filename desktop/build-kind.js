@@ -17,6 +17,9 @@ export function kindFrom(kvBuild, { packaged, git }) {
   if (kvBuild?.kind === 'release') return { developer: false, commit: '' };
   const stamped = String(kvBuild?.commit || '').replace(/^g/, '');
   let commit = /^[0-9a-f]{7,40}$/.test(stamped) ? stamped.slice(0, 7) : '';
+  // #420: a Dev release (first stage, private repo only); its stage is fixed in the build (extension/core/channel.js).
+  // Not a Developer build: it updates like a release, only from its own feed (part B of #420).
+  if (kvBuild?.kind === 'dev') return { developer: false, dev: true, commit };
   if (!commit && !packaged) commit = git() || ''; // a packaged build never starts git
   return { developer: true, commit };
 }

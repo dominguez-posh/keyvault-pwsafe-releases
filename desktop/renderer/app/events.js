@@ -20,6 +20,7 @@ import { reloadAll, render } from './shell.js';
 import { pinDialog } from './admin-mode.js';
 import { updateDialog, updateListeners } from './updates.js';
 import { addContainerDialog } from './vault-wizard.js';
+import { settingsCopyBlockedNotice } from './settings-file.js';
 
 let reloadTimer = null;
 
@@ -37,10 +38,13 @@ window.pwsafe.onEvent((ev) => {
     clearTimeout(reloadTimer);
     reloadTimer = setTimeout(() => reloadAll().catch(() => {}), 250);
   } else if (ev.type === 'changed' && st && !st.opened) {
-    // Unlocked elsewhere (tray, an agent's request, a test): show the vaults. Still locked: the screen stays as it is.
-    call('state').then((s) => { if (s.opened) render(); }).catch(() => {});
+    // Unlocked elsewhere (tray, an agent's request, a test): show the vaults. Still locked: the screen stays as it is –
+    // unless the extension unlocked the session meanwhile, then the window's own lock screen (#507).
+    call('state').then((s) => { if (s.opened || !!s.windowLocked !== !!st.windowLocked) render(); }).catch(() => {});
   } else if (ev.type === 'sync-stopped' && st?.opened) {
     toast(t('{provider} läuft nicht – Änderungen an Tresoren in diesem Ordner werden nicht synchronisiert. Starte {provider}.', { provider: ev.provider }), 'error');
+  } else if (ev.type === 'settingsCopyBlocked') {
+    settingsCopyBlockedNotice(ev.folder);
   } else if (ev.type === 'link') {
     const entry = parseItemLink(ev.url);
     if (entry) openItemLink(entry);

@@ -5,6 +5,8 @@ import { unlockPanel } from '../../../extension/core/ui-protect.js';
 import { t } from '../../../extension/core/i18n.js';
 import { MAX_FOLDER_DEPTH, entryTemplate } from '../../../extension/core/model.js';
 import { expiryState } from '../../../extension/core/health.js';
+import { contactLine, vaultDescription, vaultIcon, vaultLook } from '../../../extension/core/ui-vault.js';
+import { itemFromTemplate } from '../../../extension/core/vault-settings.js';
 import { call } from './ipc.js';
 import { panes, topActions, topSearch } from './layout.js';
 import { explicitFolders, folderIconMap, items, logos, st, ui } from './state.js';
@@ -14,6 +16,7 @@ import { newItem, renderDetail } from './detail.js';
 import { DRAG_PASSKEY, draggedPasskey, endDrag, setDraggedPasskey, startDrag } from './dragdrop.js';
 import { secureUnlockPanel } from './file-vaults.js';
 import { fileRepair, fileSwapDialog } from './file-swap.js';
+import { acceptOlderButton } from './accept-older.js';
 import { folderActions, folderRows, newFolderDialog } from './folders.js';
 import { itemAvatar } from './icons.js';
 import { itemActions } from './item-actions.js';
@@ -184,6 +187,7 @@ export function renderList() {
     topActions.replaceChildren();
     setChildren(panes.list,
       h('div', { class: 'list-head' }, listTitle(title, container)),
+      vaultContactNotice(container),
       h('div', { class: 'list-scroll' }, h('span', { class: 'spinner' })));
     call('protectionInfo', container.id).then((info) => {
       panes.list.querySelector('.list-scroll').replaceChildren(info.secure
@@ -213,6 +217,7 @@ export function renderList() {
     // A changed file was refused (#430): what is shown is the last good state, nothing of the file was taken.
     container?.warning ? h('div', { id: 'file-warning' }, notice(t('Die geänderte Datei wurde nicht übernommen: {message}', { message: container.warning }), 'warn')) : null,
     fileRepair(container),
+    acceptOlderButton(container),
     container?.swap ? h('button', { class: 'btn', id: 'file-swap-check', onclick: () => fileSwapDialog(container) }, icon('shield', 14), t('Erstellerin und Sicherheitscode prüfen')) : null,
     container?.error?.status === 403 && container.access?.manage !== false && container.rbac !== false ? h('button', { class: 'btn primary', onclick: async (e) => {
       const btn = e.currentTarget;
@@ -229,6 +234,7 @@ export function renderList() {
       }
     } }, icon('user'), t('Mir selbst Zugriff geben (Bearbeiten)')) : null,
     container?.error && container.kind === 'keyvault' && [401, 403].includes(container.error.status) ? tenantMismatchNotice(container) : null,
+    container?.error && container.kind === 'keyvault' ? vaultContactNotice(container) : null,
     container?.error && container.kind === 'keyvault' ? h('details', { class: 'diagnosis' }, h('summary', {}, t('Technische Details')),
       h('dl', {},
         h('dt', {}, t('Antwort des Key Vaults')), h('dd', {}, container.error.detail || container.error.message),
@@ -337,6 +343,11 @@ function newMenuItems(container) {
       { action: 'new-sophos', icon: 'shield', label: t('Neuer Sophos-Login'), onClick: () => newItem('login', entryTemplate('sophos')) },
     ] : []),
   ];
+  // #480: the vault's shared templates (preset values, never secrets).
+  const shared = deviceMode() ? [] : (container?.vaultSettings?.rules?.templates || []).map((tpl) => ({
+    action: 'new-template', icon: 'note', label: t('Vorlage: {name}', { name: tpl.name }), onClick: () => newItem(tpl.type, itemFromTemplate(tpl)),
+  }));
+  if (shared.length) kinds.push('-', ...shared);
   // #481: the folder comes first, then a separator, then the new entries.
   const folderItem = container && featureAllowed(container, 'folders') && (ui.folder || '').split('/').filter(Boolean).length < MAX_FOLDER_DEPTH
       ? { action: 'new-folder', icon: 'folder-plus', label: ui.folder ? t('Neuer Unterordner') : t('Neuer Ordner'), disabled: !writable(container), onClick: () => newFolderDialog(container) } : null;
@@ -378,9 +389,16 @@ function listAreaActions(container) {
 
 /** State badges next to the container name (functions: right-click in the sidebar). */
 /** List heading: the full name (wraps instead of being cut off) with the vault badges on a line below it. */
+/** #480: whom to ask for access – the vault's contact person (as last read from the vault), mail through the main process. */
+const vaultContactNotice = (c) => (c?.kind === 'keyvault' ? contactLine(c, () => call('openContactMail', c.id)) : null);
+
 function listTitle(title, container) {
+  const look = vaultLook(container);
   return h('div', { class: 'list-title' }, h('div', { class: 'title-row' },
-    container ? roleMark(container) : null, h('h2', { title }, title), container ? containerBadges(container) : null));
+    container ? roleMark(container) : null, look.color || look.icon ? vaultIcon(container, 'vault', 18) : null,
+    h('h2', { title }, title), container ? containerBadges(container) : null),
+    // #480: the vault's short description under its name.
+    container ? vaultDescription(container) : null);
 }
 
 function containerBadges(c) {

@@ -17,7 +17,9 @@ import { checkOtpSecret } from './extension-smoke-otp.mjs';
 import { checkPrivateFromExtension } from './extension-smoke-private.mjs';
 import { checkDetailCards } from './extension-smoke-detail.mjs';
 import { checkCardHover } from './extension-smoke-hover.mjs';
+import { checkLook } from './extension-smoke-look.mjs';
 import { checkUrlSchema } from './extension-smoke-url.mjs';
+import { checkPopupLoading, checkPopupOffline } from './extension-smoke-loading.mjs';
 import { checkMsPasswordPage, msPasswordPage } from './extension-smoke-mspw.mjs';
 import { checkFieldKinds, fieldsPage } from './extension-smoke-fields.mjs';
 import { checkForeignRedirect, checkJobBoundToTab, checkRememberedAccount, checkStartPage, checkVaultSearch } from './extension-smoke-mstab.mjs';
@@ -322,6 +324,7 @@ try {
   check(offlineText, 'Popup ohne App: kein Hinweis auf die Keevault-App');
   await shot(offline.sessionId, 'ext-popup-offline');
   pageErrors(offline.sessionId, 'popup-offline');
+  await checkPopupOffline({ evaluate, waitFor, check, popup: offline }); // #495
 
   // Developer demo backend instead of the desktop app – set in the service worker itself, before any page asks the
   // app (a real Keevault on this machine must not be involved); restart so that the worker picks it up.
@@ -335,6 +338,7 @@ try {
   const unlocked = await sw(options.sessionId, 'unlock');
   check(unlocked.containers.length === 2, `Demo-Container: ${unlocked.containers.length}`);
   const personal = unlocked.containers.find((c) => c.name === 'Persönlich');
+  console.log(`Popup-Ladezeiten (#495): ${JSON.stringify(await checkPopupLoading({ open, evaluate, waitFor, check, sleep, ext, sessionId: options.sessionId }))}`);
 
   const popup = await open(`${ext}/popup/popup.html`);
   check(await waitFor(() => evaluate(popup.sessionId, 'document.querySelectorAll(".row-item").length > 0')), 'Popup zeigt keine Einträge');
@@ -368,6 +372,7 @@ try {
   check(/^data:image\/(webp|png)/.test(fav.png || ''), `Favicon als Symbol: ${favicon}`);
   check(fav.svg === '' && fav.none === '', `Favicon: SVG/leer sollte '' ergeben (${favicon})`);
   pageErrors(popup.sessionId, 'popup');
+  await checkLook({ send, evaluate, waitFor, check, popup }); // #509 (list view)
   await checkOtpSecret({ send, evaluate, open, waitFor, check, sleep, sw, ext, sessionId: options.sessionId, personal }); // #469
   await checkPrivateFromExtension({ sw, check, sessionId: options.sessionId, personal }); // #476
   await checkUrlSchema({ send, evaluate, open, waitFor, check, sleep, sw, ext, sessionId: options.sessionId, personal }); // only http(s) links

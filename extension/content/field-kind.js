@@ -17,8 +17,19 @@ globalThis.kvpwsafeFieldKind = (() => {
   const SEARCH_NAMES = ['q', 's', 'query', 'keyword', 'keywords'];
   // A field clearly named for the account's name. "e-mail" alone is not one: contact forms and newsletters ask for it too.
   const NAME_HINT = /user.?name|user.?id|\buser\b|log.?in|identifier|benutzer|anmelde|kennung|account.?name|kontoname/i;
-  // Tokens that leave the OTP guess by name alone open: anything else names another purpose (postal-code, street-address, …).
-  const NEUTRAL = ['', 'on', 'off', 'one-time-code'];
+  // #504: only the autofill field names of the HTML standard name another purpose (postal-code, street-address, …). Values a
+  // page makes up to keep the browser's autofill away ("nope", "false", "new-field-123") say nothing about the field.
+  const OTHER_PURPOSE = new Set([
+    'name', 'honorific-prefix', 'given-name', 'additional-name', 'family-name', 'honorific-suffix', 'nickname',
+    'organization-title', 'username', 'new-password', 'current-password', 'organization', 'street-address',
+    'address-line1', 'address-line2', 'address-line3', 'address-level4', 'address-level3', 'address-level2',
+    'address-level1', 'country', 'country-name', 'postal-code', 'cc-name', 'cc-given-name', 'cc-additional-name',
+    'cc-family-name', 'cc-number', 'cc-exp', 'cc-exp-month', 'cc-exp-year', 'cc-csc', 'cc-type', 'transaction-currency',
+    'transaction-amount', 'language', 'bday', 'bday-day', 'bday-month', 'bday-year', 'sex', 'url', 'photo', 'tel',
+    'tel-country-code', 'tel-national', 'tel-area-code', 'tel-local', 'tel-local-prefix', 'tel-local-suffix',
+    'tel-extension', 'email', 'impp',
+  ]);
+  const otherPurpose = (ac) => ac.some((t) => OTHER_PURPOSE.has(t));
 
   const tokens = (el) => String(el.getAttribute?.('autocomplete') ?? el.autocomplete ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   const hint = (el) => `${el.name || ''} ${el.id || ''} ${el.placeholder || ''} ${el.getAttribute?.('aria-label') || ''}`;
@@ -32,7 +43,7 @@ globalThis.kvpwsafeFieldKind = (() => {
     const ac = tokens(el);
     if (ac.includes('webauthn')) return 'webauthn';
     if (ac.includes('one-time-code')) return 'otp';
-    if (isOtp(el)) return ac.every((t) => NEUTRAL.includes(t)) && !searchLike(el, ac, el.form) ? 'otp' : null;
+    if (isOtp(el)) return !otherPurpose(ac) && !searchLike(el, ac, el.form) ? 'otp' : null;
     if (el.type === 'password') return 'password';
     if (!TEXT_TYPES.includes(el.type)) return null;
     const form = el.form || el.closest?.('form') || null;
@@ -43,7 +54,7 @@ globalThis.kvpwsafeFieldKind = (() => {
     if (f.password && !hidden(f.password)) return f.username === el ? 'username' : null;
     // No password shown: a name step of its own.
     if (SIGN_IN_HOSTS.test(host)) return 'username';
-    if (ac.length && !ac.every((t) => t === 'on')) return null; // off, email, name, address, …
+    if (ac.includes('off') || otherPurpose(ac)) return null; // off, email, name, address, …; not a made-up value (#504)
     return NAME_HINT.test(hint(el)) ? 'username' : null;
   };
 })();

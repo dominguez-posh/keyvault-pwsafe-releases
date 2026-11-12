@@ -13,7 +13,14 @@
     <span class="spacer"></span>
     <span id="top-actions" class="top-actions"></span>
   </header>
-  <main id="view" class="view"></main>
+  <!-- #495: loading state in the page itself, on screen with the first paint (popup.js/loading.js take it over). -->
+  <main id="view" class="view">
+    <div class="loading-state" role="status" aria-live="polite" aria-busy="true" data-from-page="1">
+      <div class="loading-bar"><span></span></div>
+      <p class="loading-step">Verbinde mit Keevault …</p>
+      <ul class="list loading-skeleton" aria-hidden="true"><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li><li><i></i><b></b><em></em></li></ul>
+    </div>
+  </main>
   <!-- QR decoder for two-factor setup codes shown on websites (jsQR 1.4.0, Apache-2.0, vendored in lib/). -->
   <script src="../lib/jsqr.js"></script>
   <script type="module" src="popup.js"></script>

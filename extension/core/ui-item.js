@@ -389,7 +389,8 @@ export function itemForm(item, ctx) {
     password.type = password.type === 'password' ? 'text' : 'password';
     reveal.replaceChildren(icon(password.type === 'password' ? 'eye' : 'eyeOff'));
   });
-  const generator = generatorPanel({ ...DEFAULT_OPTIONS }, (pw) => {
+  // #480: the vault's generator defaults (ctx.generator), if it sets any.
+  const generator = generatorPanel({ ...DEFAULT_OPTIONS, ...(ctx.generator || {}) }, (pw) => {
     password.value = pw;
     password.type = 'text';
     updateMeter();
@@ -712,8 +713,9 @@ export function itemForm(item, ctx) {
     ownLogin,
     urlsRow,
     row(t('Einmalcode (TOTP)'), totp.el),
-    h('label', { class: 'inline' }, msAdmin, t('Microsoft-Admin-Konto (für Admin Center und Bastion)')),
-    h('label', { class: 'inline' }, sophos, t('Sophos-Login (Portale, bei MFA Passwort + Einmalcode zusammen)')),
+    // #487: admin flags only in the desktop's admin mode (never in the popup); hidden they keep the stored value.
+    ctx.adminMode ? h('label', { class: 'inline admin-flag' }, msAdmin, t('Microsoft-Admin-Konto (für Admin Center und Bastion)')) : null,
+    ctx.adminMode ? h('label', { class: 'inline admin-flag' }, sophos, t('Sophos-Login (Portale, bei MFA Passwort + Einmalcode zusammen)')) : null,
     portalBox,
     passkeyBox);
   // Credit card
@@ -826,8 +828,8 @@ export function itemForm(item, ctx) {
         tvLink: srvTvLink.value, tvPassword: srvTvLink.value ? '' : srvTvPass.value,
         bastionUrl: srvBastion.value, bastionLoginLink: srvBastionLogin.value, bastionVmLink: srvBastionVm.value, bastionTenant: srvBastionTenant.value,
       } : undefined,
-      msAdmin: login && msAdmin.checked,
-      sophos: login && sophos.checked,
+      msAdmin: login && (ctx.adminMode ? msAdmin.checked : !!it.msAdmin),
+      sophos: login && (ctx.adminMode ? sophos.checked : !!it.sophos),
       portals: login && sophos.checked ? collectPortals() : [],
       folder: folder.value,
       icon: icon64,

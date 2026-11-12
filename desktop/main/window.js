@@ -4,7 +4,7 @@ import { app, BrowserWindow, nativeTheme, Tray, Menu, nativeImage } from 'electr
 import path from 'node:path';
 import { t } from '../../extension/core/i18n.js';
 import { demo, forcedTheme, here, smokeTest } from './boot.js';
-import { config, opened, quitting, setQuitting, setWin, win } from './state.js';
+import { config, opened, quitting, setQuitting, setWin, win, windowLocked } from './state.js';
 import { lockNow, send } from './session.js';
 import { bringToFront } from './focus.js';
 
@@ -53,21 +53,24 @@ export function showWindow() {
   bringToFront(win);
 }
 
-/** Icon next to the clock: the app (passkeys via Windows and the browser) keeps running without a window. */
-export function createTray() {
-  tray = new Tray(nativeImage.createFromPath(path.join(here, 'assets', 'icon.png')).resize({ width: 16, height: 16 }));
-  tray.setToolTip('Keevault');
-  const menu = () => Menu.buildFromTemplate([
+/**
+ * The tray menu. #507: unlocked through the browser extension only, it says so at the top; the reports stay off until
+ * the window is unlocked too, "Sperren" ends the session for both.
+ */
+export function trayTemplate() {
+  const inWindow = opened && !windowLocked;
+  return [
+    ...(windowLocked ? [{ id: 'extension-unlocked', label: t('Erweiterung entsperrt'), enabled: false }, { type: 'separator' }] : []),
     { label: t('Öffnen'), click: showWindow },
     { label: t('Passwort-Generator'), click: () => {
       showWindow();
       send({ type: 'generator' });
     } },
-    { label: t('Passwort-Check'), enabled: opened, click: () => {
+    { label: t('Passwort-Check'), enabled: inWindow, click: () => {
       showWindow();
       send({ type: 'health' });
     } },
-    { label: t('Zugriffsbericht'), enabled: opened, click: () => {
+    { label: t('Zugriffsbericht'), enabled: inWindow, click: () => {
       showWindow();
       send({ type: 'access' });
     } },
@@ -78,7 +81,14 @@ export function createTray() {
     } },
     { type: 'separator' },
     { label: t('Beenden'), click: () => { setQuitting(true); app.quit(); } },
-  ]);
+  ];
+}
+
+/** Icon next to the clock: the app (passkeys via Windows and the browser) keeps running without a window. */
+export function createTray() {
+  tray = new Tray(nativeImage.createFromPath(path.join(here, 'assets', 'icon.png')).resize({ width: 16, height: 16 }));
+  tray.setToolTip('Keevault');
+  const menu = () => Menu.buildFromTemplate(trayTemplate());
   tray.on('click', showWindow);
   tray.on('right-click', () => tray.popUpContextMenu(menu()));
 }

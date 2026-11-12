@@ -5,6 +5,7 @@
 import { t } from '../../extension/core/i18n.js';
 import { mayMakePrivate, OWN_ONLY } from '../../extension/core/private.js';
 import { auth, config, vault } from './state.js';
+import { readVaultSettings } from '../../extension/core/vault-settings.js';
 
 /** Entra object ID of the signed-in person ('' when nobody is signed in). */
 export const viewerId = () => auth?.account?.localAccountId || '';
@@ -32,6 +33,8 @@ export async function othersView() {
  * folder of a shared Key Vault vault that the person created (any entry for a Verwalter). Back: the owner, or a Verwalter with other people's private entries shown.
  */
 export async function setPrivacy(containerId, id, on) {
+  // #480: the vault may forbid "Nur für mich" (core/vault-settings.js; here, not in vault-rules.js, to keep this module light).
+  if (on && (await readVaultSettings(vault, containerId)).protect.private === 'forbid') throw new Error(t('„Nur für mich“ ist in diesem Tresor nicht erlaubt.'));
   if (!config.get().adminTools) throw new Error(t('„Nur für mich“ lässt sich nur im Admin-Modus ändern.'));
   const c = await vault.container(containerId);
   if (!privacyOffered(c)) throw new Error(t('Diese Funktion gibt es für diesen Tresor nicht.'));

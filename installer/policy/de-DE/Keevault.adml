@@ -7,6 +7,8 @@
       <string id="Keevault">Keevault</string>
       <string id="SUPPORTED_Keevault_0_6_2">Keevault 0.6.2 oder neuer</string>
       <string id="SUPPORTED_Keevault_0_7_0">Keevault 0.7.0 oder neuer</string>
+      <string id="SUPPORTED_Keevault_0_9_8">Keevault 0.9.8 oder neuer</string>
+      <string id="SUPPORTED_Keevault_0_9_33">Keevault 0.9.33 oder neuer</string>
       <string id="SUPPORTED_Keevault_0_7_10">Keevault 0.7.10 oder neuer</string>
       <string id="Vaults">Tresore automatisch verbinden</string>
       <string id="Vaults_Help">Diese Azure Key Vaults erscheinen bei allen betroffenen Benutzern nach der Anmeldung automatisch in Keevault (Kennzeichnung „Richtlinie“).
@@ -49,6 +51,10 @@ Nicht konfiguriert: der Benutzer entscheidet (Standard: aus).</string>
       <string id="UpdateMode_Off">Aus – nur manuell suchen</string>
       <string id="UpdateMode_Auto">Automatisch aktuell halten</string>
       <string id="UpdateMode_Ask">Beim Start prüfen und Update anbieten</string>
+      <string id="UpdateChannel">Update-Kanal</string>
+      <string id="UpdateChannel_Help">Welche Versionen Keevault anbietet: „Stabil“ (Standard) oder „Early Access“ (neue Versionen schon im Praxistest, bevor sie für alle freigegeben werden). Gilt für die Updates der App und für die Browser-Erweiterung, die Keevault einrichtet. Nicht konfiguriert: Benutzerentscheidung.</string>
+      <string id="UpdateChannel_Stable">Stabil</string>
+      <string id="UpdateChannel_Beta">Early Access</string>
       <string id="SelfUpdate">Selbst-Update der App erlauben</string>
       <string id="SelfUpdate_Help">Nicht konfiguriert oder aktiviert (Standard): Keevault prüft beim Start auf eine neue Version und bietet sie an; Details regelt die Richtlinie „Updates“.
 
@@ -61,6 +67,8 @@ Betrifft nur die EXE-Installation pro Benutzer; MSI und MSIX aktualisieren sich 
       <string id="BrowserIntegration_Help">Aktiviert: Die App registriert den Native-Messaging-Host für Edge, Chrome und Firefox, damit die Browser-Erweiterung auch Datei-Tresore nutzen kann. Deaktiviert: keine Registrierung, die Erweiterung sieht nur Key-Vault-Tresore. Nicht konfiguriert: Benutzerentscheidung (Standard: an).</string>
       <string id="ExtensionIds">Erlaubte Erweiterungs-IDs</string>
       <string id="ExtensionIds_Help">IDs der Browser-Erweiterungen (32 Buchstaben a–p), die mit der App sprechen dürfen, durch Komma getrennt. Nur nötig, wenn Sie eine eigene Erweiterungs-ID verteilen; Standard ist die ID der veröffentlichten Keevault-Erweiterung.</string>
+      <string id="WindowHello">Fenster mit Windows Hello entsperren erlauben</string>
+      <string id="WindowHello_Help">Deaktiviert: Das App-Fenster lässt sich nur mit der App-PIN entsperren, nicht mit Windows Hello (Gesicht, Fingerabdruck, Windows-Hello-PIN). Aktiviert oder nicht konfiguriert: Der Benutzer entscheidet; eingeschaltet wird Windows Hello nur von ihm selbst mit seiner App-PIN, nie durch die Richtlinie (Standard: aus). Gilt nur für die Fenstersperre, wenn allein die Browser-Erweiterung entsperrt ist.</string>
       <string id="WindowsProvider">Keevault als Passkey-Anbieter in Windows</string>
       <string id="WindowsProvider_Help">Aktiviert: Keevault erscheint im Windows-Passkey-Dialog (Windows 11). Deaktiviert: der Passkey-Anbieter wird nicht registriert. Nicht konfiguriert: Benutzerentscheidung (Standard: an).</string>
       <string id="SignInWindows">Anmeldung im Windows-Dialog</string>
@@ -96,6 +104,9 @@ Betrifft nur die EXE-Installation pro Benutzer; MSI und MSIX aktualisieren sich 
       </presentation>
       <presentation id="UpdateMode">
         <dropdownList refId="UpdateMode" noSort="true" defaultItem="0">Updates</dropdownList>
+      </presentation>
+      <presentation id="UpdateChannel">
+        <dropdownList refId="UpdateChannel" noSort="true" defaultItem="0">Update-Kanal</dropdownList>
       </presentation>
       <presentation id="DefaultVault">
         <textBox refId="DefaultVault"><label>Key-Vault-Adresse</label></textBox>

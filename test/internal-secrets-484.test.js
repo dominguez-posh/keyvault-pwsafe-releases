@@ -88,7 +88,7 @@ for (const [name, file] of [['IPC', '../desktop/main/api/items.js'], ['bridge', 
 
 test('IPC save: the handler passes the item to vault.saveItem', () => {
   const src = readFileSync(new URL('../desktop/main/api/items.js', import.meta.url), 'utf8');
-  assert.match(src, /save: async \(containerId, item, expectedVersion\) => \{[^}]*vault\.saveItem\(containerId, item/);
+  assert.match(src, /save: async \(containerId, item, expectedVersion\) => \{[^}]*vault\.saveItem\(containerId, (await adminFlagsGuard\(containerId, )?item/); // #487: admin flags kept outside admin mode
 });
 
 test('diagnostics log: subscription ID, GUIDs and UPNs are masked, method, host and status stay', () => {

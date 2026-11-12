@@ -50,7 +50,7 @@ test('a partial run runs its areas and what they need, and fails when one did no
 test('bad arguments are refused, and only known names reach the output', () => {
   assert.equal(onlyProblem(demo()), null);
   assert.equal(onlyProblem(demo('--only=mainmenu,agententer')), null);
-  assert.match(onlyProblem(demo('--only=nosuch')), /unknown area "nosuch"\. Areas: shortcuts, .*machinesetup$/);
+  assert.match(onlyProblem(demo('--only=nosuch')), /unknown area "nosuch"\. Areas: shortcuts, .*machinesetup, settingsfile, logging, compliance, tlsenv$/);
   for (const bad of ['--only=', '--only=mainmenu,', '--only=a b', '--only=$(calc)', '--only=::stop-commands::x', '--only=MAINMENU', `--only=${'a'.repeat(33)}`]) {
     const said = onlyProblem(demo(bad));
     assert.match(said, /unknown area /, bad);

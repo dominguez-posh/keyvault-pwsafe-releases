@@ -17,16 +17,21 @@ const SAMPLE = {
     { type: 'note', title: 'Urlaubsideen', notes: 'Küstenwanderung im Herbst, Zugfahrt planen.', folder: 'Privat' },
   ],
   'kv-pws-demo-team': [
-    { title: 'Firewall Admin', username: 'admin', password: 'Tz9!kB3#vNq7$Hw2', urls: ['https://fw01.contoso.local'], folder: 'Netzwerk' },
+    // Dates for the compliance view (#500): an old password, one never changed since creation, one changed recently.
+    { title: 'Firewall Admin', username: 'admin', password: 'Tz9!kB3#vNq7$Hw2', urls: ['https://fw01.contoso.local'], folder: 'Netzwerk',
+      created: '2025-03-01T08:00:00Z', passwordChanged: '2025-06-15T08:00:00Z' },
     { title: 'Azure Notfallkonto', username: 'breakglass@contoso.onmicrosoft.com', password: 'Xc5&rM8!pLq3#Vz7', urls: ['https://portal.azure.com'], folder: 'Notfall', favorite: true,
-      notes: 'Nur im Notfall verwenden. Nutzung wird überwacht.' },
+      notes: 'Nur im Notfall verwenden. Nutzung wird überwacht.', created: '2025-09-01T08:00:00Z' },
     { title: 'Grafana', username: 'ops', password: 'Lm2#tR6!wQz9&Kv4', urls: ['https://grafana.contoso.com'], folder: 'Monitoring',
+      created: '2025-05-01T08:00:00Z', passwordChanged: '2026-09-20T08:00:00Z',
       passkeys: [{ credentialId: 'ZGVtby1wYXNza2V5', rpId: 'grafana.contoso.com', rpName: 'Grafana', userName: 'ops', userHandle: 'b3Bz', privateKey: '', created: '2026-09-01T08:00:00Z' }] },
   ],
 };
 
 // Example Azure around the vaults (setup wizard): resource groups, regions and an empty Key Vault to take over.
 const SUB = '00000000-0000-0000-0000-000000000000';
+/** A member who left (#500): her role assignment was deleted 30 days ago (activity log). */
+const KIM = '11111111-2222-4333-8444-555555555555';
 const GROUPS = [
   { name: 'rg-pwsafe', location: 'germanywestcentral' },
   { name: 'rg-security', location: 'westeurope' },
@@ -63,6 +68,7 @@ export function createDemoBackend() {
         enablePurgeProtection: !!r.purge, provisioningState: 'Succeeded', sku: { family: 'A', name: 'standard' } } };
   };
 
+  const made = new Map(); // resource groups created in the demo
   const json = (status, body) => new Response(body === undefined ? '' : JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const resourceId = (name) => `/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-kvpwsafe-demo/providers/Microsoft.KeyVault/vaults/${name}`;
 
@@ -110,8 +116,66 @@ export function createDemoBackend() {
     return json(400, { error: { message: 'Im Demo-Modus nicht unterstützt' } });
   }
 
+  // Monitoring (#486): Log Analytics workspaces, diagnostic settings, alert rules – kept as written, with systemData.
+  const monitor = new Map([[`/subscriptions/${SUB}/resourceGroups/rg-security/providers/Microsoft.OperationalInsights/workspaces/law-contoso`,
+    { name: 'law-contoso', location: 'westeurope', properties: { retentionInDays: 30, provisioningState: 'Succeeded' } }]]);
+  // Log Analytics query API (#500): fixed answers per report, named in the query's first line ("// keevault:<kind>").
+  // Kim read the firewall before and Grafana after its last password change but before it changed again; pws-gone is
+  // an entry that no longer exists (shown masked).
+  function logQuery(body) {
+    const kind = /^\/\/ keevault:(\w+)/.exec(JSON.parse(body || '{}').query || '')?.[1];
+    const table = (columns, rows) => json(200, { tables: [{ name: 'PrimaryResult', columns: columns.map((name) => ({ name, type: 'string' })), rows }] });
+    const kim = 'kim@contoso.com';
+    if (kind === 'coverage') return table(['First', 'Last', 'Events'], [['2025-11-01T08:00:00Z', new Date().toISOString(), 412]]);
+    if (kind === 'reads') {
+      return table(['Person', 'Oid', 'Entry', 'Reads', 'First', 'Last'], [
+        [kim, KIM, 'pws-demo6', 4, '2025-11-03T09:00:00Z', '2025-12-01T10:00:00Z'],
+        [kim, KIM, 'pws-demo8', 2, '2026-01-10T09:00:00Z', '2026-01-15T10:00:00Z'],
+        [kim, KIM, 'pws-gone', 1, '2025-12-02T09:00:00Z', '2025-12-02T09:00:00Z'],
+        ['alex@contoso.com', 'u-alex', 'pws-demo7', 7, '2025-11-05T09:00:00Z', '2026-11-01T10:00:00Z'],
+      ]);
+    }
+    if (kind === 'many') return table(['Person', 'Hour', 'Entries', 'Reads'], [[kim, '2026-01-15T10:00:00Z', 31, 44]]);
+    if (kind === 'denied') return table(['TimeGenerated', 'Person', 'OperationName', 'Entry', 'CallerIPAddress'], [['2026-02-01T07:00:00Z', kim, 'SecretGet', 'pws-demo7', '203.0.113.7']]);
+    if (kind === 'apps') return table(['App', 'Person', 'Requests', 'First', 'Last', 'Operations'], [['22222222-3333-4444-8555-666666666666', kim, 12, '2026-01-02T08:00:00Z', '2026-01-03T08:00:00Z', ['SecretList', 'SecretGet']]]);
+    if (kind === 'changes') return table(['TimeGenerated', 'Person', 'OperationName', 'Entry'], [['2026-09-20T08:00:00Z', 'alex@contoso.com', 'SecretSet', 'pws-demo8'], ['2026-03-01T08:00:00Z', 'alex@contoso.com', 'SecretDelete', 'pws-gone']]);
+    return json(400, { error: { code: 'BadArgumentError', message: 'unknown query' } });
+  }
+
+  function monitoring(p, method, body) {
+    if (/\/providers\/Microsoft\.OperationalInsights\/workspaces\/[^/]+\/api\/query$/i.test(p) && method === 'POST') return logQuery(body);
+    const key = p.replace(/\/register$/, '');
+    if (/^\/subscriptions\/[^/]+\/providers\/Microsoft\.(OperationalInsights|Insights)$/i.test(key)) return json(200, { namespace: key.split('/').pop(), registrationState: 'Registered' });
+    if (p.endsWith('/providers/Microsoft.Insights/diagnosticSettings') && method === 'GET') {
+      return json(200, { value: [...monitor].filter(([k]) => k.toLowerCase().startsWith(`${p.toLowerCase()}/`)).map(([id, v]) => ({ id, ...v })) });
+    }
+    if (!/\/providers\/Microsoft\.(OperationalInsights\/workspaces|Insights\/(diagnosticSettings|actionGroups|scheduledQueryRules|activityLogAlerts))\/[^/]+$/i.test(p)) return null;
+    const had = monitor.get(p);
+    if (method === 'GET') return had ? json(200, { id: p, ...had }) : json(404, { error: { code: 'ResourceNotFound', message: 'Not found' } });
+    if (method === 'DELETE') { monitor.delete(p); return json(200, {}); }
+    if (method !== 'PUT' && method !== 'PATCH') return null;
+    const b = JSON.parse(body || '{}');
+    const at = new Date().toISOString();
+    const next = method === 'PATCH' ? { ...had, properties: { ...had?.properties, ...b.properties } } : { ...b, name: p.split('/').pop() };
+    if (/OperationalInsights/i.test(p)) next.properties = { ...next.properties, provisioningState: 'Succeeded' };
+    next.systemData = { createdAt: had?.systemData?.createdAt || at, createdBy: 'alex@contoso.com', lastModifiedAt: at, lastModifiedBy: 'alex@contoso.com' };
+    monitor.set(p, next);
+    return json(200, { id: p, ...next });
+  }
+
   function arm(url, method, body) {
     const p = url.pathname;
+    const watched = monitoring(p, method, body);
+    if (watched) return watched;
+    const oneGroup = /^\/subscriptions\/[^/]+\/resourcegroups\/([^/]+)$/i.exec(p);
+    if (oneGroup && method === 'GET') {
+      const g = GROUPS.find((x) => x.name.toLowerCase() === oneGroup[1].toLowerCase()) || made.get(oneGroup[1].toLowerCase());
+      return g ? json(200, { id: p, ...g }) : json(404, { error: { code: 'ResourceGroupNotFound', message: 'Not found' } });
+    }
+    if (oneGroup && method === 'PUT') {
+      made.set(oneGroup[1].toLowerCase(), { name: oneGroup[1], location: JSON.parse(body || '{}').location });
+      return json(201, { id: p, ...made.get(oneGroup[1].toLowerCase()) });
+    }
     if (/^\/subscriptions\/[^/]+\/resourcegroups$/i.test(p)) return json(200, { value: GROUPS.map((g) => ({ id: `/subscriptions/${SUB}/resourceGroups/${g.name}`, ...g })) });
     if (/^\/subscriptions\/[^/]+\/locations$/.test(p)) return json(200, { value: REGIONS.map((r) => ({ ...r, metadata: { regionType: 'Physical' } })) });
     if (p.endsWith('/providers/Microsoft.KeyVault/checkNameAvailability')) {
@@ -136,6 +200,10 @@ export function createDemoBackend() {
     if (one && vaultResources.has(one[2]) && method === 'GET') return json(200, vaultResource(one[2]));
     if (p.includes('/providers/Microsoft.Authorization/roleAssignments/') && method === 'PUT') return json(201, { id: p, properties: JSON.parse(body || '{}').properties });
     if (url.pathname.endsWith('/providers/Microsoft.ResourceGraph/resources')) {
+      if (/operationalinsights\/workspaces/i.test(JSON.parse(body || '{}').query || '')) {
+        return json(200, { data: [...monitor].filter(([k]) => /\/workspaces\/[^/]+$/i.test(k)).map(([id, v]) => ({ id, name: v.name, resourceGroup: id.split('/')[4],
+          subscriptionId: SUB, location: v.location, retention: v.properties?.retentionInDays })) });
+      }
       return json(200, { data: VAULTS.map((v) => ({ id: resourceId(v.name), name: v.name, displayName: v.displayName, vaultUri: `https://${v.name}.vault.azure.net/`, rbac: true, tagged: true, resourceGroup: 'rg-pwsafe' })) });
     }
     if (url.pathname === '/tenants') {
@@ -158,12 +226,21 @@ export function createDemoBackend() {
         assignment('u-admin', 'User', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635', true),
       ] });
     }
+    if (/\/providers\/Microsoft\.Insights\/eventtypes\/management\/values$/i.test(url.pathname)) {
+      const at = new Date(Date.now() - 30 * 86_400_000).toISOString();
+      // Both resource IDs of a demo vault (Resource Graph and ARM name different groups).
+      return json(200, { value: VAULTS.flatMap((v) => [resourceId(v.name), vaultResource(v.name).id]).flatMap((id) => ['Started', 'Succeeded'].map((status) => ({
+        operationName: { value: 'Microsoft.Authorization/roleAssignments/delete' }, status: { value: status }, eventTimestamp: at, caller: 'alex@contoso.com',
+        resourceId: `${id}/providers/Microsoft.Authorization/roleAssignments/${KIM}-secrets-user`,
+        properties: { responseBody: JSON.stringify({ properties: { principalId: KIM, roleDefinitionId: '/providers/Microsoft.Authorization/roleDefinitions/4633458b-17de-408a-b874-0445c86b69e6' } }) },
+      }))) });
+    }
     if (/^\/subscriptions\/[^/]+$/.test(url.pathname)) return json(200, { subscriptionId: url.pathname.split('/')[2], tenantId: '00000000-0000-0000-0000-000000000000', displayName: 'Demo-Abonnement', state: 'Enabled' });
     if (url.pathname === '/subscriptions') return json(200, { value: [{ subscriptionId: '00000000-0000-0000-0000-000000000000', displayName: 'Demo-Abonnement', state: 'Enabled' }] });
     return json(403, { error: { code: 'Demo', message: 'Im Demo-Modus nicht verfügbar' } });
   }
 
-  const people = { 'u-alex': ['Alex Demo', 'alex@contoso.com'], 'g-ops': ['Ops-Team', 'Sicherheitsgruppe'], 'u-admin': ['Azure Admin', 'admin@contoso.com'] };
+  const people = { 'u-alex': ['Alex Demo', 'alex@contoso.com'], 'g-ops': ['Ops-Team', 'Sicherheitsgruppe'], 'u-admin': ['Azure Admin', 'admin@contoso.com'], [KIM]: ['Kim Beispiel', 'kim@contoso.com'] };
   function graph(url, method, body) {
     if (url.pathname.endsWith('/$batch') && method === 'POST') {
       const { requests } = JSON.parse(body);

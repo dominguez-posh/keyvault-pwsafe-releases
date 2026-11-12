@@ -10,6 +10,8 @@ import { progressLine } from './backup.js';
 import { renderList } from './list.js';
 import { reloadAll } from './shell.js';
 import { renderSidebar } from './sidebar.js';
+import { adminMode } from './modes.js';
+import { loggingSection } from './logging.js';
 
 export async function licenseDialog(c) {
   let st0;
@@ -122,7 +124,8 @@ export async function vaultSettingsDialog(c) {
     // Manage (may assign roles) but not admin: offer to take the Key Vault Administrator role.
     return modal(t('Tresor-Einstellungen'), h('div', {},
       h('p', {}, t('Die Tresor-Einstellungen ändern nur Personen mit der Azure-Rolle „Key Vault-Administrator“ auf diesem Key Vault.')),
-      state.canBecomeAdmin ? notice(t('Du darfst Rollen vergeben und kannst dir die Rolle selbst geben. Sie gilt nach ein paar Minuten.'), 'info') : null), [
+      state.canBecomeAdmin ? notice(t('Du darfst Rollen vergeben und kannst dir die Rolle selbst geben. Sie gilt nach ein paar Minuten.'), 'info') : null,
+      adminMode() ? loggingSection(c) : null), [
       { label: t('Abbrechen') },
       state.canBecomeAdmin ? { label: t('Mir die Admin-Rolle geben'), primary: true, onClick: async () => {
         await call('makeMeAdmin', c.id);
@@ -137,7 +140,8 @@ export async function vaultSettingsDialog(c) {
     h('p', {}, t('Lege fest, welche Funktionen alle anderen in diesem Tresor nutzen dürfen. Admins (Key Vault-Administrator) dürfen immer alles. Standard: alles aus.')),
     h('div', { class: 'policy-list' }, ...POLICY_ORDER.map((f) => h('label', { class: 'inline policy-row' }, boxes[f], t(POLICY_TEXT[f])))),
     notice(t('Unabhängig davon gelten die Azure-Rollen: Wer nur „Lesen“ hat, kann auch freigeschaltete Funktionen nicht nutzen, die Schreibrechte brauchen.'), 'info'),
-    state.updatedBy ? h('p', { class: 'muted small' }, t('Zuletzt geändert {date} von {user}', { date: formatDateTime(state.updated), user: state.updatedBy })) : null), [
+    state.updatedBy ? h('p', { class: 'muted small' }, t('Zuletzt geändert {date} von {user}', { date: formatDateTime(state.updated), user: state.updatedBy })) : null,
+    adminMode() ? loggingSection(c) : null), [
     { label: t('Abbrechen') },
     { label: t('Speichern'), primary: true, onClick: async () => {
       await call('setPolicy', c.id, Object.fromEntries(POLICY_ORDER.map((f) => [f, boxes[f].checked])));

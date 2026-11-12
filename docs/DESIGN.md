@@ -109,6 +109,7 @@ Eine feste Abstandsskala gibt es nicht. Üblich sind:
 | Dialog `.modal` | Breite bis 560 px, Radius 10 px, Schatten `--shadow` |
 | Menü (App) | Radius 14 px, Milchglas, Zeilen 34 px, Hover neutral, Symbol wird Akzent, Rot nur bei Löschen |
 | Sichere Karte (#459) | Fenster der App oder Erweiterung für PIN und Bestätigungen: Radius 16 px, Fläche `--surface`, Schatten, oben mittig über dem Browser- bzw. App-Fenster, Breite 400 bis 460 px, Höhe nach Inhalt. App: rahmenlos und transparent; Erweiterung: Browserfenster vom Typ `popup` behält die Titelleiste (Grenze des Browsers). Enter bestätigt (Freigabe der Release-Signatur nie per Enter, nur Mausklick nach Wartezeit), Esc bricht ab, Schließen zählt als Abbruch |
+| Look des Popups (#509) | Die App lässt den Desktop durch das Fenster scheinen (Fenster-Transparenz); ein Browser-Popup kann das nicht. Nachgebildet mit denselben Tokens in `extension/popup/popup.css`: Hintergrund `--bg` mit weichem Verlauf aus `--accent` (16 %) und `--passkey` (9 %), Körnung `extension/styles/grain.svg` (7 % hell, 9 % dunkel), Kopfzeile, Liste und Detail als Glas (78 % `--surface`, Unschärfe 14 px). Text bleibt mindestens 4,5:1 (Smoke prüft hell und dunkel). Bei `prefers-reduced-transparency`, `prefers-contrast: more`, erzwungenen Farben oder ohne `backdrop-filter`: flache Flächen, kein Verlauf, keine Körnung |
 | Meldung `.toast` | unten mittig, Fläche `#23262d`, Fehler `--danger` |
 | Symbole | Linien-Icons im Lucide-Stil, 24 × 24 (`extension/core/dom.js`) |
 

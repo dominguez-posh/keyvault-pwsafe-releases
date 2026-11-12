@@ -65,7 +65,7 @@ async function cutPaste({ js, fail, vault, changed, kvc, target, seen }) {
     await js('document.querySelector(".context-menu [data-action=paste]").click(); true');
     if (!(await until(async () => !!(await inVault(target.id, SOLO)), 8000))) return fail(AREA, `the pasted entry did not arrive in the target (toast: ${await js('document.getElementById("toast")?.textContent')})`);
     ids.push((await inVault(target.id, SOLO)).id);
-    if (await inVault(kvc.id, SOLO)) fail(AREA, 'the entry is still in the source after pasting');
+    if (!(await until(async () => !(await inVault(kvc.id, SOLO)), 8000))) fail(AREA, 'the entry is still in the source after pasting');
     if (await navMenu('paste')) fail(AREA, '"Paste" still offered after pasting');
 
     // An entry with a linked asset: the paste asks first and takes the asset along (the same way as dragging).
@@ -79,7 +79,9 @@ async function cutPaste({ js, fail, vault, changed, kvc, target, seen }) {
     const text = await js('document.querySelector("dialog[open]").innerText');
     if (!text.includes(ASSET)) fail(AREA, `the question does not name the asset: ${text.slice(0, 200)}`);
     await js('document.querySelector("dialog[open] .modal-footer .btn.primary")?.click(); true');
-    if (!(await until(async () => !!(await inVault(target.id, LOGIN)) && !!(await inVault(target.id, ASSET)), 10000))) fail(AREA, 'login and asset did not both arrive');
+    // The move copies first and deletes the originals last (#526: judged in the middle of it in a slow full run).
+    const settled = async () => !!(await inVault(target.id, LOGIN)) && !!(await inVault(target.id, ASSET)) && !(await inVault(kvc.id, LOGIN)) && !(await inVault(kvc.id, ASSET));
+    if (!(await until(settled, 20000))) fail(AREA, 'login and asset did not both arrive');
     for (const title of [LOGIN, ASSET]) {
       const there = await inVault(target.id, title);
       if (there) ids.push(there.id);

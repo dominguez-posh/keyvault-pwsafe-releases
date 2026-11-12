@@ -147,12 +147,13 @@ async function removeCopy(session, toId, id, retryMs) {
  * was created is removed again and the source stays untouched. Only then the originals are deleted, users before what
  * they use. If a deletion fails, the copies in the target are complete and valid; the error names what is still left
  * in the source. → { saved, moved: [{ title, key }], dropped }.
+ * plan: the plan the caller already had confirmed (#474) – used as it is, with the versions it read, instead of a new one.
  */
-export async function moveWithAssets(session, fromId, toId, id, { folder, expected, purgeRetryMs = 1500 } = {}) {
-  const plan = await planMoveWithAssets(session, fromId, toId, id);
+export async function moveWithAssets(session, fromId, toId, id, { folder, expected, plan: confirmed, purgeRetryMs = 1500 } = {}) {
+  const plan = confirmed || await planMoveWithAssets(session, fromId, toId, id);
   if (plan.refused) throw new Error(plan.refused);
   const { items, order } = plan;
-  // The plan is calculated again here: what the dialog showed must be exactly what moves (entries may have changed since).
+  // Without a confirmed plan it is calculated again here: what the dialog showed must be exactly what moves.
   if (expected && (expected.length !== order.length || !expected.every((e) => order.includes(e)))) {
     throw new Error(t('Die Verknüpfungen haben sich geändert, seit der Dialog sie gezeigt hat. Es wurde nichts verschoben. Bitte den Dialog neu öffnen und die Liste prüfen.'));
   }
@@ -230,14 +231,34 @@ export async function moveWithAssets(session, fromId, toId, id, { folder, expect
   }
 
   const left = [...order];
+  // Changed in the source since the plan read it (#510): the copy has the old state, so the source stays – and with it
+  // whatever it still links to in the source (users come first in this loop, so their targets follow).
+  const changed = [];
+  const linkedKept = [];
+  const keptNow = [];
   try {
     for (const mid of [...order].reverse()) {
+      const now = await session.getItem(fromId, mid, { fresh: true });
+      const isChanged = now && now.version !== items.get(mid).version;
+      const usedByKept = keptNow.some((k) => USES(k).some(([, key]) => key === `${fromId}/${mid}`));
+      if (isChanged || usedByKept) {
+        (isChanged ? changed : linkedKept).push(mid);
+        keptNow.push(now);
+        left.splice(left.indexOf(mid), 1);
+        continue;
+      }
       await session.deleteItem(fromId, mid);
       left.splice(left.indexOf(mid), 1);
     }
   } catch (e) {
-    throw new MoveAssetsError(t('Die Einträge liegen vollständig im Zieltresor, mit gültigen Verknüpfungen. Im Quelltresor konnte „{title}“ nicht gelöscht werden ({error}); dort liegen noch: {list}. Bitte dort löschen.', { title: title(left.at(-1)), error: e.message, list: left.map(title).join(', ') }),
-      { stage: 'delete', left: left.map(title) });
+    const kept = [...left, ...changed, ...linkedKept];
+    throw new MoveAssetsError(t('Die Einträge liegen vollständig im Zieltresor, mit gültigen Verknüpfungen. Im Quelltresor konnte „{title}“ nicht gelöscht werden ({error}); dort liegen noch: {list}. Bitte dort löschen.', { title: title(left.at(-1)), error: e.message, list: kept.map(title).join(', ') }),
+      { stage: 'delete', left: kept.map(title) });
+  }
+  if (changed.length) {
+    let text = t('Die Einträge liegen im Zieltresor. „{list}“ wurde während des Verschiebens im Quelltresor geändert und bleibt deshalb dort stehen; die Kopie im Zieltresor hat den älteren Stand. Bitte beide vergleichen und einen davon löschen.', { list: changed.map(title).join(', ') });
+    if (linkedKept.length) text += ' ' + t('Weil sie damit verknüpft sind, liegen auch noch im Quelltresor: {list}.', { list: linkedKept.map(title).join(', ') });
+    throw new MoveAssetsError(text, { stage: 'changed', changed: changed.map(title), left: [...changed, ...linkedKept].map(title) });
   }
   for (const mid of order) moved.push({ title: title(mid), key: `${toId}/${newId.get(mid)}`, id: newId.get(mid) });
   return { saved: await session.getItem(toId, newId.get(id)), moved, dropped: plan.dropped };
@@ -249,6 +270,11 @@ export async function moveWithAssets(session, fromId, toId, id, { folder, expect
  */
 export async function movePasskeyBetween(session, { from, to, credentialId }) {
   if (from.containerId === to.containerId && from.id === to.id) return false;
+  // #519: across vaults the same rules as moving an entry – a shared vault's private key must not reach the personal one.
+  if (from.containerId !== to.containerId) {
+    const refused = moveRefusal(...(await Promise.all([session.container(from.containerId), session.container(to.containerId)])));
+    if (refused) throw new Error(refused);
+  }
   const source = await session.getItem(from.containerId, from.id, { fresh: true });
   const passkey = source.passkeys.find((p) => p.credentialId === credentialId);
   if (!passkey) throw new Error(t('Der Passkey ist nicht mehr in diesem Eintrag'));

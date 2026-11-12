@@ -16,6 +16,14 @@ export async function call(cmd, args = {}) {
 }
 
 /**
+ * #508: the message after a failed unlock with the PIN. The app's own words for a wrong PIN or a wait ("Falsche PIN",
+ * countdown) stay as they are; no answer in time says so plainly instead of "not responding".
+ */
+export const unlockError = (e) => (e?.name === 'TimeoutError'
+  ? t('Zeitüberschreitung: Keevault hat nicht rechtzeitig geantwortet. Bitte erneut versuchen.')
+  : e?.message || t('Entsperren fehlgeschlagen'));
+
+/**
  * Copies through the service worker and the desktop app: kept out of Windows' clipboard history and cloud clipboard,
  * cleared again after the configured time (#337). Never the page's own clipboard – that one has no such protection.
  */

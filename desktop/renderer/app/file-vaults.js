@@ -244,6 +244,7 @@ function describeChange(e) {
     case 'passkey-add': return t('Passkey hinzugefügt ({label})', { label: e.label || '' });
     case 'passkey-remove': return t('Passkey entfernt');
     case 'key-rotate': return t('Schlüssel gewechselt (Version {version})', { version: e.keyVersion });
+    case 'older-state-accept': return t('Älteren Stand angenommen, Schlüssel gewechselt (Version {version}, {dropped} Versionen verworfen)', { version: e.keyVersion, dropped: e.dropped || 0 });
     case 'logo-set': return t('Logo geändert');
     case 'logo-remove': return t('Logo entfernt');
     default: return t('Eintrag nicht lesbar');

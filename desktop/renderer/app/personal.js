@@ -12,6 +12,8 @@ import { fetchState, reloadAll, render } from './shell.js';
 import { REMOTE_KINDS, select, syncState } from './sidebar.js';
 import { vaultWizard } from './vault-wizard.js';
 import { focusField } from './focus.js';
+import { firstStartSettings } from './settings-file.js';
+import { accountStepsDue, accountWizard } from './first-start.js';
 
 // Asked for the unconfirmed recovery key once per unlock; afterwards the notice in the sidebar stays (#399).
 let recoveryAsked = false;
@@ -82,6 +84,10 @@ export async function personalWizard() {
       const info = s.info;
       const ok = info?.folder && info.location && REMOTE_KINDS.includes(info.location.kind);
       content = [
+        // #516: "OneDrive direkt" waits for Keevault's own app registration: shown, not selectable, no network access.
+        h('div', { class: 'wizard-choice personal-storage' },
+          h('label', { class: 'inline' }, h('input', { type: 'radio', name: 'pstore', checked: true }), t('Ordner auf diesem Gerät (OneDrive-Sync, anderer synchronisierter Ordner oder Netzlaufwerk)')),
+          h('label', { class: 'inline muted' }, h('input', { type: 'radio', name: 'pstore', disabled: true, 'data-storage': 'onedrive-direct' }), t('OneDrive direkt (demnächst verfügbar)'))),
         h('p', {}, t('Speicherort der Datei:')),
         h('div', { class: 'wizard-path' }, icon('folder', 16), h('code', {}, info?.path || '–')),
         locationLine(info),
@@ -185,6 +191,16 @@ export async function offerFirstStart() {
 }
 
 async function firstStartWizards({ always = false } = {}) {
+  // #515: the Microsoft sign-in first, then the App PIN (skippable), then the rest.
+  if (accountStepsDue()) {
+    await accountWizard();
+    setSt(await fetchState());
+    // Locking closes the wizard: nothing follows on the lock screen.
+    if (!st.opened) return render();
+  }
+  // #478: settings of another device in OneDrive come first – they may bring the vaults along.
+  if (await firstStartSettings()) setSt(await fetchState());
+  if (!st.opened) return render();
   const set = await personalWizard();
   await call('syncSettings').catch(() => null);
   setSt(await fetchState());

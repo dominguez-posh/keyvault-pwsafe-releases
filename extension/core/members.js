@@ -147,7 +147,8 @@ export async function verifyRoster(keyring, known = null, nowMs = Date.now()) {
     .sort((a, b) => a.g.at.localeCompare(b.g.at) || a.g.sig.localeCompare(b.g.sig));
   // #444 (Konrad, high): a known grant (in the floor) that is there but no longer verifies was changed – e.g. a removal
   // turned into "active" with its signature kept. The caller refuses such a file instead of dropping the grant quietly.
-  let tampered = raw.some((x) => knownGrants?.has(x.key) && !all.includes(x));
+  // #521 (Konrad): two entries with one member ID – a lookup could take the other one's signing key. Always refused.
+  let tampered = byId.size !== keyring.members.length || raw.some((x) => knownGrants?.has(x.key) && !all.includes(x));
   const grants = [];
   for (const x of all) {
     const signer = byId.get(x.g.by);
@@ -195,7 +196,11 @@ export async function verifyRoster(keyring, known = null, nowMs = Date.now()) {
   // only those without access.
   const wasAdmin = (id) => (timeline.get(id) || []).some((x) => x.status === 'active' && x.role === 'admin');
   const invalid = new Set(suspect.filter((x) => wasAdmin(x.by) && state.get(x.id)?.status !== 'active').map((x) => x.id));
-  return { members, roleAt, current: (id) => members.get(id) || null, accepted, counts, lastAt: (id) => lastAt.get(id) || '', tampered, invalid };
+  // #435 (Konrad B2): the sharing setting with a valid signature of someone who was admin then – only that one may become known.
+  const sh = keyring.sharing;
+  const sharingSig = sh?.sig && roleAt(sh.by, sh.at) === 'admin'
+    && (await verifyObject(byId.get(sh.by)?.sign, { file: keyring.scope, sharing: sh.enabled, at: sh.at, by: sh.by }, sh.sig)) ? sh.sig : null;
+  return { members, roleAt, current: (id) => members.get(id) || null, accepted, counts, lastAt: (id) => lastAt.get(id) || '', tampered, invalid, sharingSig };
 }
 
 /** #440: the date a member signs with – never before their own last entry, so their next one counts everywhere. */
@@ -307,7 +312,7 @@ export async function applyRejections(keyring, known = null) {
   const roster = await verifyRoster(keyring, known);
   const valid = [];
   for (const r of keyring.rejected || []) {
-    const signer = keyring.members.find((m) => m.id === r?.by);
+    const signer = roster.current(r?.by)?.member; // #521: the member whose grants were checked
     if (signer && roster.roleAt(r.by, r.at) === 'admin' && (await verifyObject(signer.sign, rejectionBody(keyring.scope, r), r.sig))
       && !valid.some((x) => x.id === r.id && x.sig === r.sig)) valid.push(r);
   }
@@ -351,7 +356,8 @@ export async function applySecureOp(keyring, ctx, op) {
       requireAdmin(roster, ctx);
       const state = roster.current(target.id);
       if (state.status === 'active' && state.role === 'admin' && activeAdmins(roster).length === 1) throw new Error(t('Die Datei braucht mindestens einen Admin'));
-      if (op.type === 'reject' || state.status !== 'active') {
+      // #520: a rejection only ends a request; an active member always takes the removal path with a key change below.
+      if (state.status !== 'active') {
         // Someone whose signature others' grants or rejections rest on stays in the file, only hidden: deleting them
         // would make those signatures uncheckable (#433).
         // #446: plus a signed removal – a device without a floor may count a grant for them that does not count here (a
@@ -416,7 +422,7 @@ export async function rekeyMembers(keyring, newCk, known = null) {
 export async function sharingEnabled(keyring, roster) {
   const s = keyring.sharing;
   if (!s) return false;
-  const signer = keyring.members.find((m) => m.id === s.by);
+  const signer = roster.current(s.by)?.member; // #521: the member whose grants were checked
   return roster.roleAt(s.by, s.at) === 'admin' && roster.counts(s)
     && (await verifyObject(signer?.sign, { file: keyring.scope, sharing: s.enabled, at: s.at, by: s.by }, s.sig)) && s.enabled;
 }

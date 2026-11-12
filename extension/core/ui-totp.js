@@ -53,7 +53,8 @@ export function totpEditor(stored, opts = {}) {
       try {
         parseTotp(text); // throws when it is neither an otpauth:// link nor a Base32 secret
       } catch {
-        toast(t('Der QR-Code auf der Seite enthält keinen Einmalcode (otpauth://).'), 'error');
+        toast(screen ? t('Der QR-Code auf dem Bildschirm enthält keinen Einmalcode (otpauth://).')
+          : t('Der QR-Code auf der Seite enthält keinen Einmalcode (otpauth://).'), 'error');
         return;
       }
       input.value = text;

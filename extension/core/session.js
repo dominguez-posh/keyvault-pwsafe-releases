@@ -11,20 +11,20 @@ import { itemMatchesHost } from './match.js';
 import { filterPasskeys } from './webauthn.js';
 import { mapLimit, sleep, truncateBytes } from './util.js';
 import { t } from './i18n.js';
-import { normalizeFolder, requireFolderDepth } from './model.js';
+import { normalizeFolder, requireFolderDepth, stampPasswordChange } from './model.js';
 import { FREE_LIMIT, LicenseLimitError, requestCode, verifyLicense } from './license.js';
 import { isImageDataUrl } from './image.js';
 import { normalizeFolderIcon } from './folder-icons.js';
 import {
   ContainerKey, ContainerLockedError, setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries, mergeKeyrings,
 } from './protect.js';
-import { writeMeta, rememberMetaName, cleanVaultName } from './session-meta.js';
+import { writeMeta, rememberMeta, cleanVaultName } from './session-meta.js';
 import { rekeyKeyvault, finishKeyChange, dropStaleKey, currentKey } from './session-rekey.js';
 import { HiddenEntryError, requirePrivateRoot, requireVisible, visibleSummaries, visibleTo, withPrivacy } from './private.js';
 
 export const KEYRING_SECRET = 'pws-keyring';
 const KEYRING_TYPE = 'application/vnd.kvpwsafe.keyring+json; v=1';
-const SEALED_TAGS = ['n', 'u', 'h', 'rp', 'f', 'fav', 'otp', 'ic', 'po'];
+const SEALED_TAGS = ['n', 'u', 'h', 'rp', 'f', 'fav', 'otp', 'ic', 'po', 'pc'];
 import { INDEX_SECRET, INDEX_TYPE, INDEX_TAG, shardName, isIndexSecret, encodeIndex, decodeIndex, sameSummaries } from './fastindex.js';
 
 const SEALED = 'kvpwsafe-sealed';
@@ -267,6 +267,7 @@ export class VaultSession {
         id,
         vaultUrl,
         metaName,
+        tagName: cleanVaultName(c.tagName || prev?.tagName || old?.tagName), // #485
         name: metaName || (prev?.sources.includes('manual') && prev.name ? prev.name : c.name || prev?.name || id.split('.')[0]),
         resourceId: c.resourceId || prev?.resourceId || old?.resourceId || null,
         tenantId: c.tenantId || prev?.tenantId || old?.tenantId || learned[id] || null,
@@ -665,7 +666,7 @@ export class VaultSession {
         const bundle = await kv.getSecret(s.name);
         const value = isSealedValue(bundle.value) ? await key.decrypt(JSON.parse(bundle.value).data, `${containerId}/${s.name}`) : bundle.value;
         const item = parseItem({ ...bundle, value }, containerId);
-        const ser = serializeItem(item, await this.actor());
+        const ser = serializeItem(item, await this.actor(), { existing: true }); // #482: keeps an unknown creator unknown
         await kv.setSecret(s.name, ser.value, { contentType: ser.contentType, tags: ser.tags });
       } catch (e) {
         failed.push(`${s.tags?.n || s.name}: ${e.message}`);
@@ -728,7 +729,7 @@ export class VaultSession {
         const expected = sizes[c.id]?.items?.length || 0;
         const secrets = await this.kv(c).listSecrets(this.onProgress ? (n, pages) => this.onProgress(c.id, n, Math.max(expected, n), pages) : null);
         if (!secrets.some((s) => s.name === CONTAINER_SECRET)) this.writeContainerMeta(this.kv(c), { name: c.name }).catch(() => {});
-        else this.readContainerMeta(this.kv(c)).then((m) => m?.name && rememberMetaName(this, c.id, String(m.name))).catch(() => {});
+        else this.readContainerMeta(this.kv(c)).then((m) => m && rememberMeta(this, c.id, m)).catch(() => {});
         const isProtected = secrets.some((s) => s.name === KEYRING_SECRET);
         const key = isProtected ? await this.containerKey(c.id) : null;
         const items = [];
@@ -1080,8 +1081,8 @@ export class VaultSession {
     const sealed = bundle.tags?.e === '1';
     const tags = sealed ? await this.openTags(await this.requireKey(c.id), `${c.id}/${id}`, bundle.tags) : bundle.tags || {};
     const { privateOwner, privateOwnerName } = summaryFromSecret({ name: id, tags }, c.id);
-    const createdBy = await this.decodeBundle(c, { ...bundle, name: id }).then((i) => i.createdBy, () => '');
-    return { privateOwner, privateOwnerName, createdBy };
+    const stored = await this.decodeBundle(c, { ...bundle, name: id }).catch(() => null);
+    return { privateOwner, privateOwnerName, createdBy: stored?.createdBy || '', password: stored ? stored.password || '' : null, passwordChanged: stored?.passwordChanged || '' };
   }
 
   /** `privacy` ({ owner, name } or null) changes "Nur für mich" (#476); without it the stored entry's stays as it is. */
@@ -1112,9 +1113,11 @@ export class VaultSession {
     // #476 review: the flag and the creator from the stored entry as it is now – the index can be minutes old, and a save
     // without expectedVersion (bridge, passkey signCount) must not drop a flag that was just set.
     const stored = current ? await this.storedState(c, id, current) : null;
-    const item = withPrivacy(stored ? { ...input, createdBy: stored.createdBy || input.createdBy } : input, stored || known, privacy);
+    // #482: an unknown creator stays unknown – neither the input nor the editor fills it in (only a Verwalter may then set
+    // the entry to "Nur für mich", see core/private.js mayMakePrivate).
+    const item = withPrivacy({ ...input, ...(stored && { createdBy: stored.createdBy || '' }), passwordChanged: stampPasswordChange(input, stored) }, stored || known, privacy);
     requirePrivateRoot(item);
-    const plain = serializeItem({ ...item, id }, actor);
+    const plain = serializeItem({ ...item, id }, actor, { existing: !!current });
     let { value, contentType, tags } = plain;
     if (await this.isProtected(c)) {
       const key = await currentKey(this, containerId);

@@ -1,0 +1,89 @@
+{
+  "properties": {
+    "displayName": "Keevault: Key Vault audit log to Log Analytics",
+    "description": "Key Vaults tagged kvpwsafe=container send AuditEvent and AllMetrics to the given Log Analytics workspace. DeployIfNotExists creates the diagnostic setting kvpwsafe-audit where it is missing or switched off; AuditIfNotExists only reports such vaults. Used by infra/Enable-KvPwSafeLogging.ps1 -Policy.",
+    "mode": "Indexed",
+    "metadata": { "category": "Key Vault", "version": "1.0.0" },
+    "parameters": {
+      "effect": {
+        "type": "String",
+        "allowedValues": ["DeployIfNotExists", "AuditIfNotExists", "Disabled"],
+        "defaultValue": "AuditIfNotExists",
+        "metadata": { "displayName": "Effect" }
+      },
+      "workspaceId": {
+        "type": "String",
+        "metadata": { "displayName": "Log Analytics workspace (resource ID)", "strongType": "omsWorkspace", "assignPermissions": true }
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          { "field": "type", "equals": "Microsoft.KeyVault/vaults" },
+          { "field": "tags['kvpwsafe']", "equals": "container" }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]",
+        "details": {
+          "type": "Microsoft.Insights/diagnosticSettings",
+          "roleDefinitionIds": [
+            "/providers/Microsoft.Authorization/roleDefinitions/749f88d5-cbae-40b8-bcfc-e573ddc772fa",
+            "/providers/Microsoft.Authorization/roleDefinitions/92aaf0da-9dab-42b6-94a3-d43ce8d16293"
+          ],
+          "existenceCondition": {
+            "allOf": [
+              { "field": "Microsoft.Insights/diagnosticSettings/workspaceId", "equals": "[parameters('workspaceId')]" },
+              {
+                "count": {
+                  "field": "Microsoft.Insights/diagnosticSettings/logs[*]",
+                  "where": {
+                    "allOf": [
+                      { "field": "Microsoft.Insights/diagnosticSettings/logs[*].enabled", "equals": "true" },
+                      {
+                        "anyOf": [
+                          { "field": "Microsoft.Insights/diagnosticSettings/logs[*].category", "equals": "AuditEvent" },
+                          { "field": "Microsoft.Insights/diagnosticSettings/logs[*].categoryGroup", "in": ["audit", "allLogs"] }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "greaterOrEquals": 1
+              }
+            ]
+          },
+          "deployment": {
+            "properties": {
+              "mode": "incremental",
+              "parameters": {
+                "vaultName": { "value": "[field('name')]" },
+                "workspaceId": { "value": "[parameters('workspaceId')]" }
+              },
+              "template": {
+                "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                "contentVersion": "1.0.0.0",
+                "parameters": {
+                  "vaultName": { "type": "string" },
+                  "workspaceId": { "type": "string" }
+                },
+                "resources": [
+                  {
+                    "type": "Microsoft.KeyVault/vaults/providers/diagnosticSettings",
+                    "apiVersion": "2021-05-01-preview",
+                    "name": "[concat(parameters('vaultName'), '/Microsoft.Insights/kvpwsafe-audit')]",
+                    "properties": {
+                      "workspaceId": "[parameters('workspaceId')]",
+                      "logs": [{ "category": "AuditEvent", "enabled": true }],
+                      "metrics": [{ "category": "AllMetrics", "enabled": true }]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

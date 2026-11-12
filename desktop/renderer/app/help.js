@@ -39,6 +39,19 @@ export function helpDialog() {
       h('span', { class: 'muted' }, `Keevault ${st.version}`))), [{ label: t('Schließen'), primary: true }]);
 }
 
+/** #420: shown once when the user switches to Early Access: thanks, and how to report a bug (the same form as in the help). */
+export function earlyAccessThanks() {
+  const en = getLanguage() === 'en';
+  const { dialog } = modal(t('Danke fürs Testen!'), h('div', { class: 'ea-thanks' },
+    h('p', {}, t('Mit Early Access bekommst du neue Versionen, bevor sie für alle freigegeben werden. Damit hilfst du, Fehler früh zu finden.')),
+    h('p', {}, t('Fällt dir etwas auf, melde es mit „Bug melden“ – hier oder jederzeit unter Hilfe. Version und System sind schon eingetragen; beschreibe kurz, was du getan hast und was passiert ist.'))), [
+    { label: t('Bug melden'), onClick: () => { openUrl(feedbackUrl('bug', en)); return false; } },
+    { label: t('Verstanden'), primary: true },
+  ]);
+  dialog.classList.add('ea-thanks-modal');
+  return dialog;
+}
+
 /** Address of the feedback form on keevault.de with type, app version and system (nothing else leaves the app). */
 function feedbackUrl(type, en) {
   const os = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }[st.platform] || st.platform || '';

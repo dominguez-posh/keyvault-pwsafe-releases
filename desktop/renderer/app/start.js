@@ -8,10 +8,11 @@ import { st, ui } from './state.js';
 import { field, notice, openUrl } from './helpers.js';
 import { ADMIN_LINKS } from './admin-tools.js';
 import { createFileDialog } from './file-vaults.js';
-import { checkWindowsRequests } from './requests.js';
+import { checkWindowsRequests, declineHeldWindowsRequests } from './requests.js';
 import { settingsDialog } from './settings.js';
 import { render } from './shell.js';
 import { focusField } from './focus.js';
+import { helloUnlockButton } from './window-hello.js';
 
 function languageSelect() {
   return h('select', { class: 'lang-select', title: t('Sprache'), onchange: async (e) => {
@@ -64,7 +65,48 @@ export async function openFile() {
   }
 }
 
+/**
+ * #507: the session is open for the browser extension only. The window shows nothing of it – no vault, no name – and
+ * opens with the app PIN alone: no second sign-in, the vaults are there at once. "Alles sperren" ends both.
+ */
+function renderWindowLocked(error) {
+  const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), class: 'pin-input', onkeydown: (e) => {
+    if (e.key === 'Enter') open();
+  } });
+  const button = h('button', { class: 'btn primary block window-unlock', onclick: () => open() }, icon('unlock'), t('Entsperren'));
+  async function open() {
+    if (!pin.value) return focusField(pin);
+    button.disabled = true;
+    pin.disabled = true;
+    button.replaceChildren(h('span', { class: 'spinner' }), t('Öffnen …'));
+    try {
+      await call('verifyPin', pin.value);
+      await call('unlock', { entra: true });
+      await render();
+    } catch (e) {
+      renderLocked(e.message);
+    }
+    return undefined;
+  }
+  splash(
+    h('h1', {}, t('Fenster gesperrt')),
+    h('p', { class: 'muted' }, t('Die Browser-Erweiterung ist entsperrt. Gib deine PIN ein, um auch das Fenster zu öffnen.')),
+    error ? notice(error) : null,
+    // #507: a Windows passkey request behind the lock – no site, account or vault; allowed after the PIN, refused any time.
+    h('div', { id: 'windows-waiting', class: 'notice info windows-held', hidden: true }, h('span', {}, t('Eine Anmeldung mit Passkey wartet')), ' ',
+      h('button', { type: 'button', class: 'linklike windows-held-decline', onclick: () => declineHeldWindowsRequests().catch((e) => toast(e.message, 'error')) }, t('Ablehnen'))),
+    // #512: Windows Hello when switched on; the PIN below always works too.
+    helloUnlockButton({ done: () => render(), failed: (message) => renderLocked(message) }),
+    field(t('PIN'), pin),
+    button,
+    h('div', { class: 'card-links' }, h('button', { class: 'linklike lock-all', onclick: () => call('lock').catch((e) => toast(e.message, 'error')) }, t('Alles sperren'))),
+  );
+  focusField(pin);
+  checkWindowsRequests();
+}
+
 export function renderLocked(error) {
+  if (st.windowLocked) return renderWindowLocked(error);
   const entra = h('button', { class: 'btn primary block', onclick: () => open(true, entra) }, icon('unlock'), t('Mit Microsoft Entra ID entsperren'));
   const local = h('button', { class: 'btn block', onclick: () => open(false, local) }, icon('note'), t('Nur Datei-Tresore öffnen'));
   const pin = st.pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), class: 'pin-input', onkeydown: (e) => {

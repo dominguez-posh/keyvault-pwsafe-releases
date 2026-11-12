@@ -15,9 +15,13 @@ export const openAppWithPin = `(() => {
     hello: { version: '0.9.30', opened: true, caps: ['passkeySign'] },
     snapshot: { version: '0.9.30', opened: true, pinSet: true, passkeyPin: { required: true, pinSet: true }, containers: [{ id: 'c1', name: 'Smoke' }], summaries: [] },
     passkeyCandidates: [{ containerId: 'c1', itemId: 'i1', title: 'Smoke', urls: [], passkey }],
-    passkeySign: (args) => {
+    // A wrong PIN takes the app a moment (#508: the frame shows "Entsperre …" meanwhile).
+    passkeySign: async (args) => {
       app.pins.push(args.pin);
-      if (args.pin !== ${JSON.stringify(PIN)}) throw new Error('Falsche PIN. Noch 4 Versuche.');
+      if (args.pin !== ${JSON.stringify(PIN)}) {
+        await new Promise((r) => setTimeout(r, 1500));
+        throw new Error('Falsche PIN. Noch 4 Versuche.');
+      }
       return { response: { id: 'AQIDBA', rawId: 'AQIDBA', type: 'public-key', authenticatorAttachment: 'platform', clientExtensionResults: {},
         response: { clientDataJSON: 'e30', authenticatorData: 'AAAA', signature: 'AAAA', userHandle: 'AQID' } } };
     },
@@ -82,13 +86,20 @@ export async function checkPinInBar({ send, evaluate, attach, open, shadowNode, 
       await send('Input.dispatchKeyEvent', { type: 'keyUp', ...KEY_ENTER }, tab.sessionId);
     };
     await typePin('1111');
+    // #508: while the app checks the PIN the frame says so and the field is locked.
+    const busy = await waitFor(() => evaluate(frame, '!!document.querySelector(".busy:not([hidden]) .spinner") && document.querySelector("input.pin").disabled'), 1400);
+    check(busy, '#508: PIN-Feld der Leiste zeigt kein „Entsperre …“ oder bleibt bedienbar');
+    // #526: the locked field stays fully opaque – the visibility guard counts opacity below 1 as covered.
+    if (busy) check(await evaluate(frame, 'getComputedStyle(document.querySelector("input.pin")).opacity === "1"'), '#526: gesperrtes PIN-Feld mit Deckkraft unter 1 (Sichtbarkeitsschutz beginnt neu)');
     const problem = await waitFor(() => evaluate(frame, 'document.querySelector(".problem:not([hidden])")?.textContent || ""'));
     check(/Falsche PIN/.test(problem || ''), `#465: falsche PIN zeigt keinen Fehler im Rahmen (${problem || 'nichts'})`);
     check(!(await evaluate(tab.sessionId, 'results')).get, '#465: falsche PIN meldet an');
     check(await evaluate(frame, 'document.querySelector("input.pin").value === ""'), '#465: PIN bleibt nach dem Versuch im Feld');
+    check(await evaluate(frame, '!document.querySelector("input.pin").disabled && !!document.querySelector(".busy[hidden]")'), '#508: nach falscher PIN bleibt das Feld der Leiste gesperrt');
     await typePin(PIN);
     const got = await waitFor(() => evaluate(tab.sessionId, 'results.get'));
-    check(got === 'resolved', `#465: richtige PIN meldet nicht an (${got})`);
+    const why = got === 'resolved' ? '' : await evaluate(frame, 'document.querySelector(".problem:not([hidden])")?.textContent || ""').catch(() => '');
+    check(got === 'resolved', `#465: richtige PIN meldet nicht an (${got}${why ? `, Rahmen: ${why}` : ''})`);
     const pins = await evaluate(workerSession, 'JSON.stringify(globalThis.__kvApp.pins)');
     check(pins === JSON.stringify(['1111', PIN]), `#465: App bekam andere PINs: ${pins}`);
     check(!(await findTarget(`${ext}/prompt/prompt.html`)), '#465: eigenes Fenster geöffnet');

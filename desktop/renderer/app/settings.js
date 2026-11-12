@@ -4,13 +4,16 @@ import { h, icon, toast, modal, confirmDialog } from '../../../extension/core/do
 import { t, LANGUAGES } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { explicitFolders, items, st } from './state.js';
-import { copy, field, tabbed } from './helpers.js';
+import { choiceName, copy, field, tabbed } from './helpers.js';
 import { pinDialog } from './admin-mode.js';
 import { mcpScopes, mcpShared, setMcpScopes } from './agents.js';
 import { viewSettings } from './main-menu.js';
 import { ASSET_FOLDERS } from './modes.js';
 import { reloadAll, render } from './shell.js';
 import { managedUpdateHint, updateDialog } from './updates.js';
+import { reinstallSettingsPart } from './ext-reinstall.js';
+import { helloSettingsPart } from './window-hello.js';
+import { earlyAccessThanks } from './help.js';
 
 export function settingsDialog() {
   const s = st.settings;
@@ -56,6 +59,12 @@ export function settingsDialog() {
   const startWithWindows = h('input', { type: 'checkbox', checked: !!s.startWithWindows });
   const autoDiscover = h('input', { type: 'checkbox', checked: !!s.autoDiscover });
   const settingsSync = h('input', { type: 'checkbox', checked: s.settingsSync !== false });
+  const settingsCopy = h('input', { type: 'checkbox', name: 'settingsCopy', checked: s.settingsCopy === true });
+  // #478: the Keevault folder in OneDrive is a junction or link – no copy goes there.
+  const copyBlocked = h('p', { class: 'small settings-copy-blocked', hidden: true });
+  call('settingsCopyBlocked').then((folder) => {
+    if (folder) Object.assign(copyBlocked, { hidden: false, textContent: t('Nicht geschrieben: {folder} ist eine Verknüpfung (Junction).', { folder }) });
+  }).catch(() => {});
   const autoTypeKeys = h('select', {},
     ...[['CommandOrControl+Shift', 'Strg+Umschalt+U / P / O'], ['CommandOrControl+Alt', 'Strg+Alt+U / P / O'], ['', 'Aus (nur im App-Fenster)']]
       .map(([v, l]) => h('option', { value: v, selected: s.autoTypeKeys === v }, t(l))));
@@ -70,14 +79,15 @@ export function settingsDialog() {
     h('option', { value: 'selected', selected: s.mcpScope !== 'all' }, t('Nur freigegebene Tresore und Ordner (empfohlen)')),
     h('option', { value: 'all', selected: s.mcpScope === 'all' }, t('Alle Tresore, auf die ich Zugriff habe')));
   const scopeList = h('div', {});
-  const vaultName = (id) => st.containers.find((c) => c.id === id)?.name || id;
+  // #485: the host where the name alone could mislead (vaultChoiceLabel), like every other vault choice.
+  const vaultName = (id) => { const c = st.containers.find((x) => x.id === id); return c ? choiceName(c) : id; };
   const drawScopes = () => scopeList.replaceChildren(...(mcpScopes().length ? mcpScopes().map((x) => h('div', { class: 'inline' },
     icon(x.folder ? 'folder' : 'vault', 14), h('span', {}, x.folder ? `${vaultName(x.vaultId)} / ${x.folder}` : t('{vault} (ganzer Tresor)', { vault: vaultName(x.vaultId) })),
     h('button', { type: 'button', class: 'btn small', onclick: async () => {
       await setMcpScopes(mcpScopes().filter((y) => !(y.vaultId === x.vaultId && (y.folder || '') === (x.folder || ''))));
       drawScopes();
     } }, t('Entfernen')))) : [h('p', { class: 'muted small' }, t('Noch nichts freigegeben – Agenten sehen keine Einträge.'))]));
-  const scopeVault = h('select', {}, ...st.containers.filter((c) => !c.error).map((c) => h('option', { value: c.id }, c.name)));
+  const scopeVault = h('select', {}, ...st.containers.filter((c) => !c.error).map((c) => h('option', { value: c.id }, choiceName(c))));
   const scopeFolder = h('select', {});
   const fillFolders = async () => {
     const id = scopeVault.value;
@@ -130,6 +140,7 @@ export function settingsDialog() {
     ...[['ask', 'Beim Start prüfen und Update anbieten (Standard)'], ['auto', 'Automatisch aktuell halten'], ['off', 'Aus – nur manuell suchen']]
       .map(([v, l]) => h('option', { value: v, selected: (s.updateMode || 'ask') === v }, t(l))));
   // Early Access: versions in the field test before everyone gets them (beta feed on keevault.de).
+  const devStage = st.build?.dev === true;
   const updateChannel = h('select', { name: 'updateChannel', disabled: enforced('updateChannel') },
     ...[['stable', 'Stabil – nur freigegebene Versionen (Standard)'], ['beta', 'Early Access – neue Versionen schon im Praxistest']]
       .map(([v, l]) => h('option', { value: v, selected: (s.updateChannel || 'stable') === v }, t(l))));
@@ -172,12 +183,18 @@ export function settingsDialog() {
         h('label', { class: 'inline' }, settingsSync, t('Einstellungen im persönlichen Tresor speichern')),
         h('p', { class: 'muted small' }, (st.settings.personalVaults || []).length
           ? t('Verbundene Tresore, Ansicht und Verhalten liegen verschlüsselt im persönlichen Tresor. Auf einem neuen Gerät übernimmt Keevault sie, sobald du dort den persönlichen Tresor öffnest. PIN, Geräteschlüssel und Freigaben für KI-Agenten bleiben auf dem Gerät.')
-          : t('Dafür zuerst einen persönlichen Tresor einrichten.'))),
+          : t('Dafür zuerst einen persönlichen Tresor einrichten.')),
+        h('label', { class: 'inline' }, settingsCopy, t('Kopie der Einstellungen im OneDrive ablegen')),
+        h('p', { class: 'muted small' }, t('Liegt unverschlüsselt im Ordner „Keevault“ deines OneDrive und enthält nur Tresorliste, Ansicht und Verhalten – nie PIN, Geräteschlüssel, Anmeldungen, Lizenz oder Wiederherstellungsschlüssel. Ein neues Gerät bietet sie bei der Einrichtung zum Import an. Export und Import auch über das Menü.')),
+        copyBlocked),
       section(t('Updates'),
         managed
           ? h('p', { class: 'muted small' }, managedUpdateHint(st.updateKind))
           : [field(t('Automatische Updates'), updateMode, t('„Automatisch“ installiert neue Versionen, sobald die App gesperrt ist oder beendet wird. Die Updates kommen von keevault.de.')),
-            field(t('Update-Kanal'), updateChannel, t('Early Access bekommt neue Versionen, bevor sie für alle freigegeben werden – hilf beim Testen. Zurück auf „Stabil“ bleibt die installierte Version, bis die stabile sie eingeholt hat.'))],
+            // #420: a Dev build has no channel choice (its stage is fixed in the build).
+            devStage
+              ? h('p', { class: 'muted small', id: 'dev-stage-note' }, t('Dev-Version: Der Update-Kanal ist fest eingebaut. Zurück zur stabilen Version nur per Neuinstallation – vorher ein Backup anlegen.'))
+              : field(t('Update-Kanal'), updateChannel, t('Early Access bekommt neue Versionen, bevor sie für alle freigegeben werden – hilf beim Testen. Zurück auf „Stabil“ bleibt die installierte Version, bis die stabile sie eingeholt hat.'))],
         h('button', { type: 'button', class: 'btn small', onclick: () => updateDialog() }, icon('download', 14), t('Jetzt nach Updates suchen'))),
       s.enforced.length ? h('p', { class: 'muted small' }, t('Ausgegraute Werte sind über kvpwsafe.config.json vorgegeben.')) : null,
       h('p', { class: 'muted small' }, t('Version {version}', { version: st.version })),
@@ -192,7 +209,8 @@ export function settingsDialog() {
           : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),
         st.opened ? h('button', { type: 'button', class: 'btn small', onclick: () => pinDialog() }, icon('key', 14), st.pinSet ? t('PIN ändern') : t('PIN festlegen'))
           : h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.')),
-        st.pinShort ? h('div', { class: 'notice warn pin-short' }, t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern')) : null),
+        st.pinShort ? h('div', { class: 'notice warn pin-short' }, t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern')) : null,
+        helloSettingsPart()), // #512
       section(t('Passkeys'),
         h('label', { class: 'inline' }, passkeyPin, t('PIN vor jeder Passkey-Nutzung')),
         h('p', { class: 'muted small' }, st.passkeyPinFixed
@@ -224,7 +242,8 @@ export function settingsDialog() {
       section(t('Browser-Erweiterung'),
         h('label', { class: 'inline' }, browser, t('Datei-Tresore in der Browser-Erweiterung verfügbar machen')),
         h('p', { class: 'muted small' }, t('Registriert einen Native-Messaging-Host für Edge und Chrome (nur für dein Benutzerkonto). Die Erweiterung fragt beim ersten Zugriff nach deiner Zustimmung in dieser App.')),
-        field(t('Erweiterungs-IDs'), extensionIds)),
+        field(t('Erweiterungs-IDs'), extensionIds),
+        st.platform === 'win32' ? reinstallSettingsPart() : null), // #494
       section(t('Windows-Passkey-Anbieter'),
         h('label', { class: 'inline' }, windowsProvider, t('Keevault als Passkey-Anbieter in Windows verwenden (wie 1Password)')),
         h('p', { class: 'muted small' }, t('Dann erscheint Keevault im Windows-Passkey-Dialog – auch für andere Browser und Apps. Jede Anmeldung bestätigst du in dieser App.')),
@@ -269,6 +288,8 @@ export function settingsDialog() {
         t('Ohne die PIN kann jeder, der deinen entsperrten PC nutzt oder eine freigegebene Anfrage bestätigt, sich mit deinen Passkeys anmelden. Nur ausschalten, wenn du das Risiko kennst.'),
         { confirmLabel: t('Ausschalten'), danger: true }))) return false;
       const changedTenant = tenant.value.trim() !== s.tenantId || client.value.trim() !== s.clientId;
+      // #420: switching to Early Access thanks the user and says how to report a bug (after saving, over the new state).
+      const toEarlyAccess = !devStage && !updateChannel.disabled && updateChannel.value === 'beta' && (s.updateChannel || 'stable') !== 'beta';
       await call('updateSettings', {
         language: language.value,
         tenantId: tenant.value.trim(),
@@ -283,8 +304,10 @@ export function settingsDialog() {
         startWithWindows: startWithWindows.checked,
         autoDiscover: autoDiscover.checked,
         settingsSync: settingsSync.checked,
+        // Not answered yet (null) stays so unless switched on here: the question at the next start still comes (#478).
+        ...(settingsCopy.checked !== (s.settingsCopy === true) ? { settingsCopy: settingsCopy.checked } : {}),
         updateMode: updateMode.value,
-        updateChannel: updateChannel.value === 'beta' ? 'beta' : 'stable',
+        ...(devStage ? {} : { updateChannel: updateChannel.value === 'beta' ? 'beta' : 'stable' }),
         mcpEnabled: mcpEnabled.checked,
         offlineMirror: offlineMirror.checked && st.pinSet,
         passkeyPin: st.passkeyPinFixed || passkeyPin.checked,
@@ -296,6 +319,7 @@ export function settingsDialog() {
       if (changedTenant && st.signedIn) await call('switchTenant', tenant.value.trim());
       toast(t('Gespeichert'));
       await render();
+      if (toEarlyAccess) earlyAccessThanks();
     } },
   ]);
   settingsDialogEl.classList.add('settings-modal');

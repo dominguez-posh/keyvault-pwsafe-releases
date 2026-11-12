@@ -4,8 +4,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { onlyProblem } from '../desktop/smoke-areas.js';
+import { helperExeProblem } from './helper-exe-fresh.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const args = process.argv.slice(2);
@@ -18,6 +20,12 @@ if (problem) {
 const { default: electron } = await import('electron');
 
 if (args.includes('--smoke-test')) {
+  // #526: the clipboard and typing checks run through windows/out/Keevault-Update.exe – never with a stale one.
+  const stale = helperExeProblem(root);
+  if (stale) {
+    console.error(`SMOKE FAIL: ${stale}`);
+    process.exit(1);
+  }
   // desktop with its subfolders (main/, main/api/, passkey/) – without the window's own code (renderer/), which
   // the main process never loads.
   const walk = (dir) => readdirSync(dir).flatMap((n) => {
@@ -38,5 +46,11 @@ if (args.includes('--smoke-test')) {
 
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
+// #517: the demo smoke run starts with TLS switched off from the environment and a TLS key log; the app must ignore
+// both (desktop/smoke-tls-env.js checks it). The key log file must stay empty.
+if (args.includes('--smoke-test') && args.includes('--demo')) {
+  env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  env.KVPWSAFE_SMOKE_KEYLOG = env.SSLKEYLOGFILE = join(tmpdir(), `kvpwsafe-smoke-keylog-${process.pid}.txt`);
+}
 const child = spawn(electron, ['.', ...args], { cwd: root, env, stdio: 'inherit' });
 child.on('exit', (code) => process.exit(code ?? 0));

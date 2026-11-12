@@ -11,6 +11,7 @@
 //   - every call is logged without secret values
 
 import { generatePassword } from '../extension/core/generator.js';
+import { readVaultSettings, requireFields } from '../extension/core/vault-settings.js';
 import { getAssertion } from '../extension/core/webauthn.js';
 import { totpCode } from '../extension/core/totp.js';
 import { normalizeItem, normalizeFolder } from '../extension/core/model.js';
@@ -390,6 +391,7 @@ export class McpService {
         else if (typeof a.password === 'string') patch.password = a.password;
         const changed = Object.keys(patch).map((k) => (k === 'urls' ? 'url' : k));
         if (before && !changed.length) throw fail(t('Keine Änderung angegeben'));
+        requireFields(normalizeItem({ ...(before || { type: 'login' }), ...patch }), await readVaultSettings(v, c)); // #480, before asking
         const ok = await this.confirmWrite({
           // #370: a change names the entry as it is now, the new title is one of the changes.
           agent: client.agent, action: before ? 'update' : 'create', title: shown(before?.title || patch.title || ''), vault: c.name,
@@ -491,6 +493,7 @@ export const mcpHostScript = (pipe, version) => MCP_HOST
   .replace('__TOOLS__', JSON.stringify(MCP_TOOLS));
 
 const MCP_HOST = `// Keevault MCP server (generated). JSON-RPC over stdio for the agent, newline JSON over the named pipe to the app.
+delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; delete process.env.SSLKEYLOGFILE; // #517: no TLS switches from the environment
 const net = require('net');
 const PIPE = __PIPE__;
 const VERSION = __VERSION__;

@@ -4,6 +4,9 @@
 // This file is only the start-up: what happens when the app is ready and how it reacts to the app's own events.
 // Everything else lives in desktop/main/ – one module per subject, see docs/ARCHITEKTUR.md ("Code-Struktur").
 
+// #517 first of all: TLS switches from the environment are removed before any other module runs (ES modules run in
+// import order) – and so before the first network request.
+import { tlsEnvAtStart, tlsEnvLogLine } from './tls-env.js';
 import { app, powerMonitor, protocol, nativeTheme, session, globalShortcut } from 'electron';
 import path from 'node:path';
 import { Auth } from './auth.js';
@@ -18,7 +21,7 @@ import { WindowsProvider } from './windows-provider.js';
 import { demo, smokeTest } from './main/boot.js';
 import {
   auth, bridge, config, files, mcp, opened, quitting, setAuth, setConfig, setFiles, setMcp, setQuitting, setUpdater, setWindows, updater, vault, win,
-  windows,
+  windowLocked, windows,
 } from './main/state.js';
 import {
   agentAdmitted, auditAgent, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, mcpTrusted, trustAgentEntry, waitForUnlock,
@@ -31,7 +34,9 @@ import { bringToFront } from './main/focus.js';
 import { fileLocations, personalPaths, rebindPersonalKey, refreshFileLocations } from './main/personal.js';
 import { DemoAuth, actor, applyLanguage, changed, lockIfWindowsLocked, lockNow, newSession, offlineMode, send } from './main/session.js';
 import { scheduleSettingsSync } from './main/settings-sync.js';
+import { scheduleSettingsCopy } from './main/settings-copy.js';
 import { runSmokeTest } from './main/smoke.js';
+import { diag } from './main/diag.js';
 import { applyStartWithWindows, createTray, createWindow, handleLink, showWindow, startInNormalMode, tray } from './main/window.js';
 import { restoreAfterWindowsRequest, setWindowStateBeforeRequest, setupWindowsProvider, windowStateBeforeRequest } from './main/windows-passkeys.js';
 
@@ -64,8 +69,11 @@ app.on('web-contents-created', (_event, contents) => {
 });
 
 app.whenReady().then(async () => {
+  if (tlsEnvLogLine(tlsEnvAtStart)) diag(tlsEnvLogLine(tlsEnvAtStart)); // #517: names only, never values
   setConfig(new Config());
   config.onSyncChange = () => scheduleSettingsSync();
+  config.onChange = () => scheduleSettingsCopy(); // #478: the copy in OneDrive
+  scheduleSettingsCopy();
   startInNormalMode();
   pinGuard.restore(config.get().pinGuard);
   applyLanguage();
@@ -103,6 +111,7 @@ app.whenReady().then(async () => {
   setWindows(new WindowsProvider({
     vault: () => vault,
     isOpen: () => opened,
+    windowLocked: () => windowLocked, // #507: requests behind the window's lock show no names
     actor,
     pin: passkeyPin, // #439: every passkey use asks for the app PIN
     show: () => {

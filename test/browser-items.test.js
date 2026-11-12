@@ -296,3 +296,17 @@ test('a refused plan shows no card', async () => {
   assert.ok(real);
   assert.deepEqual(x.asked, []);
 });
+
+test('review 0.9.33: the vault rules (export lock) are asked before every move from the browser', async () => {
+  const f = fakeVault({ bPersonal: true });
+  const seen = [];
+  const h = browserItemHandlers({
+    vault: f.vault, requireOpen: () => {}, changed: () => {}, movePasskey: async () => true, confirm: async () => true,
+    checkMove: async (from, to) => { seen.push(`${from}>${to}`); throw new Error('Der Tresor „Quelle“ sperrt den Export'); },
+  });
+  await assert.rejects(h.move({ fromId: 'A', toId: 'B', itemId: '1' }), /sperrt den Export/);
+  await assert.rejects(h.moveWithAssets({ fromId: 'A', toId: 'B', itemId: '1', expected: ['1'] }), /sperrt den Export/);
+  await assert.rejects(h.planMove({ fromId: 'A', toId: 'B', itemId: '1' }), /sperrt den Export/);
+  assert.deepEqual(seen, ['A>B', 'A>B', 'A>B']);
+  assert.deepEqual(f.vault.calls, [], 'nothing moved');
+});

@@ -90,6 +90,7 @@ export class FileContainers {
     let id = `missing:${filePath}`;
     let error = null;
     let swap = null;
+    let refusal = null;
     // The floor remembered for this path (#432): an older state of the same secured file is refused by load().
     vault.floor = this.pinNotes()[filePath]?.floor || null;
     // After each own save (e.g. a member removed): remembered at once, not only when the watcher reads it (Konrad).
@@ -114,10 +115,11 @@ export class FileContainers {
       else this.noteFloor(filePath, vault);
     } catch (e) {
       error = e.message;
+      refusal = e.code || null; // 'older': an admin may take it on purpose (#435)
     }
     const existing = [...this.entries.values()].find((e) => e.id === id && e.path !== filePath);
     if (existing) throw new Error(t('Dieser Tresor ist bereits geöffnet ({path})', { path: existing.path }));
-    const entry = { id, path: filePath, vault: error ? null : vault, error, swap };
+    const entry = { id, path: filePath, vault: error ? null : vault, error, swap, refusal };
     this.entries.set(id, entry);
     if (!error) {
       watchFile(filePath, { interval: 3000 }, (cur, prev) => {
@@ -133,9 +135,11 @@ export class FileContainers {
     return this.serial(entry.id, () => this.reload(entry)).then(() => {
       if (entry.vault) this.noteFloor(entry.path, entry.vault);
       entry.warning = null;
+      entry.refusal = null;
       this.onChange();
     }, (e) => {
       entry.warning = e.message;
+      entry.refusal = e.code || null;
       this.onReloadError(entry.path, e);
       this.onChange();
     });
@@ -198,6 +202,11 @@ export class FileContainers {
     return !!((e.error || e.warning) && !e.swap && this.pinNotes()[e.path]?.floor?.members?.length);
   }
 
+  /** #435: refused as an older state than seen here – an admin may take it on purpose (desktop/file-accept-older.js). */
+  olderRefused(e) {
+    return !!((e.error || e.warning) && !e.swap && e.refusal === 'older');
+  }
+
   /**
    * #446: a file refused because a known grant was changed or taken out (anyone with write access to the share can do
    * that) is put back from the state seen here – the grants exactly as they were signed. Written only if the result
@@ -256,6 +265,7 @@ export class FileContainers {
       swap: e.swap || null,
       warning: e.warning || null,
       repairable: this.repairable(e),
+      olderState: this.olderRefused(e),
       sources: ['file'],
       secure: !!e.vault?.secure,
       role: e.vault && !e.vault.locked ? e.vault.role : null,
@@ -304,12 +314,12 @@ export class FileContainers {
   }
 
   async restore(id, itemId, actor) {
-    await this.get(id).restore(itemId, actor);
+    await this.serial(id, () => this.get(id).restore(itemId, actor));
     this.onChange();
   }
 
   purge(id, itemId) {
-    return this.get(id).purge(itemId);
+    return this.serial(id, () => this.get(id).purge(itemId));
   }
 
   history(id, itemId) {
@@ -384,7 +394,9 @@ export class FileContainers {
   // ---------------------------------------------------------------- secured files: members, log, folders
 
   async requestAccess(id, request) {
-    const r = await this.get(id).requestAccess(request);
+    // #526: every change in the per-file queue, like the saves (#326): the watcher's reload in the middle of it replaced
+    // the document in memory with the one read before the write – the request, a logo or a member change vanished.
+    const r = await this.serial(id, () => this.get(id).requestAccess(request));
     this.onChange();
     return r;
   }
@@ -396,7 +408,7 @@ export class FileContainers {
   }
 
   async memberOp(id, op) {
-    await this.get(id).memberOp(op);
+    await this.serial(id, () => this.get(id).memberOp(op));
     this.onChange();
   }
 
@@ -417,22 +429,22 @@ export class FileContainers {
   }
 
   async setLicense(id, key) {
-    await this.get(id).setLicense(key);
+    await this.serial(id, () => this.get(id).setLicense(key));
     this.onChange();
   }
 
   async setLogo(id, dataUrl) {
-    await this.get(id).setLogo(dataUrl);
+    await this.serial(id, () => this.get(id).setLogo(dataUrl));
     this.onChange();
   }
 
   async addFolder(id, path) {
-    await this.get(id).addFolder(path);
+    await this.serial(id, () => this.get(id).addFolder(path));
     this.onChange();
   }
 
   async removeFolder(id, path) {
-    await this.get(id).removeFolder(path);
+    await this.serial(id, () => this.get(id).removeFolder(path));
     this.onChange();
   }
 
@@ -533,7 +545,7 @@ export class FileContainers {
   }
 
   async rename(id, name) {
-    await this.get(id).rename(name);
+    await this.serial(id, () => this.get(id).rename(name));
     this.onChange();
   }
 

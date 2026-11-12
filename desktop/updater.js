@@ -50,7 +50,9 @@ export class Updater {
     this.kind = selfUpdate?.() === false ? 'managed' : installKind();
     this.state = { kind: this.kind, status: 'idle', current: app.getVersion(), version: null, notes: '', progress: 0, error: null, checked: null };
     this.timer = null;
-    if (this.kind !== 'nsis') return;
+    // #420: a Dev build never reads the public feeds (Early Access, Prod); its own feed in the private repo is part B.
+    this.devStage = buildKind().dev === true;
+    if (this.kind !== 'nsis' || this.devStage) return;
     this.feed = feedFor(this.channel());
     autoUpdater.setFeedURL({ provider: 'generic', url: this.feed });
     autoUpdater.autoDownload = false;
@@ -77,7 +79,7 @@ export class Updater {
   applyMode() {
     // Channel switched in the settings: the next check reads the other feed.
     const feed = feedFor(this.channel());
-    if (this.kind === 'nsis' && feed !== this.feed) {
+    if (this.kind === 'nsis' && !this.devStage && feed !== this.feed) {
       this.feed = feed;
       autoUpdater.setFeedURL({ provider: 'generic', url: feed });
     }
@@ -128,7 +130,7 @@ export class Updater {
    * the app (the download starts only when the user clicks).
    */
   async background() {
-    if (this.mode() === 'off' || this.kind === 'dev' || ['checking', 'downloading', 'ready'].includes(this.state.status)) return;
+    if (this.mode() === 'off' || this.kind === 'dev' || this.devStage || ['checking', 'downloading', 'ready'].includes(this.state.status)) return;
     try {
       this.set({ status: 'checking', error: null });
       const found = await this.latest();
@@ -148,6 +150,7 @@ export class Updater {
   /** Manual check (menu, settings): → state; with a new version the caller offers download + install. */
   async check() {
     if (this.kind === 'dev') throw new Error('Updates gibt es nur in der installierten App.');
+    if (this.devStage) throw new Error('Die Dev-Version bekommt Updates nur aus dem Dev-Kanal – der ist noch nicht eingerichtet.');
     this.set({ status: 'checking', error: null });
     try {
       const found = await this.latest();
@@ -162,6 +165,8 @@ export class Updater {
   /** Manual: download (if needed) and install now – the app restarts. */
   async installNow() {
     if (this.kind === 'managed') throw new Error('Updates verteilt deine IT (Richtlinie).');
+    // #420 (review N1): a Dev build never downloads from the public feeds, also not through a direct API call.
+    if (this.devStage) throw new Error('Die Dev-Version bekommt Updates nur aus dem Dev-Kanal – der ist noch nicht eingerichtet.');
     if (this.kind !== 'nsis') throw new Error('Diese Installation (MSI/MSIX) wird über das Paket aktualisiert.');
     this.manualInstall = true;
     if (this.state.status === 'ready') return this.install();
@@ -191,6 +196,9 @@ export class Updater {
     if (this.launchHelper(silent)) {
       autoUpdater.autoInstallOnAppQuit = false;
       setTimeout(() => app.quit(), 250);
+      // #513: the app ends before the installer runs, also when something holds the quit up (a pending save, a
+      // window that refuses to close); Keevault-Update.exe waits for this process (--pid) and then for the folder.
+      setTimeout(() => app.exit(0), 10_000).unref?.();
       return;
     }
     setImmediate(() => autoUpdater.quitAndInstall(true, true));

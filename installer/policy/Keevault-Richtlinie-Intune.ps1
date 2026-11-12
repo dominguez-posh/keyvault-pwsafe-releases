@@ -29,12 +29,14 @@ $AutoLockMinutes  = $null     # z. B. 15
 $ClipboardSeconds = $null     # z. B. 30
 $RequirePin       = $null     # $true | $false
 $UpdateMode       = ''        # off | auto | ask
+$UpdateChannel    = ''        # stable | beta (Early Access), ab 0.9.8
 $Language         = ''        # auto | de | en
 # ab 0.7.10
 $SelfUpdate       = $null     # $false = App installiert nie selbst Updates (IT verteilt sie); $true/$null = erlaubt
 $DefaultVault     = ''        # z. B. 'https://kv-team-it.vault.azure.net' (Standard-Tresor für neue Einträge)
 $BrowserIntegration = $null   # $true | $false – Datei-Tresore in der Browser-Erweiterung
 $WindowsProvider  = $null     # $true | $false – Keevault als Passkey-Anbieter in Windows
+$WindowHello      = $null     # $false verbietet das Entsperren des Fensters mit Windows Hello (ab 0.9.33); $true erzwingt nichts
 $SignInWindows    = $null     # $true | $false – Anmeldung im Windows-Dialog (WAM) statt im Browser
 $McpScope         = ''        # selected | all – Zugriff für KI-Agenten
 $ExtensionIds     = ''        # z. B. 'pbkjijhihclckeeefbepoedgdmajioip,abc…' (nur bei eigener Erweiterungs-ID)
@@ -71,6 +73,7 @@ Set-Text 'TenantId' $TenantId
 Set-Text 'ClientId' $ClientId
 Set-Text 'UnlockPrompt' $UnlockPrompt
 Set-Text 'UpdateMode' $UpdateMode
+Set-Text 'UpdateChannel' $UpdateChannel
 Set-Text 'Language' $Language
 Set-Number 'AutoLockMinutes' $AutoLockMinutes
 Set-Number 'ClipboardSeconds' $ClipboardSeconds
@@ -79,6 +82,7 @@ Set-Bool 'RequirePin' $RequirePin
 Set-Bool 'SelfUpdate' $SelfUpdate
 Set-Bool 'BrowserIntegration' $BrowserIntegration
 Set-Bool 'WindowsProvider' $WindowsProvider
+Set-Bool 'WindowHello' $WindowHello
 Set-Bool 'SignInWindows' $SignInWindows
 Set-Text 'DefaultVault' $DefaultVault
 Set-Text 'McpScope' $McpScope

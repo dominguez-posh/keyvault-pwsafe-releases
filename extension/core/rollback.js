@@ -17,12 +17,25 @@ export function floorOf(doc, roster = null) {
   if (doc?.version !== 2 || !doc.keyring) return null;
   const all = (doc.keyring.members || []).flatMap((m) => (m.grants || []).map((g) => `${m.id} ${g.sig}`));
   const counted = roster?.accepted ? all.filter((k) => roster.accepted.has(k)) : all;
-  const signed = roster?.counts ? [...(doc.keyring.rejected || []), doc.keyring.sharing].filter((x) => x?.sig && roster.counts(x)).map((x) => x.sig) : null;
+  const valid = roster?.counts ? [...(doc.keyring.rejected || []), doc.keyring.sharing].filter((x) => x?.sig && roster.counts(x)) : null;
+  // #435 (Konrad): the counting rejections and sharing settings whole, apart and with their signed fields only – an older
+  // state taken on purpose gets them back. Rejections in a loaded document are checked (applyRejections); the sharing
+  // setting only with a valid signature (verifyRoster: sharingSig).
+  const rejections = valid ? (doc.keyring.rejected || []).filter((x) => valid.includes(x)).map((x) => ({ id: x.id, at: x.at, by: x.by, sig: x.sig })) : null;
+  const sh = doc.keyring.sharing;
+  const sharings = valid ? (sh && valid.includes(sh) && roster.sharingSig === sh.sig ? [{ enabled: !!sh.enabled, at: sh.at, by: sh.by, sig: sh.sig }] : []) : null;
+  // Konrad N1 (#521): only what is kept whole is known – a forged sharing setting made taking an older state stop as incomplete.
+  const signed = valid ? [...rejections, ...sharings].map((x) => x.sig) : null;
   const members = roster?.accepted ? (doc.keyring.members || []).map((m) => ({
     id: m.id, email: m.email, ecdh: m.ecdh, sign: m.sign, grants: (m.grants || []).filter((g) => roster.accepted.has(`${m.id} ${g.sig}`)),
   })).filter((m) => m.grants.length) : null;
-  return { id: doc.id, keyVersion: doc.keyring.keyVersion || 0, grants: counted, ...(signed ? { signed } : {}), ...(members ? { members } : {}) };
+  return {
+    id: doc.id, keyVersion: doc.keyring.keyVersion || 0, grants: counted,
+    ...(signed ? { signed, rejections, sharings } : {}), ...(members ? { members } : {}),
+  };
 }
+
+const unionBySig = (a = [], b = []) => [...new Map([...a, ...b].map((x) => [x.sig, x])).values()];
 
 function mergeMembers(a = [], b = []) {
   const byId = new Map();
@@ -37,7 +50,10 @@ function mergeMembers(a = [], b = []) {
 /** The higher of two floors of the same file (another file's floor is dropped). */
 export function mergeFloors(a, b) {
   if (!a || !b || a.id !== b.id) return b || a || null;
-  const signed = a.signed || b.signed ? { signed: [...new Set([...(a.signed || []), ...(b.signed || [])])] } : {};
+  const signed = a.signed || b.signed ? {
+    signed: [...new Set([...(a.signed || []), ...(b.signed || [])])],
+    rejections: unionBySig(a.rejections, b.rejections), sharings: unionBySig(a.sharings, b.sharings),
+  } : {};
   const members = a.members || b.members ? { members: mergeMembers(a.members, b.members) } : {};
   return { id: a.id, keyVersion: Math.max(a.keyVersion || 0, b.keyVersion || 0), grants: [...new Set([...(a.grants || []), ...(b.grants || [])])], ...signed, ...members };
 }

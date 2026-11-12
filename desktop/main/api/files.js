@@ -6,10 +6,19 @@ import { FILE_EXTENSION } from '../../../extension/core/filevault.js';
 import { RP_ID, smokeTest } from '../boot.js';
 import { config, files, opened, setOpened, vault, win } from '../state.js';
 import { api } from './index.js';
-import { requireFeature } from '../guards.js';
+import { pinGuard, requireFeature } from '../guards.js';
 import { passkeyCeremony, registerPasskey } from '../passkey-window.js';
 import { bindPersonalKeys, confirmPersonalRecovery, createPersonal, personalEntries, personalInfo, renewPersonalRecovery, usePersonal } from '../personal.js';
 import { actor, changed, cleanEmail, send } from '../session.js';
+import { OlderStateAcceptance } from '../../file-accept-older.js';
+
+// #435: one per app run, holding the one-time tokens of the dialog (main process only).
+let olderStates = null;
+const older = () => (olderStates ??= new OlderStateAcceptance(files));
+function requireAdminMode() {
+  if (config.get().adminTools !== true) throw new Error(t('Einen älteren Stand nimmst du nur im Admin-Modus an.'));
+  if (!config.get().appPin) throw new Error(t('Dafür ist eine App-PIN nötig.'));
+}
 
 async function protectionCtx(containerId) {
   const c = await vault.container(containerId);
@@ -47,6 +56,30 @@ export const filesApi = {
   acceptFileSwap: ({ path: filePath, id }) => files.acceptSwap(String(filePath || ''), String(id || '')),
   /** A known file refused for a changed grant, put back from the state seen here (#446). */
   repairFile: (id) => files.repair(String(id || '')),
+  /**
+   * #435: an older state of a secured file taken on purpose. Admin mode, then the dialog's token; the app PIN (with its
+   * attempt lock) and a passkey with user verification; written only after the wait, with the vault name typed.
+   */
+  acceptOlderPrepare: async (id) => {
+    requireAdminMode();
+    return older().prepare(String(id || ''));
+  },
+  async acceptOlderUnlock(token, pin) {
+    requireAdminMode();
+    older().check(String(token || ''));
+    await api.verifyPin(String(pin || ''));
+    pinGuard.consume(); // the PIN confirmed this step – it opens nothing afterwards
+    const { name, passkeys } = await older().passkeys(String(token || ''), RP_ID);
+    if (!passkeys.length) throw new Error(t('Für diese App ist kein Passkey registriert'));
+    const prf = await passkeyCeremony({ mode: 'evaluate', containerName: name, passkeys, autoStart: !smokeTest });
+    return older().unlock(String(token || ''), { credentialId: prf.credentialId, prfOutput: prf.prfOutput });
+  },
+  async acceptOlderCommit(token, name) {
+    requireAdminMode();
+    const id = await older().commit(String(token || ''), String(name || ''));
+    changed();
+    return id;
+  },
   renameFile: (id, name) => files.rename(id, name),
   showFile: async (id) => {
     const c = (await files.containers()).find((x) => x.id === id);

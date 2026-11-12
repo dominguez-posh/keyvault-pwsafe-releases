@@ -1,6 +1,7 @@
 // Extension smoke, part (#502): the field menu only in real sign-in fields. One page with a search box, a login form, a
 // contact form (name, e-mail, a field named "account", a textarea) and a newsletter box; the site has a saved login, so
 // a wrongly counted field would show the menu with it. Real clicks through CDP (trusted), each field on its own.
+// #504: a name step of its own whose autocomplete is a made-up value ("nope") still gets the menu.
 
 export const fieldsPage = `<!doctype html><meta charset="utf-8"><title>Felder</title>
 <style>input,textarea{display:block;margin:12px 0;width:260px;height:28px}textarea{height:60px}</style>
@@ -9,9 +10,10 @@ export const fieldsPage = `<!doctype html><meta charset="utf-8"><title>Felder</t
 <input type="password" name="password" id="pw" autocomplete="current-password" placeholder="Kennwort"><button>Anmelden</button></form>
 <form id="contact" onsubmit="return false"><input name="name" id="cname" placeholder="Name"><input type="email" name="email" id="cmail" placeholder="E-Mail">
 <input name="account" id="caccount" placeholder="Kundenkonto (optional)"><textarea name="message" id="cmsg" placeholder="Nachricht"></textarea><button>Senden</button></form>
-<form id="news" onsubmit="return false"><input type="email" name="newsletter" id="news" placeholder="Newsletter: Ihre E-Mail"><button>Abonnieren</button></form>`;
+<form id="news" onsubmit="return false"><input type="email" name="newsletter" id="news" placeholder="Newsletter: Ihre E-Mail"><button>Abonnieren</button></form>
+<form id="step" onsubmit="return false"><input name="username" id="nope" autocomplete="nope" placeholder="Benutzername"><button>Weiter</button></form>`;
 
-const POSITIVE = ['user', 'pw'];
+const POSITIVE = ['user', 'pw', 'nope'];
 const NEGATIVE = ['search', 'cname', 'cmail', 'caccount', 'cmsg', 'news'];
 
 export async function checkFieldKinds({ send, open, sw, waitFor, check, sleep, shadowNode, sessionId, personal, port }) {

@@ -160,6 +160,7 @@ body { overflow: hidden; }
 #app-version { white-space: nowrap; }
 #app-version.early-access .ver-channel { color: var(--accent); font-weight: 600; }
 #app-version.developer .ver-channel { color: var(--warn); font-weight: 600; }
+#app-version.dev-stage .ver-channel { color: var(--warn); font-weight: 600; }
 .update-progress { width: 100%; margin-top: 8px; }
 /* Questions from AI agents (app.js questionDialog) */
 /* Questions from AI agents (app.js questionDialog): hero with badge, target card, choice cards, two actions. */
@@ -249,6 +250,12 @@ body { overflow: hidden; }
 /* Vault settings dialog */
 .policy-list { display: grid; gap: 10px; margin: 14px 0; }
 .policy-row { align-items: flex-start; }
+.logging-section { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 10px; }
+.logging-steps { display: grid; gap: 6px; padding-left: 20px; }
+.compliance-result { margin-top: 10px; }
+.compliance-privacy { margin-top: 12px; }
+.compliance-table td .badge { white-space: nowrap; }
+.logging-kql { white-space: pre-wrap; font-size: 11px; max-height: 180px; overflow: auto; }
 .license-links { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 14px; }
 .snippet { white-space: pre-wrap; word-break: break-all; font-size: 11px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 4px 0; max-height: 170px; overflow: auto; user-select: text; }
 
@@ -809,14 +816,15 @@ html.admin-theme { --accent: #ac5500; --accent-hover: #8b4500; --accent-soft: #f
 #ext-hint button { font: inherit; font-size: 11px; line-height: 1; display: inline-flex; align-items: center; height: 18px; border: 0; border-radius: 999px; cursor: pointer; }
 #ext-hint-open { gap: 5px; padding: 0 8px 0 6px; color: inherit; background: none; font-weight: 500; }
 #ext-hint-open:hover, #ext-hint-open[aria-expanded=true] { text-decoration: underline; }
-#ext-fix { gap: 4px; padding: 0 9px 0 7px; color: var(--on-accent); background: var(--accent); font-weight: 600; }
-#ext-fix:hover:not(:disabled) { background: var(--accent-hover); }
-#ext-fix:disabled { opacity: .55; cursor: default; }
+#ext-fix, #ext-reinstall { gap: 4px; padding: 0 9px 0 7px; color: var(--on-accent); background: var(--accent); font-weight: 600; }
+#ext-fix:hover:not(:disabled), #ext-reinstall:hover:not(:disabled) { background: var(--accent-hover); }
+#ext-fix:disabled, #ext-reinstall:disabled { opacity: .55; cursor: default; }
 #ext-hint button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #ext-result { position: fixed; z-index: 20; display: flex; align-items: flex-start; gap: 8px; width: min(340px, calc(100vw - 16px)); box-sizing: border-box; padding: 10px 6px 10px 12px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, .18); font-size: 13px; }
 #ext-result > svg { flex: none; margin-top: 1px; color: var(--success); }
 #ext-result.error { border-color: var(--danger); }
 #ext-result.error > svg { color: var(--danger); }
+#ext-result.progress > svg { color: var(--muted); }
 #ext-result .text { flex: 1; }
 #ext-result .icon-btn { flex: none; width: 24px; height: 24px; margin-top: -3px; }
 #ext-pop { position: fixed; z-index: 20; width: min(340px, calc(100vw - 16px)); box-sizing: border-box; padding: 12px 14px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, .18); font-size: 13px; }
@@ -828,3 +836,7 @@ html.admin-theme { --accent: #ac5500; --accent-hover: #8b4500; --accent-soft: #f
 .move-plan-list { display: grid; gap: 2px; max-height: min(260px, 40vh); overflow-y: auto; scrollbar-width: thin; }
 .move-plan-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 10px; background: var(--surface-2); }
 .move-plan-row .avatar { flex: none; width: 28px; height: 28px; font-size: 12px; border-radius: 8px; }
+/* Settings import (#478): new vaults one by one, a look-alike name in red */
+.settings-vaults ul { list-style: none; padding-left: 0; }
+.settings-vaults li.clash, .settings-vaults li.clash b { color: var(--danger); }
+.settings-vault-hint { color: var(--warn); font-weight: 600; }

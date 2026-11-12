@@ -16,10 +16,11 @@ const text = (v, what) => {
 };
 
 /**
- * `deps`: vault (VaultSession), requireOpen(), changed(), movePasskey(args) (the app's function, keys stay inside).
+ * `deps`: vault (VaultSession), requireOpen(), changed(), movePasskey(args) (the app's function, keys stay inside),
+ * checkMove(fromId, toId) (the app's vault rules, e.g. the export lock; main/vault-rules.js).
  * → handlers for the bridge (only for approved browser clients, see browser.js).
  */
-export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, confirm }) {
+export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, confirm, checkMove = async () => {} }) {
   // Moving into another vault: the user confirms in the app (info: { from, to, entries: [{ title, passkey }] }); without a way to ask: refused.
   const confirmed = async (info) => {
     if (typeof confirm !== 'function' || (await confirm(info)) !== true) throw new Error(t('Das Verschieben wurde im Keevault-Fenster nicht bestätigt'));
@@ -33,6 +34,7 @@ export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, 
   const signature = (plan) => plan.order.map((id) => `${id}@${plan.items.get(id).version}`).join('|');
   const both = async (fromId, toId) => {
     const [from, to] = await Promise.all([vault.container(text(fromId, 'from')), vault.container(text(toId, 'to'))]);
+    await checkMove(fromId, toId);
     const refused = moveRefusal(from, to);
     if (refused) throw new Error(refused);
   };
@@ -65,6 +67,7 @@ export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, 
     planMove: async (msg) => {
       requireOpen();
       const { fromId, toId, itemId } = moveArgs(msg);
+      await checkMove(fromId, toId);
       const { items, order, ...plan } = await planMoveWithAssets(vault, fromId, toId, itemId);
       return plan;
     },
@@ -95,13 +98,15 @@ export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, 
       const expected = plan.order;
       const named = msg.expected;
       if (!Array.isArray(named) || named.length !== expected.length || !named.every((e) => typeof e === 'string' && expected.includes(e))) throw new Error(CHANGED);
+      let checked = plan;
       if (fromId !== toId) {
         await confirmed(await cardInfo(fromId, toId, plan.members.map((m) => plan.items.get(m.id))));
-        const again = await planMoveWithAssets(vault, fromId, toId, itemId);
-        if (again.refused || signature(again) !== signature(plan)) throw new Error(CHANGED);
+        checked = await planMoveWithAssets(vault, fromId, toId, itemId);
+        if (checked.refused || signature(checked) !== signature(plan)) throw new Error(CHANGED);
       }
       try {
-        const { saved, moved, dropped } = await moveWithAssets(vault, fromId, toId, itemId, { ...folderOf(msg), expected });
+        // #474: exactly the plan just compared moves – no third calculation between the check and the writes.
+        const { saved, moved, dropped } = await moveWithAssets(vault, fromId, toId, itemId, { ...folderOf(msg), expected, plan: checked });
         return { saved: withoutPasskeyKeys(saved), moved, dropped };
       } finally {
         changed();

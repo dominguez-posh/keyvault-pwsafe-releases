@@ -32,6 +32,8 @@ const VALUES = {
   McpScope: { setting: 'mcpScope', type: 'string' }, // selected | all
   ExtensionIds: { setting: 'extensionIds', type: 'list' }, // comma/semicolon/space separated extension IDs
   DefaultVault: { setting: 'defaultContainer', type: 'vault' }, // vault URL → container id (host name)
+  // #512 (0.9.33): 0 forbids unlocking the window with Windows Hello; 1 is not enforced (the user switches it on with the PIN).
+  WindowHello: { setting: 'windowHello', type: 'boolean' },
 };
 
 const unescape = (s) => s.replace(/\\(["\\])/g, '$1');
