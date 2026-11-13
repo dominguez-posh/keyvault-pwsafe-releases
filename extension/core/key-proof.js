@@ -68,3 +68,14 @@ export async function keyChangeSigned(doc, ck, roster, kv, nowMs = Date.now()) {
   }
   return false;
 }
+
+/**
+ * #523: would writing `merged` (the disk's document merged with the vault's) take the proof of the vault's key away? An
+ * older generation on the disk can bring the removal of the admin who set our key (a write race: their removal by another
+ * admin, written over a state it had not read). Merged, the current key would have no proof that counts and nobody could
+ * unlock freshly. Only a proof the merge loses counts here – a vault whose key had none before is left as it was.
+ */
+export async function mergeLosesProof(vault, merged, mergedRoster) {
+  const kv = vault.ck.kv ?? vault.doc.keyring.keyVersion;
+  return !(await keyChangeSigned(merged, vault.ck, mergedRoster, kv)) && keyChangeSigned(vault.doc, vault.ck, vault.roster, kv);
+}

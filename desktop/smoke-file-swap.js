@@ -6,6 +6,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { newIdentity, signObject, wrapKey } from '../extension/core/members.js';
 import { ContainerKey } from '../extension/core/protect.js';
+import { FileVault } from '../extension/core/filevault.js';
+import { b64uEncode, randomBytes } from '../extension/core/util.js';
+import { until } from './smoke-wait.js';
 
 export async function fileSwapCheck({ files, js, sleep, errors, dir, changed }) {
   const file = path.join(dir, 'Swap404.kvpws');
@@ -83,7 +86,7 @@ export async function rollbackCheck({ files, errors, file, id }) {
  * #521: a container key wrapped for us by someone with write access to the share (next generation, no signed key change
  * of an admin) is refused by the watcher: shown as a warning, the open vault keeps its key, a save writes nothing.
  */
-export async function foreignKeyCheck({ files, errors, file, id }) {
+export async function foreignKeyCheck({ files, errors, file, id, js }) {
   const current = await fs.readFile(file, 'utf8');
   const doc = JSON.parse(current);
   const vault = files.entries.get(id)?.vault;
@@ -98,6 +101,16 @@ export async function foreignKeyCheck({ files, errors, file, id }) {
     await files.watched(files.entries.get(id));
     const warning = (await files.containers()).find((c) => c.id === id)?.warning || '';
     if (!/nicht von einem Admin|not set by an admin/.test(warning)) errors.push(`foreign key: an unsigned key change is not shown as a warning (#521): ${warning}`);
+    // #522: no "repair" (it would keep the foreign key), the tampering notice instead – in the list and in the window.
+    const c = (await files.containers()).find((x) => x.id === id);
+    if (!c?.keyRefused || c.repairable) errors.push(`foreign key: offered as ${c?.repairable ? 'repairable' : 'not key-refused'} (#522)`);
+    const written = await fs.readFile(file, 'utf8');
+    if (await files.repair(id).then(() => true, () => false)) errors.push('foreign key: the repair ran on a refused key (#522)');
+    if ((await fs.readFile(file, 'utf8')) !== written) errors.push('foreign key: the refused repair wrote the file (#522)');
+    if (js) {
+      const ui = await until(() => js('[...document.querySelectorAll(".sidebar .nav")].find((n) => n.textContent.includes("Team-Datei"))?.click(), document.getElementById("file-key-refused") ? (document.getElementById("file-repair-btn") ? "repair" : "ok") : ""'), 5000, 200);
+      if (ui !== 'ok') errors.push(`foreign key: the window shows ${ui === 'repair' ? 'the repair button' : 'no tampering notice'} (#522)`);
+    }
     const now = files.entries.get(id)?.vault?.ck?.exported;
     if (now === evil.exported) errors.push('foreign key: the device took a key wrapped by someone else (#521)');
     else if (now !== before) errors.push('foreign key: the open vault lost its key (#521)');
@@ -145,5 +158,49 @@ export async function rejectedCheck({ files, errors, file, id }) {
   } finally {
     await fs.writeFile(file, current);
     await files.watched(files.entries.get(id));
+  }
+}
+
+/**
+ * #523: a write race – admin Bob removes admin Alice on a state read before Alice's key change, Alice's device then changes
+ * the key again. Her change is not merged over her removal (the key would have no proof that counts): nothing is written
+ * and the others still unlock freshly. Two devices on one real file, passkey secrets made up (no WebAuthn needed).
+ */
+export async function removeRaceCheck({ errors, dir }) {
+  const file = path.join(dir, 'Race523.kvpws');
+  await fs.rm(file, { force: true });
+  const io = { read: () => fs.readFile(file, 'utf8').catch(() => null), write: (text) => fs.writeFile(file, text) };
+  const passkey = (name) => ({ credentialId: `race-${name}-${b64uEncode(randomBytes(4))}`, rpId: 'localhost', prfSalt: 'salt', prfOutput: b64uEncode(randomBytes(32)), label: name });
+  try {
+    const pks = { alice: passkey('alice') };
+    const alice = await FileVault.createSecure(io, { name: 'Race523', email: 'alice@smoke.invalid', passkey: pks.alice });
+    await alice.persist();
+    await alice.memberOp({ type: 'sharing', enabled: true });
+    const ids = {};
+    for (const [name, role] of Object.entries({ bob: 'admin', carol: 'reader', dave: 'editor', erin: 'reader' })) {
+      pks[name] = passkey(name);
+      ids[name] = (await new FileVault(io).requestAccess({ email: `${name}@smoke.invalid`, passkey: pks[name] })).memberId;
+      await alice.load();
+      await alice.memberOp({ type: 'approve', memberId: ids[name], role });
+    }
+    const stale = await io.read();
+    await alice.memberOp({ type: 'remove', memberId: ids.carol });
+    let first = true; // Bob's device read the file before that write
+    const racing = { read: async () => (first ? ((first = false), stale) : io.read()), write: io.write };
+    const bob = new FileVault(racing);
+    await bob.unlockWithPasskey(pks.bob.credentialId, pks.bob.prfOutput);
+    first = true;
+    await bob.memberOp({ type: 'remove', memberId: alice.memberId });
+    const bobsFile = await io.read();
+    const written = await alice.memberOp({ type: 'remove', memberId: ids.erin }).then(() => 'written', (e) => e.message);
+    if (written === 'written' || (await io.read()) !== bobsFile) errors.push(`remove race: the removed admin's key change was merged over the removal (#523): ${written}`);
+    for (const name of Object.keys(ids).filter((n) => n === 'bob' || n === 'dave')) {
+      const why = await new FileVault(io).unlockWithPasskey(pks[name].credentialId, pks[name].prfOutput).then(() => '', (e) => e.message);
+      if (why) errors.push(`remove race: ${name} cannot unlock freshly after the race (#523): ${why}`);
+    }
+  } catch (e) {
+    errors.push(`remove race: ${e.message} (#523)`);
+  } finally {
+    await fs.rm(file, { force: true });
   }
 }

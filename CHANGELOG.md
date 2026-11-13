@@ -6,6 +6,28 @@ GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Ver
 
 ## Unveröffentlicht
 
+## 0.9.34 – 2026-11-12
+- Sicherheit: Ein neues Masterpasswort oder ein neuer Wiederherstellungsschlüssel wechselt jetzt den Tresor-Schlüssel. Alte Passwörter und Wiederherstellungsschlüssel öffnen danach nichts Neues mehr. Fallen dabei Passkeys weg, warnt der Dialog vorher (#402).
+- Sicherheit: Lassen sich die Tresor-Vorgaben nicht lesen (z. B. ohne Netz), sind Export und Verschieben in den persönlichen Tresor gesperrt (#525).
+- Sicherheit: Wird ein fremder Tresor-Schlüssel abgelehnt, erscheint „Möglicher Manipulationsversuch“ statt „Reparieren“; Admins sehen den sicheren Weg zurück (#522). Beim Annehmen eines älteren Stands werden nur Passkeys von Admins angeboten (#527).
+- Datei-Tresor: Ein gleichzeitiges Entfernen und Schlüsselwechseln auf zwei Geräten macht den Tresor nicht mehr unbenutzbar (#523).
+- Offline-Kopie: Nach einem Schlüsselwechsel wird die alte Kopie verworfen (#402).
+- Erweiterung: Die PIN-Abfrage erscheint sofort, du kannst direkt tippen; die PIN geht erst an die App, wenn die Verbindung bestätigt ist (#534). Die Liste im Popup erscheint schneller (#530), und ein Klick auf einen Eintrag wird nicht mehr von der nachgeladenen Liste überschrieben (#533).
+- Persönlicher Tresor: Die Einrichtung erkennt einen hinterlegten FIDO-Stick (z. B. YubiKey), registriert ihn ausdrücklich als Sicherheitsschlüssel und meldet, wenn ein Stick kein PRF unterstützt. Passkeys heißen jetzt „Sicherheitsschlüssel“, „Windows Hello“ oder „Smartphone“ (#531).
+- Das Passkey-Fenster erscheint erst, wenn es bereit ist – kein leeres Fenster mehr (#532).
+- Admin-Modus: Der Schalter zeigt nach einem Neuladen während der PIN-Prüfung wieder den richtigen Zustand (#535).
+
+### English
+- Security: a new master password or a new recovery key now changes the vault key. Old passwords and recovery keys no longer open anything new. If passkeys are dropped in the process, the dialog warns beforehand (#402).
+- Security: if the vault settings cannot be read (e.g. offline), export and moving into the personal vault are blocked (#525).
+- Security: when a foreign vault key is rejected, "Possible tampering" appears instead of "Repair"; admins see the safe way back (#522). Accepting an older state only offers admins' passkeys (#527).
+- File vault: removing a member and changing the key on two devices at the same time no longer makes the vault unusable (#523).
+- Offline copy: after a key change the old copy is discarded (#402).
+- Extension: the PIN prompt appears at once and you can type right away; the PIN only goes to the app once the connection is confirmed (#534). The popup list appears faster (#530), and a click on an entry is no longer overwritten by the reloaded list (#533).
+- Personal vault: setup recognises a stored FIDO key (e.g. YubiKey), registers it explicitly as a security key and reports when a key does not support PRF. Passkeys are now named "Security key", "Windows Hello" or "Phone" (#531).
+- The passkey window only appears once it is ready – no more empty window (#532).
+- Admin mode: the switch shows the correct state again after a reload during the PIN check (#535).
+
 ## 0.9.33 – 2026-11-12
 - Sicherheit: Datei-Tresore übernehmen einen neuen Tresor-Schlüssel nur noch, wenn der Wechsel von einem aktiven Admin signiert ist. Fremde Schlüssel werden abgelehnt (#521).
 - Sicherheit: Ein aktives Mitglied lässt sich nur mit Schlüsselwechsel entfernen, nicht mehr durch bloßes Ablehnen (#520).

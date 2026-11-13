@@ -225,9 +225,9 @@ export async function featureChecks(ctx) {
         await sleep(300);
         const acts =await js('[...document.querySelectorAll(".context-menu [data-action]")].map((b) => b.dataset.action).join(",")');
         if (acts !== 'reveal,big,type') fail('clipboard', `password menu entries: ${acts}`);
-        await js('document.querySelector(".context-menu [data-action=reveal]").click()');
-        await sleep(200);
-        if (!(await js('document.querySelector(".detail-pane .value.secret").classList.contains("revealed") && document.querySelector(".detail-pane .value.secret").textContent === "Cp-1"'))) fail('clipboard', 'menu entry Show did not reveal the password');
+        // #535: judged right at the click – a reload (sync) redraws the entry masked again, and a full run has many. A menu of a row redrawn meanwhile is opened again.
+        const revealNow = `(() => { const r = ${pwRow}; if (!document.querySelector(".context-menu [data-action=reveal]")) r?.querySelector(".act-more").click(); document.querySelector(".context-menu [data-action=reveal]")?.click(); const v = r?.querySelector(".value.secret"); return !!v?.isConnected && v.classList.contains("revealed") && v.textContent === "Cp-1"; })()`;
+        if (!(await until(() => js(revealNow), 3000, 300))) fail('clipboard', 'menu entry Show did not reveal the password');
         await js(`${pwRow}.querySelector(".act-more").click()`);
         await sleep(300);
         await js('document.querySelector(".context-menu [data-action=big]").click()');
@@ -1132,7 +1132,7 @@ export async function featureChecks(ctx) {
       ctx.resetPinGuard();
       if (config.get().adminTools) fail('adminpin', 'admin mode on without the right PIN');
       if (await js('[...document.querySelectorAll(".main-menu .seg")].some((s) => /Admin/.test(s.getAttribute("aria-label") || ""))')) fail('adminpin', 'old admin switch still in the menu');
-    });
+      await (await import('./smoke-admin-race.js')).adminRaceCheck({ js, sleep, config, changed, ensurePin: ctx.ensurePin, pinGuard: ctx.pinGuard, fail }); }); // #535
 
     // ---- admin mode: badge, devices tab, Microsoft entry tiles with sign-in for that account
     await step('admin', async () => {
@@ -1436,6 +1436,7 @@ export async function featureChecks(ctx) {
     await step('logging', async () => (await import('./smoke-logging.js')).loggingCheck({ js, sleep, fail: (m) => fail('logging', m), api, vault, kvc, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #486
     await step('compliance', async () => (await import('./smoke-compliance.js')).complianceCheck({ js, sleep, fail: (m) => fail('compliance', m), api, vault, kvc, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #500
     await step('tlsenv', async () => (await import('./smoke-tls-env.js')).tlsEnvCheck({ js, api, fail: (m) => fail('tlsenv', m) })); // #517
+    await step('passkeywindow', async () => (await import('./smoke-passkey-window.js')).passkeyWindowCheck({ fail: (m) => fail('passkeywindow', m) })); // #532
   } finally {
     await cleanUp();
     config.update({ adminTools: false, theme: 'system', transparency: 'light' });

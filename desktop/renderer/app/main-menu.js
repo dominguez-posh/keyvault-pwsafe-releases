@@ -45,7 +45,8 @@ export async function stepZoom(dir) {
 
 async function setView(patch) {
   setSettingsRev(settingsRev + 1);
-  st.settings = await call('updateSettings', patch);
+  const settings = await call('updateSettings', patch); // #535: assigned after the wait (a reload may replace st)
+  st.settings = settings;
   setSettingsRev(settingsRev + 1);
   applyViewClass();
   document.querySelectorAll('[data-view-value]').forEach((el) => el.dispatchEvent(new Event('view-changed')));

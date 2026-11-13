@@ -16,7 +16,10 @@ import { renderSidebar } from './sidebar.js';
 /** Admin mode on or off; the list, the New menu and the open entry follow at once. */
 export async function setAdminMode(on, pin) {
   setSettingsRev(settingsRev + 1);
-  st.settings = on ? await call('activateAdminMode', pin) : await call('deactivateAdminMode');
+  // #535: answer first, then assign. `st.settings = await …` fixed `st` before the wait; a reload that replaced st
+  // meanwhile (setSt) kept the old settings, and the window showed admin mode off while it was on (or the reverse).
+  const settings = on ? await call('activateAdminMode', pin) : await call('deactivateAdminMode');
+  st.settings = settings;
   // Again after the answer: a state the main process sent while the PIN was still being checked is older (#23 race).
   setSettingsRev(settingsRev + 1);
   applyViewClass();

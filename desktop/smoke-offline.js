@@ -1,4 +1,5 @@
-// Smoke check of the offline mirror (#413): what the vault says is gone can't be read offline any more, password included.
+// Smoke check of the offline mirror (#413): what the vault says is gone can't be read offline any more, password included;
+// after a key change (#402) nothing recorded before it stays.
 // The demo never records (session.js: mirrorWanted), so this wraps the session's fetch the way session.js does and reads
 // the result as an offline start does: a new mirror from the file, with a client that has only its replay. Part of the
 // feature checks (desktop/smoke-features.js), which have reached their size limit. Not covered: the OS key store, a test double here.
@@ -17,6 +18,7 @@ export async function offlineDeleteCheck({ vault, kvc, fail }) {
   const options = { dir, protect: keyStore, unprotect: keyStore };
   const mirror = new OfflineMirror(options);
   const online = vault.fetch;
+  const keyChanged = vault.onKeyChange;
   const ids = [];
 
   // As the app starts offline: only what is in the file.
@@ -71,8 +73,20 @@ export async function offlineDeleteCheck({ vault, kvc, fail }) {
     const names = await view.listed();
     if (names.includes(deleted.id) || names.includes(elsewhere.id)) fail('offlinedelete', 'the offline list still names a deleted entry');
     if (!names.includes(kept.id) || !(await view.readable(kept.id))) fail('offlinedelete', 'the entry that stays is gone from the mirror');
+
+    // Key change (#402): the session reports it (onKeyChange, wired in main/session.js) and nothing recorded of this vault
+    // stays – it was sealed with the old key. Read again, it is recorded again. The report itself: test/rekey-keyvault.test.js.
+    if (typeof keyChanged !== 'function') fail('offlinedelete', 'the session has no onKeyChange: a key change would leave the old state in the offline mirror');
+    vault.onKeyChange = (id) => mirror.forgetVault(id);
+    vault.onKeyChange(kvc.id);
+    view = await offline();
+    if ((await view.readable(kept.id)) || view.holds(kept.value)) fail('offlinedelete', 'after a key change the mirror still holds an entry recorded before it');
+    if ((await view.listed().catch(() => [])).length) fail('offlinedelete', 'after a key change the mirror still holds the list recorded before it');
+    await vault.kv(kvc).getSecret(kept.id);
+    if (!(await (await offline()).readable(kept.id))) fail('offlinedelete', 'an entry read after the key change was not recorded again');
   } finally {
     vault.fetch = online;
+    vault.onKeyChange = keyChanged;
     mirror.lockKey();
     clearTimeout(mirror.timer);
     for (const id of ids) await vault.deleteItem(kvc.id, id).catch(() => {});

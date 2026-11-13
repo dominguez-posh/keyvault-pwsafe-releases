@@ -215,8 +215,10 @@ export async function rememberSettings(session, containerId, raw) {
 /**
  * Settings of a vault (cleaned). Key Vault: from the metadata secret, cached for a minute; when the secret can't be read,
  * the last stored ones. Other vaults: the defaults.
+ * strict (#525): for a decision that must not open by failing (export lock) – a read error throws VaultSettingsUnknown
+ * instead of answering with stored or default settings, which may be older than a lock set since.
  */
-export async function readVaultSettings(session, containerId, { fresh = false } = {}) {
+export async function readVaultSettings(session, containerId, { fresh = false, strict = false } = {}) {
   const c = typeof containerId === 'object' ? containerId : await session.container(containerId);
   if (c?.kind !== 'keyvault') return defaultVaultSettings();
   containerId = c.id;
@@ -226,7 +228,10 @@ export async function readVaultSettings(session, containerId, { fresh = false } 
   let meta;
   try {
     meta = await session.readContainerMeta(session.kv(c));
-  } catch {
+  } catch (cause) {
+    if (strict) {
+      throw Object.assign(new Error(t('Die Vorgaben des Tresors „{name}“ lassen sich gerade nicht lesen (keine Verbindung?). Solange bleiben Export und Verschieben in den persönlichen Tresor gesperrt – bitte erneut versuchen.', { name: c.name || containerId })), { name: 'VaultSettingsUnknown', cause });
+    }
     return (await storedVaultSettings(session).catch(() => ({})))[containerId] || defaultVaultSettings();
   }
   await rememberSettings(session, containerId, meta?.settings);

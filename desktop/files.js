@@ -199,7 +199,13 @@ export class FileContainers {
 
   /** Refused (at the start or on a reload) and a known state with whole grants (#446) is there to repair it from. */
   repairable(e) {
-    return !!((e.error || e.warning) && !e.swap && this.pinNotes()[e.path]?.floor?.members?.length);
+    // #522: a key nobody signed (#521) is not a grant – the floor cannot take it out, a "repair" would keep it.
+    return !!((e.error || e.warning) && !e.swap && !this.keyRefused(e) && this.pinNotes()[e.path]?.floor?.members?.length);
+  }
+
+  /** #521/#522: refused because the container key in the file is not proven by an admin's signed log entry. */
+  keyRefused(e) {
+    return !!((e.error || e.warning) && !e.swap && e.refusal === 'key-unsigned');
   }
 
   /** #435: refused as an older state than seen here – an admin may take it on purpose (desktop/file-accept-older.js). */
@@ -215,6 +221,7 @@ export class FileContainers {
   async repair(id) {
     const entry = this.entries.get(id);
     if (!entry) throw new Error(t('Tresor nicht gefunden'));
+    if (this.keyRefused(entry)) throw new Error(t('Die Datei lässt sich nicht aus dem bekannten Stand reparieren.')); // #522
     const floor = mergeFloors(this.pinNotes()[entry.path]?.floor, entry.vault ? floorOf(entry.vault.doc, entry.vault.roster) : null);
     const io = fileIo(entry.path);
     await this.serial(entry.id, async () => {
@@ -266,6 +273,7 @@ export class FileContainers {
       warning: e.warning || null,
       repairable: this.repairable(e),
       olderState: this.olderRefused(e),
+      keyRefused: this.keyRefused(e),
       sources: ['file'],
       secure: !!e.vault?.secure,
       role: e.vault && !e.vault.locked ? e.vault.role : null,

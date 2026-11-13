@@ -128,7 +128,8 @@ async function reorderVault(id, targetId, after) {
   const at = ids.indexOf(targetId);
   if (at < 0) return;
   ids.splice(after ? at + 1 : at, 0, id);
-  st.settings = await call('updateSettings', { containerOrder: ids });
+  const settings = await call('updateSettings', { containerOrder: ids }); // #535: assigned after the wait
+  st.settings = settings;
   renderSidebar();
 }
 

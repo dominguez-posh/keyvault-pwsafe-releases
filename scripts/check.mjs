@@ -70,12 +70,12 @@ const LINE_LIMITS = {
   'extension/core/i18n-en.js': Infinity, // translations
   'extension/core/session.js': 1445,
   'extension/content/content.js': 1300,
-  'desktop/smoke-features.js': 1445, // #469 + #464 + #471 + #472 + #458 + #476 combined (measured), +2 for #491, +1 for #487, +1 for #478, +1 for #486, +1 for #500, +1 for #480, +1 for #517, +1 for #515, +1 for #529
+  'desktop/smoke-features.js': 1446, // #469 + #464 + #471 + #472 + #458 + #476 combined (measured), +2 for #491, +1 for #487, +1 for #478, +1 for #486, +1 for #500, +1 for #480, +1 for #517, +1 for #515, +1 for #529, +1 for #532
   'extension/background.js': 1113, // #462/#467/#464 + #468 + #459 combined (measured), +2 for #495
   'desktop/mcp.js': 602, // +1 for #480 (required fields of the vault), +1 for #517
   'desktop/main/smoke.js': 947, // measured after merging main into #455 (#470/#471/#472), +2 for #507, +5 for #519, +2 for #435, +2 for #512, +3 for #526
   'extension/core/ui-item.js': 900,
-  'extension/core/filevault.js': 823, // +11 for #435 (key change within the same generation, refusal code), +12 for #521 (check in key-proof.js, own proof before saving)
+  'extension/core/filevault.js': 830, // +11 for #435 (key change within the same generation, refusal code), +12 for #521 (check in key-proof.js, own proof before saving), +7 for #523 (merge checked before it is written)
   'scripts/extension-smoke.mjs': 854, // #458 + #476 + popup-url + #459 + #463 + #502 + smoke-limit cleanup combined (measured), +3 for #495, +2 for #509
 };
 const posixRel = (p) => relative(root, p).replace(/\\/g, '/');

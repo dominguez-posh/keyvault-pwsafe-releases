@@ -70,7 +70,7 @@ export const filesApi = {
     await api.verifyPin(String(pin || ''));
     pinGuard.consume(); // the PIN confirmed this step – it opens nothing afterwards
     const { name, passkeys } = await older().passkeys(String(token || ''), RP_ID);
-    if (!passkeys.length) throw new Error(t('Für diese App ist kein Passkey registriert'));
+    if (!passkeys.length) throw new Error(t('In diesem älteren Stand hat kein Admin des hier bekannten Stands einen Passkey für diese App.')); // #527
     const prf = await passkeyCeremony({ mode: 'evaluate', containerName: name, passkeys, autoStart: !smokeTest });
     return older().unlock(String(token || ''), { credentialId: prf.credentialId, prfOutput: prf.prfOutput });
   },
@@ -124,18 +124,27 @@ export const filesApi = {
     changed();
     return r;
   },
-  async enableProtection(containerId, { password, passkeyLabel }) {
+  async enableProtection(containerId, { password, passkeyLabel, passkeyOwner }) {
     await requireFeature(containerId, 'protection');
     const c = await vault.container(containerId);
-    const passkey = passkeyLabel ? await registerPasskey(c.name, passkeyLabel) : null;
+    // passkeyOwner: name left at its default, it then says what was registered (#531).
+    const owner = typeof passkeyOwner === 'string' && passkeyOwner ? passkeyOwner : undefined;
+    const passkey = passkeyLabel || owner ? await registerPasskey(c.name, passkeyLabel || null, [], undefined, { owner }) : null;
     const r = await vault.enableProtection(containerId, { password, passkey }, (done, total) => send({ type: 'progress', done, total }));
     changed();
     return r;
   },
   updateProtection: (containerId, op) => vault.updateProtection(containerId, op),
-  async addContainerPasskey(containerId, label) {
+  /**
+   * label: chosen name, or null with owner: the name then says what was registered (#531). attachment/hints:
+   * 'cross-platform' + ['security-key'] for the FIDO step of the personal vault.
+   */
+  async addContainerPasskey(containerId, label, { owner, attachment, hints } = {}) {
     const { c, info } = await protectionCtx(containerId);
-    const passkey = await registerPasskey(c.name, label, info.passkeys.map((p) => p.credentialId));
+    const clean = (v) => (typeof v === 'string' && v ? v : undefined);
+    const passkey = await registerPasskey(c.name, clean(label), info.passkeys.map((p) => p.credentialId),
+      attachment === 'cross-platform' || attachment === 'platform' ? attachment : undefined,
+      { owner: clean(owner), hints: Array.isArray(hints) ? hints.filter((x) => x === 'security-key' || x === 'client-device' || x === 'hybrid') : undefined });
     return vault.updateProtection(containerId, { type: 'addPasskey', passkey });
   },
   disableProtection: async (containerId) => {

@@ -370,3 +370,9 @@ bei jedem Passwortmanager – nicht.
   Keevault oder Entra hängt.
 - **Noch offen:** externer Penetrationstest, unabhängiges Code-Review, öffentlich vertrauenswürdiges Code-Signing,
   Schlüsselwechsel bei zusätzlich geschützten Key-Vault-Tresoren. Wir dokumentieren den Stand hier offen.
+
+## Schwachstellen und Vorfälle melden
+
+Wie du eine Schwachstelle meldest, steht in [SECURITY.md](../SECURITY.md). Wie wir eine Meldung intern bewerten und
+wer bei einer aktiv ausgenutzten Schwachstelle oder einem schwerwiegenden Vorfall an die Behörden meldet, beschreibt
+[SICHERHEITSMELDUNGEN.md](SICHERHEITSMELDUNGEN.md).

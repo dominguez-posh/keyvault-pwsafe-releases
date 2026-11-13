@@ -1,17 +1,16 @@
 import { h, icon, iconButton, setChildren, toast, avatar, confirmDialog, modal, formatDateTime } from '../core/dom.js';
-import { itemDetail, itemForm, generatorPanel } from '../core/ui-item.js';
-import { DEFAULT_OPTIONS } from '../core/generator.js';
 import { itemMatchesHost, urlScore, pageOrigin } from '../core/match.js';
 import { faviconToDataUrl } from '../core/image.js';
 import { itemHosts, resolveLogin } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
-import { call, copy, unlockError } from '../lib/api.js';
+import { call, copy } from '../lib/api.js';
 import { buildItemLink } from '../core/links.js';
 import { sharedNames, vaultChoiceLabel } from '../core/session-meta.js';
 import { vaultDot } from '../core/ui-vault.js';
-import { linkedAssetsDialog, moveDialog, movePasskeyDialog } from './item-move.js';
+import { itemUi, linkedAssetsDialog, moveDialog, movePasskeyDialog, qrDecoder, warmUp } from './lazy.js';
 import { openWebUrl } from './open-url.js';
 import { errorView, refreshingNote, showLoading } from './loading.js';
+import { lockedViews, lockedWithPin, rememberState } from './locked.js';
 import { getSettings } from '../lib/settings.js';
 
 /** Links from an entry: only http(s), anything else is refused with a message (open-url.js). */
@@ -19,6 +18,10 @@ const openEntryUrl = (url) => openWebUrl(url, { open: (u) => chrome.tabs.create(
 
 /** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
 const usableItem = async (containerId, id) => resolveLogin(await call('item', { containerId, id }), (c, i) => call('item', { containerId: c, id: i }));
+
+// #530: when the popup got where on its way to the list (ms since the page started), for the smoke test's warm start.
+const kvMarks = { module: Math.round(performance.now()) };
+window.kvMarks = kvMarks;
 
 const view = document.getElementById('view');
 const topActions = document.getElementById('top-actions');
@@ -29,7 +32,6 @@ let host = null;
 let items = [];
 let listTab = null;
 let query = '';
-let unlocking = false; // #508: an unlock with the PIN is running (the busy button stays)
 // How well each entry of this website fits the page path (urlScore) – loaded for the few matching entries only.
 const siteScores = new Map();
 const scoreKey = (s) => `${s.containerId}/${s.id}`;
@@ -39,10 +41,17 @@ const containerName = (id) => st?.containers.find((c) => c.id === id)?.name || '
 const choiceName = (c) => vaultChoiceLabel(c, sharedNames(st.containers));
 const writableContainers = () => st.containers.filter((c) => c.access?.write !== false && !c.error && !c.locked).map((c) => ({ id: c.id, name: choiceName(c) }));
 
+// #533: the list is on screen (renderList); any other view (entry, form, generator, locked) clears it.
+let onList = false;
 function setView(...children) {
+  onList = false;
   view.className = 'view';
   setChildren(view, ...children);
 }
+
+// #534: when the PIN field was on the page and focused – drawn by early.js already, or now.
+const pinReady = () => { kvMarks.pin ??= window.kvPinAt ?? Math.round(performance.now()); };
+const { renderLocked, renderOffline, confirm, unlocking } = lockedViews({ setView, state: () => st, reload, load, pinReady });
 
 function renderTop() {
   const buttons = [];
@@ -70,7 +79,8 @@ function renderTop() {
 let loadToken = 0;
 window.kvLoadTimes = {};
 
-async function reload({ step } = {}) {
+/** keepView (#533): a fresh list after the cached one only updates the data when an entry was opened meanwhile. */
+async function reload({ step, keepView = false } = {}) {
   const my = loadToken;
   const started = performance.now();
   const next = await call('state');
@@ -78,8 +88,10 @@ async function reload({ step } = {}) {
   window.kvLoadTimes.state = Math.round(performance.now() - started);
   st = next;
   setLanguage(st.settings.language);
+  rememberState(st); // #534: what the next popup draws ahead
   renderTop();
-  if (!st.open && unlocking) return undefined; // #508: an app event mid-unlock keeps the busy button (no fresh, empty form)
+  if (!st.open && unlocking()) return undefined; // #508: an app event mid-unlock keeps the busy button (no fresh, empty form)
+  if (confirm(st)) return undefined; // #534: the PIN view drawn ahead stays, a held PIN goes to the app now
   if (!st.open) return st.demo || st.desktop?.connected ? renderLocked() : renderOffline();
   step?.(t('Lade Tresore …'));
   const listStarted = performance.now();
@@ -95,6 +107,7 @@ async function reload({ step } = {}) {
   items = list;
   host = ctx?.host || null;
   if (!listTab) listTab = ctx?.matches?.length ? 'site' : 'all';
+  if (keepView && !onList) return undefined;
   return renderList();
 }
 
@@ -102,16 +115,18 @@ async function reload({ step } = {}) {
  * #495: opening the popup. The loading state is there at once (popup.html); the last list the worker holds is shown
  * marked "wird aktualisiert" while the fresh state loads; an error ends in a readable state with "Erneut versuchen".
  */
-async function load() {
+async function load({ peek, pending = false } = {}) {
   const my = ++loadToken;
-  const loading = showLoading(view, { onRetry: load });
+  // #534: with the PIN view drawn ahead, no loading state over it.
+  const loading = pending ? { step: () => {}, done: () => {} } : showLoading(view, { onRetry: load });
   try {
     const started = performance.now();
-    const cached = await call('peek').catch(() => null);
+    const cached = await (peek || call('peek')).catch(() => null);
     if (my !== loadToken) return;
     window.kvLoadTimes = { peek: Math.round(performance.now() - started), cached: !!cached };
+    kvMarks.peek = Math.round(performance.now());
     if (cached) showCached(cached);
-    await reload({ step: cached ? null : loading.step });
+    await reload({ step: cached ? null : loading.step, keepView: !!cached });
   } catch (e) {
     if (my === loadToken) setView(errorView(e.message, load));
   } finally {
@@ -130,63 +145,6 @@ function showCached({ state: known, items: list }) {
   renderList();
   listTab = chosen;
   view.prepend(refreshingNote());
-}
-
-/** The extension works only through the running app. */
-function renderOffline() {
-  const missing = st.desktop?.reason === 'AppMissing';
-  const start = h('button', { class: 'btn primary', onclick: async () => {
-    start.disabled = true;
-    start.replaceChildren(h('span', { class: 'spinner' }), t('Keevault startet …'));
-    // The popup reloads by itself once the app is reachable (state:changed).
-    await call('unlock').catch((e) => toast(e.message, 'error'));
-  } }, icon('unlock'), t('Keevault starten'));
-  setView(h('div', { class: 'center' }, icon('shield', 40), h('h2', {}, missing ? t('Keevault-App fehlt') : t('Keevault-App läuft nicht')),
-    h('p', { class: 'muted' }, missing
-      ? t('Die Erweiterung arbeitet nur zusammen mit der Desktop-App. Installiere Keevault auf diesem Computer.')
-      : t('Die Erweiterung arbeitet nur zusammen mit der Desktop-App. Starte Keevault – danach geht es hier sofort weiter.')),
-    missing ? h('a', { class: 'btn primary', href: 'https://keevault.de/download.html', target: '_blank', rel: 'noopener' }, t('Keevault herunterladen')) : start,
-    // #495: after starting or installing the app by hand, without closing the popup.
-    h('button', { type: 'button', class: 'btn load-retry', onclick: load }, icon('refresh', 15), t('Erneut versuchen'))));
-}
-
-function renderLocked(error) {
-  // With an app PIN the vault unlocks right here (silent sign-in in the app, no window).
-  const pinSet = !st.demo && !!st.desktop?.pinSet;
-  const pin = pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), 'aria-label': t('PIN') }) : null;
-  // #508: unlocking can take a while (silent sign-in, then the vaults): the button says what is going on, the field is
-  // locked meanwhile; a wrong PIN or a timeout comes back as a clear message above the field.
-  const here = pinSet || st.demo;
-  const busy = (label) => button.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), label);
-  const button = h('button', { class: 'btn primary', 'aria-live': 'polite', onclick: async () => {
-    if (pin && !pin.value) return pin.focus();
-    button.disabled = true;
-    if (pin) pin.disabled = true;
-    if (here) busy(t('Entsperre …'));
-    unlocking = true;
-    try {
-      if (pin) await call('unlockPin', { pin: pin.value });
-      else await call('unlock');
-      unlocking = false;
-      if (here) {
-        busy(t('Lade Tresore …'));
-        await reload();
-      }
-    } catch (e) {
-      unlocking = false;
-      renderLocked(unlockError(e));
-    }
-    return undefined;
-  } }, icon('unlock'), here ? t('Entsperren') : t('In der Desktop-App entsperren'));
-  pin?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') button.click();
-  });
-  setView(h('div', { class: 'center' }, icon('lock', 40), h('h2', {}, t('Tresor gesperrt')),
-    h('p', { class: 'muted' }, pinSet ? t('PIN eingeben – Keevault entsperrt im Hintergrund, ohne Fenster.') : t('Entsperre Keevault in der Desktop-App – danach geht es hier sofort weiter.')),
-    error ? h('div', { class: 'notice error' }, error) : null,
-    pin,
-    button));
-  setTimeout(() => pin?.focus(), 0);
 }
 
 function matchesSite(s) {
@@ -240,6 +198,8 @@ function renderList() {
         listTab === 'site' && !query ? t('Keine Einträge für {host}', { host: host || t('diese Seite') }) : t('Keine Treffer')));
       return;
     }
+    kvMarks.list ??= Math.round(performance.now());
+    warmUp(); // #530: the entry views load once the list is there
     listEl.replaceChildren(...rows.map((s) => h('li', { class: 'row-item', onclick: () => renderDetail(s), oncontextmenu: (e) => entryMenu(e, s) },
       avatar(s.title, 'avatar', s.icon),
       h('div', { class: 'row-text' },
@@ -283,6 +243,7 @@ function renderList() {
     h('div', { class: 'list-wrap' }, listEl),
     status,
   );
+  onList = true;
   if (!query) search.focus();
 }
 
@@ -401,6 +362,7 @@ async function renderDetail(s, fresh = false) {
   // Assets that use this login (#464): the button only when there are some, like in the app.
   const hasAssets = st.canAssets && item.type === 'login' && (await call('linkedEntries', { containerId: item.containerId, id: item.id }).then((e) => e.length > 0, () => false));
   const mayWrite = writableContainers().some((c) => c.id === item.containerId);
+  const { itemDetail } = await itemUi();
   const detail = itemDetail(shown, {
     copy,
     ...hoverCtx(item, hasAssets, mayWrite),
@@ -487,6 +449,7 @@ async function showVersion(item, v) {
     modal(title, h('p', { class: 'muted' }, t('Diese Version ist nicht mehr lesbar: Ein Schlüsselwechsel hat ältere Versionen gesperrt. Sie bleibt nur für das Protokoll erhalten.')), [{ label: t('Schließen') }]);
     return;
   }
+  const { itemDetail } = await itemUi();
   modal(title, itemDetail(old, { copy, containerName, openUrl: openEntryUrl }), [{ label: t('Schließen') }]);
 }
 
@@ -507,6 +470,7 @@ async function scanVisibleTab() {
     el.onerror = () => reject(new Error(t('Bildschirmfoto fehlgeschlagen')));
     el.src = dataUrl;
   });
+  const jsQR = await qrDecoder(); // #530: loaded on first use
   const canvas = document.createElement('canvas');
   const ctx2d = canvas.getContext('2d', { willReadFrequently: true });
   for (const scale of [1, 0.5]) {
@@ -514,7 +478,7 @@ async function scanVisibleTab() {
     canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
     ctx2d.drawImage(img, 0, 0, canvas.width, canvas.height);
     const { data, width, height } = ctx2d.getImageData(0, 0, canvas.width, canvas.height);
-    const found = globalThis.jsQR?.(data, width, height, { inversionAttempts: 'attemptBoth' });
+    const found = jsQR(data, width, height, { inversionAttempts: 'attemptBoth' });
     if (found?.data) return found.data;
   }
   return '';
@@ -522,6 +486,7 @@ async function scanVisibleTab() {
 
 async function renderEdit(item) {
   const isNew = !item;
+  const { itemForm } = await itemUi();
   const writable = writableContainers();
   // New entry from a website: its favicon becomes the icon (from the site itself, no icon service).
   const start = item || { type: 'login', urls: tab?.url && /^https?:/.test(tab.url) ? [new URL(tab.url).origin] : [], title: host || '',
@@ -547,7 +512,8 @@ async function renderEdit(item) {
   setView(backButton(() => (item ? renderDetail(item) : renderList())), h('h2', {}, isNew ? t('Neuer Eintrag') : t('Bearbeiten')), form);
 }
 
-function renderGenerator() {
+async function renderGenerator() {
+  const [{ generatorPanel }, { DEFAULT_OPTIONS }] = await Promise.all([itemUi(), import('../core/generator.js')]);
   let current = '';
   const panel = generatorPanel({ ...DEFAULT_OPTIONS }, (pw) => {
     current = pw;
@@ -562,10 +528,22 @@ chrome.runtime.onMessage.addListener((m) => {
 });
 
 (async () => {
-  setLanguage((await getSettings().catch(() => ({}))).language || 'auto');
-  [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // #530: the last list is asked for at once, beside the settings and the tab, not one after the other.
+  const peek = call('peek');
+  peek.catch(() => {});
+  const rest = Promise.all([getSettings().catch(() => ({})), chrome.tabs.query({ active: true, currentWindow: true })]);
+  // #534: locked with a PIN last time – the PIN field comes with the first paint, the app is asked meanwhile.
+  const last = await lockedWithPin();
+  if (last) {
+    setLanguage(last.language);
+    renderTop();
+    renderLocked(null, { pending: true });
+  }
+  const [settings, tabs] = await rest;
+  setLanguage(settings.language || 'auto');
+  [tab] = tabs;
   try {
-    await load();
+    await load({ peek, pending: !!last });
     // Just saved a passkey on a website: continue with that entry in edit mode (title, folder, logo, …).
     const { editAfter } = await chrome.storage.session.get('editAfter').catch(() => ({}));
     if (editAfter && Date.now() - editAfter.at < 60_000 && st?.open) {

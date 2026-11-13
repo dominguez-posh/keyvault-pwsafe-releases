@@ -43,6 +43,6 @@ test('every verifyPin in the main process is followed by consume or is the unloc
 test('leaving to the personal vault refuses when the settings of the source vault can\'t be read', () => {
   const rules = src('main/vault-rules.js');
   const body = rules.split('export async function checkLeaveToPersonal')[1].split('\n}\n')[0];
-  assert.doesNotMatch(body, /rulesOf\(fromId\)\.catch/);
-  assert.match(body, /const rules = await rulesOf\(fromId\);/);
+  assert.doesNotMatch(body, /RulesOf\(fromId\)\.catch/);
+  assert.match(body, /const rules = await strictRulesOf\(fromId\);/); // #525: the read itself throws when it fails
 });

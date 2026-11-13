@@ -148,15 +148,27 @@ export async function personalWizard() {
         buttons(next),
       ];
     } else if (s.step === 4) {
+      // #531: the step shows what is stored already (also what was added in the protection dialog) and registers a
+      // security key itself, not whatever the system offers first (Windows Hello).
+      const passkeys = await fidoState(s.id);
+      if (s.step !== 4) return; // moved on while reading
+      const has = passkeys.length > 0;
       content = [
         h('p', {}, t('Optional: Ein FIDO-Stick (z. B. YubiKey) kann den Tresor zusätzlich zum Masterpasswort entsperren – praktisch auf neuen Geräten. Der Stick muss „PRF“ (hmac-secret) unterstützen.')),
+        fidoNotice(passkeys),
         buttons(
           btn(t('Überspringen'), () => go(5)),
-          btn(t('FIDO-Stick hinzufügen …'), async () => {
+          btn(has ? t('Weiteren FIDO-Stick hinzufügen …') : t('FIDO-Stick hinzufügen …'), async () => {
+            await protectCtx.addSecurityKey(s.id);
+            toast(t('FIDO-Stick hinzugefügt'));
+            reloadAll().catch((e) => toast(e.message, 'error'));
+            if (s.step === 4) draw();
+          }, { primary: !has }),
+          btn(t('Schutz verwalten …'), async () => {
             const c = st.containers.find((x) => x.id === s.id);
-            if (c) await manageDialog(c, protectCtx, () => reloadAll());
-          }, { primary: true }),
-          btn(t('Weiter'), () => go(5))),
+            if (c) await manageDialog(c, protectCtx, () => { reloadAll().catch(() => null); if (s.step === 4) draw(); });
+          }),
+          btn(t('Weiter'), () => go(5), { primary: has })),
       ];
     } else {
       content = [
@@ -170,6 +182,22 @@ export async function personalWizard() {
   };
   draw();
   return closed;
+}
+
+/** The passkeys this app can unlock the vault with (#531): each was checked for PRF when it was added. */
+async function fidoState(id) {
+  if (!id) return [];
+  const info = await protectCtx.info(id).catch(() => null);
+  return (info?.methods?.passkeys || []).filter((p) => p.usable);
+}
+
+/** What the FIDO step says about them: a security key by name, otherwise the stored passkeys (older ones name no kind). */
+function fidoNotice(passkeys) {
+  if (!passkeys.length) return h('p', { class: 'muted small wizard-fido', 'data-fido': 'none' }, t('Noch kein FIDO-Stick hinterlegt.'));
+  const keys = passkeys.filter((p) => p.device === 'key');
+  const names = (list) => list.map((p) => p.label || t('Passkey')).join(', ');
+  if (keys.length) return h('div', { class: 'notice ok wizard-fido', 'data-fido': 'key' }, icon('check', 16), ' ', t('FIDO-Stick hinterlegt: {names}. Er entsperrt den Tresor zusätzlich zum Masterpasswort.', { names: names(keys) }));
+  return h('div', { class: 'notice info wizard-fido', 'data-fido': 'passkey' }, t('Hinterlegt: {names}. Entsperrt den Tresor bereits zusätzlich zum Masterpasswort; ein FIDO-Stick ist weiter möglich.', { names: names(passkeys) }));
 }
 
 // Smoke runs show no wizards by themselves; the checks of the first start (desktop/smoke-first-start.js) switch them on.

@@ -3,6 +3,8 @@
 // PIN and no answer in time come back as clear messages. Runs against the imitated, locked app with a PIN of
 // extension-smoke-pin.mjs; its unlockPin answers slowly, so the busy state can be seen. Leaves the app open.
 
+import { checkPinAtOnce } from './extension-smoke-pinfast.mjs';
+
 export const UNLOCK_PIN = '1357';
 
 /** The imitated app's unlock: 1.5 s, then a wrong PIN, a timeout (PIN "0000") or open with one vault. */
@@ -34,6 +36,9 @@ const lockView = `JSON.stringify((() => {
 
 export async function checkPopupUnlockStatus({ send, evaluate, open, waitFor, check, sleep, ext, workerSession }) {
   check(await evaluate(workerSession, slowUnlock), '#508: Nachbildung der App nicht gefunden');
+  // #534: the PIN field at once (the locked popup of the PIN part left "locked with PIN" as the last known state).
+  await checkPinAtOnce({ send, evaluate, waitFor, check, sleep, ext, workerSession });
+  await evaluate(workerSession, '(globalThis.__kvApp.unlockPins = [], true)');
   const popup = await open(`${ext}/popup/popup.html`);
   const read = async () => JSON.parse((await evaluate(popup.sessionId, lockView)) || '{}');
   const submit = (pin) => evaluate(popup.sessionId, `(() => {

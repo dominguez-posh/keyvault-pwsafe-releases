@@ -100,7 +100,8 @@ export class VaultSession {
    * trash(id), restore(id, itemId), purge(id, itemId), history(id, itemId), getVersion(id, itemId, v),
    * passkeyCandidates(rpId), protectionInfo(id, rpId), unlock(id, params), lock(id), updateKeyring(id, op)
    */
-  constructor({ getToken, store, fetch: fetchImpl, actor, viewer = () => '', adapters = {}, multiTenant = false, onBusy = null, onProgress = null }) {
+  constructor({ getToken, store, fetch: fetchImpl, actor, viewer = () => '', adapters = {}, multiTenant = false, onBusy = null, onProgress = null, onKeyChange = null }) {
+    this.onKeyChange = onKeyChange; // (containerId): the container key changed, here or on another device (#402)
     this.viewer = async () => String((await viewer()) || '');
     // onProgress(containerId, done, total): listing progress of a full refresh (total = size of the last index,
     // 0 when unknown) – the desktop shows it as a progress card for big vaults.

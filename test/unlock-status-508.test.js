@@ -19,11 +19,11 @@ test('#508: the app request times out with the name TimeoutError', () => {
 });
 
 test('#508: popup, window and bar show "Entsperre …" and lock the field while unlocking', () => {
-  for (const file of ['popup/popup.js', 'prompt/prompt.js', 'pin/pin.js']) {
+  for (const file of ['popup/locked.js', 'prompt/prompt.js', 'pin/pin.js']) {
     const src = read(file);
     assert.match(src, /t\('Entsperre …'\)/, file);
     assert.match(src, /pin\.disabled = true/, file);
     assert.match(src, /unlockError\(/, file);
   }
-  for (const file of ['popup/popup.js', 'prompt/prompt.js']) assert.match(read(file), /t\('Lade Tresore …'\)/, file);
+  for (const file of ['popup/locked.js', 'prompt/prompt.js']) assert.match(read(file), /t\('Lade Tresore …'\)/, file);
 });

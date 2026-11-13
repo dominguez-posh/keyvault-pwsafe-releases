@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import * as P from '../extension/core/protect.js';
 import { FileVault, parseFile } from '../extension/core/filevault.js';
 import { b64uEncode, randomBytes } from '../extension/core/util.js';
-P.KEY_CHANGE.enabled = true; // switched off in the app (protect.js); these tests run with it on, one with it off
+P.KEY_CHANGE.enabled = true; // switched on in the app since 0.9.34 (protect.js); one test runs with it off
 
 function memoryFile() {
   let text = null;
@@ -80,7 +80,8 @@ test('file: old recovery key, old password and an old file version do not open t
   const oldKey = (await P.unlockWithCode(oldDoc.keyring, oldRk)).ck;
   const stale = new FileVault({ read: async () => file.text, write: async () => {} });
   await stale.load();
-  await assert.rejects(stale.unlock(oldKey), P.UnlockError);
+  // Konrad 11.11.: the message after a recognised change points to the new secrets, never to the old ones.
+  await assert.rejects(stale.unlock(oldKey), (e) => e instanceof P.UnlockError && /neuen Masterpasswort/.test(e.message) && !/bisherig|alten|früher/.test(e.message));
   assert.equal(file.text.includes('pw-secret'), false);
   const newDoc = parseFile(file.text);
   for (const entry of Object.values(newDoc.items)) await assert.rejects(oldKey.decrypt(entry.data, `${newDoc.id}/${Object.keys(newDoc.items)[0]}`));
@@ -253,4 +254,54 @@ test('file: a change of another device between reading and writing is not thrown
   // The second key change on a device that still holds the old key finds the new generation and stops.
   await assert.rejects(rival.rekey('rival-password-3'), /gesperrt|gewechselt/);
   assert.equal(P.keyVersionOf(parseFile(file.text).keyring), 2, 'only one change took effect');
+});
+
+test('#402 switched on (Lucas, 2026-11-12): the flag ships on; after removing a master password the dialogs say a new one needs the key change', async () => {
+  const { readFileSync } = await import('node:fs');
+  const protect = readFileSync(new URL('../extension/core/protect.js', import.meta.url), 'utf8');
+  assert.ok(protect.includes('export const KEY_CHANGE = { enabled: true };'), 'the key change ships switched on');
+  // pwRetired: no new password without a key change, also not the own password of an invited person (#441).
+  const { keyring, ck } = await P.setupKeyring('c1', { password: 'old-password-1', passkey: { credentialId: 'a', rpId: 'x', prfSalt: 's', prfOutput: b64uEncode(randomBytes(32)) } }, 'alice');
+  const retired = P.removeEntry(keyring, keyring.entries.find((e) => e.type === 'password').id);
+  assert.equal(P.describeKeyring(retired, 'x').passwordRetired, true);
+  for (const add of [false, true]) await assert.rejects(P.applyKeyringOp(retired, ck, { type: 'setPassword', password: 'plain-password-3', add }), /Schlüsselwechsel/);
+  const back = await P.rekeyKeyring(retired, ck, { password: 'new-password-2' });
+  assert.equal(P.describeKeyring(back.keyring, 'x').passwordRetired, false, 'the key change brings passwords back');
+  // The dialogs explain it: removal confirmations, a hint in the protection dialog, the invitation offers a passkey only.
+  const ui = readFileSync(new URL('../extension/core/ui-protect.js', import.meta.url), 'utf8');
+  assert.ok(ui.includes("'data-pw-retired': 'manage'") && ui.includes('m.keyChange && m.passwordRetired ?'));
+  assert.equal(ui.split('+ retireNote').length - 1, 2, 'both removal confirmations name the consequence');
+  assert.ok(ui.includes("noPassword: !!(methods?.keyChange && methods.passwordRetired)") && ui.includes("'data-pw-retired': 'invite'"));
+});
+
+test('#402 Konrad 12.11.: a password removed by an app up to 0.9.28 (no pwRetired) still needs the key change for a new one', async () => {
+  const { keyring, ck } = await P.setupKeyring('c1', { password: 'old-password-1', passkey: { credentialId: 'a', rpId: 'x', prfSalt: 's', prfOutput: b64uEncode(randomBytes(32)) } }, 'alice');
+  const { pwRetired: _flag, ...legacy } = P.removeEntry(keyring, keyring.entries.find((e) => e.type === 'password').id);
+  assert.equal(legacy.pwRetired, undefined, 'as written by 0.9.28');
+  assert.equal(P.describeKeyring(legacy, 'x').passwordNeedsRekey, true);
+  await assert.rejects(P.applyKeyringOp(legacy, ck, { type: 'setPassword', password: 'plain-password-3' }), /Schlüsselwechsel/);
+  const back = await P.rekeyKeyring(legacy, ck, { password: 'new-password-2' });
+  assert.equal(P.describeKeyring(back.keyring, 'x').passwordNeedsRekey, false, 'after the change a password is there again');
+  // A vault that never lost anything sets its first password as before; the invited person's own password stays possible.
+  const { keyring: fresh, ck: freshCk } = await P.setupKeyring('c2', { passkey: { credentialId: 'b', rpId: 'x', prfSalt: 's', prfOutput: b64uEncode(randomBytes(32)) } }, 'alice');
+  assert.equal(P.describeKeyring(fresh, 'x').passwordNeedsRekey, false);
+  await P.applyKeyringOp(fresh, freshCk, { type: 'setPassword', password: 'first-password-1' });
+  await P.applyKeyringOp(legacy, ck, { type: 'setPassword', password: 'invitee-password-1', add: true });
+  // The protection dialog leads "Masterpasswort festlegen" through the key change in that case.
+  const { readFileSync } = await import('node:fs');
+  const ui = readFileSync(new URL('../extension/core/ui-protect.js', import.meta.url), 'utf8');
+  assert.ok(ui.includes('m.keyChange && (m.password || m.passwordNeedsRekey)) return rekeyDialog('));
+});
+
+test('#402: the key change dialog says before that passkeys and FIDO keys must be added again, and can be cancelled', async () => {
+  const { readFileSync } = await import('node:fs');
+  const ui = readFileSync(new URL('../extension/core/ui-protect.js', import.meta.url), 'utf8');
+  const start = ui.indexOf('export async function rekeyDialog(');
+  const body = ui.slice(start, ui.indexOf('\n}', start));
+  const warn = body.indexOf("methods.passkeys.length ? h('div', { 'data-rekey': 'passkeys-lost' }");
+  assert.ok(warn > 0 && body.includes("t('Danach musst du deine Passkeys und FIDO-Sticks neu hinzufügen.')"), 'warning only when passkeys end');
+  assert.ok(warn < body.indexOf("t('Neues Masterpasswort')"), 'said before the new password is entered');
+  assert.ok(body.indexOf("{ label: t('Abbrechen') }") < body.indexOf("type: 'rekey'"), 'cancel comes without a change');
+  const { en } = await import('../extension/core/i18n-en.js').then((m) => ({ en: m.default || m.EN || m }));
+  assert.ok(JSON.stringify(en).includes('add your passkeys and FIDO keys again'), 'English text');
 });

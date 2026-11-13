@@ -295,7 +295,8 @@ export async function vaultWizard({ intro = true } = {}) {
     const members = access.filter((a) => a.principal && !breakGlass.some((b) => b.id === a.principal.id)).map((a) => ({ principal: a.principal, level: a.level }))
       .concat(breakGlass.map((p) => ({ principal: p, level: 'manage' })));
     if (bgRemember.checked && x.tenantId) {
-      st.settings = await call('updateSettings', { breakGlass: { ...(st.settings.breakGlass || {}), [x.tenantId]: breakGlass.map((p) => ({ ...p })) } });
+      const settings = await call('updateSettings', { breakGlass: { ...(st.settings.breakGlass || {}), [x.tenantId]: breakGlass.map((p) => ({ ...p })) } });
+      st.settings = settings; // #535: assigned after the wait (a reload may replace st)
     }
     const guests = access.filter((a) => a.email).map((a) => ({ email: a.email, level: a.level }));
     let r;

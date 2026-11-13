@@ -7,8 +7,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { floorOf, mergeFloors } from '../extension/core/rollback.js';
-import { acceptOlder, describeOlder } from '../extension/core/rollback-accept.js';
-import { secureCredentials } from '../extension/core/members.js';
+import { acceptOlder, adminPasskeys, describeOlder } from '../extension/core/rollback-accept.js';
 import { parseFile } from '../extension/core/filevault.js';
 import { t } from '../extension/core/i18n.js';
 import { fileIo } from './files.js';
@@ -92,11 +91,15 @@ export class OlderStateAcceptance {
     return { e, text, floor };
   }
 
-  /** Passkeys that can open the older state (for the ceremony). */
+  /**
+   * Passkeys for the ceremony: only those of the older state that belong to an admin of the known state (#527) – with
+   * several accounts on a device, another member's passkey could answer and the acceptance would fail. acceptOlder
+   * still checks the role itself.
+   */
   async passkeys(token, rpId) {
     const rec = this.check(token);
-    const { text } = await this.same(rec);
-    return { name: rec.name, passkeys: secureCredentials(parseFile(text).keyring, rpId) };
+    const { text, floor } = await this.same(rec);
+    return { name: rec.name, passkeys: await adminPasskeys(text, floor, rpId) };
   }
 
   /** After PIN and passkey: builds the accepted state (not written). → { dropped, lost, keyVersion } */

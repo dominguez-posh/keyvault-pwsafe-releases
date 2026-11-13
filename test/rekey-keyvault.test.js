@@ -1,9 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { unlockKeyring, KEY_CHANGE } from '../extension/core/protect.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { VaultSession, MemoryStore } from '../extension/core/session.js';
+import { OfflineMirror } from '../desktop/offline.js';
 
-KEY_CHANGE.enabled = true; // switched off in the app, tested switched on
+KEY_CHANGE.enabled = true; // switched on in the app since 0.9.34; one test runs with it off
 import { setup } from './fixtures/fake-keyvault.js';
 
 // Key change of a protected Key Vault container (#402).
@@ -147,5 +151,60 @@ test('switched off: the Key Vault change is refused and nothing is touched', asy
     assert.match(r.recoveryKey, /^RK-/);
   } finally {
     KEY_CHANGE.enabled = true;
+  }
+});
+
+test('#402 offline mirror: after a key change, here or seen from another device, nothing recorded under the old key stays', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'kv-rekey-mirror-'));
+  try {
+    const { kv, session: a } = await setup();
+    const cid = 'kv-team.vault.azure.net';
+    const mirrored = async (name) => {
+      const m = new OfflineMirror({ dir: join(dir, name), protect: (b) => b, unprotect: (b) => b });
+      await m.unlockKey('1234');
+      const s = new VaultSession({
+        getToken: async (scope) => `token-${scope}`, store: new MemoryStore(), fetch: m.record(kv.fetch), actor: () => `${name}@contoso.com`,
+        onKeyChange: (id) => m.forgetVault(id),
+      });
+      await s.refreshContainers({ configured: [{ name: 'Team', vaultUrl: 'kv-team' }], discover: false });
+      return { m, s };
+    };
+    const { recoveryKey: oldRk } = await a.enableProtection(cid, { password: 'master-password-1' });
+    const saved = await a.saveItem(cid, { title: 'X', password: 'p1' });
+    const oldKey = (await unlockKeyring(JSON.parse(kv.secrets.get('pws-keyring').at(-1).value), { code: oldRk })).ck;
+    // What a mirror holds that the old key still opens: keyrings it unlocks, sealed secrets it decrypts.
+    const openWithOld = async (m) => {
+      const hits = [];
+      for (const [url, e] of m.entries) {
+        const name = new URL(url).pathname.split('/')[2];
+        const value = JSON.parse(e.body).value;
+        if (typeof value !== 'string') continue;
+        if (name === 'pws-keyring' && await unlockKeyring(JSON.parse(value), { code: oldRk }).then(() => true, () => false)) hits.push(url);
+        if (value.startsWith('{"kvpwsafe-sealed"') && await oldKey.decrypt(JSON.parse(value).data || '', `${cid}/${name}`).then(() => true, () => false)) hits.push(url);
+      }
+      return hits;
+    };
+
+    // Device B (mirror on) has read the entry and the keyring under the old key; device C changes the key itself.
+    const b = await mirrored('bob');
+    const c = await mirrored('carol');
+    for (const d of [b, c]) {
+      await d.s.unlockContainer(cid, { password: 'master-password-1' });
+      assert.equal((await d.s.getItem(cid, saved.id)).password, 'p1');
+      assert.ok((await openWithOld(d.m)).length >= 2, 'before the change the mirror holds the keyring and the entry under the old key');
+    }
+    const r = await c.s.updateProtection(cid, { type: 'rekey', password: 'new-password-2' });
+    assert.equal(r.failed.length, 0);
+    assert.deepEqual(await openWithOld(c.m), [], 'own change: the old recovery key opens nothing in the mirror any more');
+
+    // B notices at its next write, locks, and its mirror of this vault is empty until it reads again.
+    await assert.rejects(b.s.saveItem(cid, { title: 'stale', password: 'x' }), { name: 'ContainerLockedError' });
+    assert.deepEqual(await openWithOld(b.m), [], 'seen from another device: nothing under the old key stays');
+    await b.s.unlockContainer(cid, { password: 'new-password-2' });
+    assert.equal((await b.s.getItem(cid, saved.id)).password, 'p1');
+    assert.ok([...b.m.entries.keys()].some((u) => u.includes(`/secrets/${saved.id}`)), 'read again, recorded again');
+    assert.deepEqual(await openWithOld(b.m), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

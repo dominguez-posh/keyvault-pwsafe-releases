@@ -25,6 +25,7 @@ export async function rekeyKeyvault(s, c, password, actor) {
   if (keyring.prev) throw new Error('A key change is still unfinished – unlock the vault to finish it first');
   const r = await rekeyKeyring(keyring, old, { password, keepPrev: true }, actor);
   await s.writeKeyring(c, r.keyring);
+  s.onKeyChange?.(c.id); // what the offline mirror recorded is under the old key
   await s.store.set(`ck:${c.id}`, r.ck.exported);
   s.keys.delete(c.id);
   const failed = await finishKeyChange(s, c, r.ck);
@@ -53,7 +54,7 @@ export async function currentKey(s, containerId, { quiet = false } = {}) {
     await dropStaleKey(s, containerId, keyring);
     seen.delete(containerId);
     if (quiet) return null;
-    throw new ContainerLockedError(t('Der Schlüssel dieses Tresors wurde auf einem anderen Gerät gewechselt – bitte neu entsperren'));
+    throw new ContainerLockedError(t('Der Schlüssel dieses Tresors wurde auf einem anderen Gerät gewechselt – bitte mit dem neuen Masterpasswort oder dem neuen Wiederherstellungsschlüssel entsperren'));
   }
   seen.set(containerId, { key: key.exported, at: Date.now(), generation: keyring ? keyVersionOf(keyring) : 0 });
   return key;
@@ -65,6 +66,7 @@ export async function dropStaleKey(s, containerId, keyring) {
   if (!key || (await keyMatches(keyring, key))) return key;
   await s.store.remove(`ck:${containerId}`);
   s.keys.delete(containerId);
+  s.onKeyChange?.(containerId);
   return null;
 }
 
@@ -134,6 +136,7 @@ export async function finishKeyChange(s, c, ck) {
   await s.writeKeyring(c, finishRekey(keyring));
   // The keyring versions from before hold the old wrappers (old recovery key + such a version = the old key): off too.
   await disableOlder(kv, KEYRING_SECRET, (await kv.getSecret(KEYRING_SECRET)).version);
+  s.onKeyChange?.(c.id); // again: the change itself read the old secrets
   await s.purgeFastIndex(kv);
   await s.dropItemCache(c.id);
   await s.refreshIndex([c.id]);
