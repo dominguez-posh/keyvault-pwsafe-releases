@@ -175,7 +175,7 @@ test('movePasskey across vaults is refused, inside one vault it runs without ask
 test('capabilities: the app reports the new commands; only approved browsers have them', () => {
   assert.deepEqual(ITEM_CAPS, ['history', 'linkedEntries', 'move', 'movePasskey']);
   const src = readFileSync(new URL('../desktop/main/browser.js', import.meta.url), 'utf8');
-  assert.match(src, /APP_CAPS = \['passkeySign', 'copy', \.\.\.ITEM_CAPS\]/);
+  assert.match(src, /APP_CAPS = \['passkeySign', 'copy', 'unlockRequest', 'itemReveal', \.\.\.ITEM_CAPS\]/); // #537 stage 4: unlockRequest
   const dispatch = src.slice(src.indexOf('const bridgeHandlers'));
   assert.match(dispatch, /origin === WINDOWS_ORIGIN \? windowsHandlers : client\?\.origin\?\.startsWith\('mcp:'\) \? mcpHandlers : browserHandlers/);
   for (const file of ['desktop/main/windows-passkeys.js', 'desktop/main/agents.js']) {

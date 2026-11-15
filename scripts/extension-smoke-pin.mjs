@@ -3,9 +3,10 @@
 // the old path was closed to it, so this runs without the demo against an imitated app. It must run before the demo starts:
 // the worker's restart for the demo removes the imitation.
 
-import { checkPinInBar } from './extension-smoke-pinbar.mjs';
+import { checkPinInBar, checkPinBarHello } from './extension-smoke-pinbar.mjs';
 import { checkWarmStart } from './extension-smoke-warm.mjs';
 import { checkPopupUnlockStatus } from './extension-smoke-unlock.mjs';
+import { checkPopupHelloUnlock } from './extension-smoke-hello.mjs';
 import { checkStartButtonCentred, checkButtonCentred } from './extension-smoke-center.mjs';
 
 /**
@@ -63,10 +64,14 @@ export async function checkNoPinInPage({ send, evaluate, attach, open, shadowNod
     await send('Target.closeTarget', { targetId: prompt.targetId }).catch(() => {});
   }
   await send('Target.closeTarget', { targetId: tab.targetId }).catch(() => {});
+  // #537 stage 4: unlocking from the popup with Windows Hello, asked by the app (leaves the app locked).
+  await checkPopupHelloUnlock({ send, evaluate, open, waitFor, check, sleep, ext, workerSession });
   // #508: the popup unlocks the same app with the PIN and says what is going on (leaves the app open).
   await checkPopupUnlockStatus({ send, evaluate, open, waitFor, check, sleep, ext, workerSession });
   // #465: the same imitated app, now open – the PIN in the Keevault tag at the top of the page.
   await checkPinInBar({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession, settle });
+  // #537 live test (Lena): with Windows Hello the bar shows its button above the field, nothing cut off.
+  await checkPinBarHello({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession });
   // #505: warm start – a lost host comes back by itself, and the popup list is there at once.
   await checkWarmStart({ send, evaluate, open, waitFor, check, sleep, ext, workerSession });
 }

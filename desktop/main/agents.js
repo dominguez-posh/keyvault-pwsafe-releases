@@ -1,6 +1,7 @@
 // AI agents (MCP, see ../mcp.js): approving an agent, confirmations for reading, writing and signing in, audit.
 
 import { app, dialog } from 'electron';
+import { normalizeProof } from '../proof.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { t } from '../../extension/core/i18n.js';
@@ -92,7 +93,8 @@ export async function confirmAgentPasskey({ agent, title, username = '', vault: 
   // #439: no PIN set → no passkey is used (the app asks for one); the PIN is typed in this dialog, never by the agent.
   requireUsablePasskeyPin();
   return (await askInApp({
-    pin: passkeyPin.state().required,
+    // #537 2b: "Immer bestätigen" asks for every passkey use, also with the passkey PIN switched off.
+    pin: passkeyPin.state().required || (await (await import('./access.js')).anyStrictVault()),
     kind: 'agent-passkey',
     agent: shown(agent),
     title: t('„{agent}“ möchte sich mit einem Passkey anmelden', { agent: shown(agent) }),
@@ -148,20 +150,23 @@ export async function confirmAgentWrite({ agent, action, title, vault: vaultName
 // ---- Questions to the user from background requests (AI agents): a dialog in the app's own style, window in front.
 export const questions = new Map(); // id → resolve
 const refusals = new Map(); // id → the answer that refuses
-const pinQuestions = new Set(); // ids of questions that are answered only with the app PIN (#439)
+const pinQuestions = new Map(); // id → check(proof): questions answered only with the app PIN (#439) or another proof (#537 2b)
 // #507 (Lucas 2026-11-10): an agent's question while the window is locked and only the extension unlocked – shown
 // without agent, entry or vault, "Allow" refused until the window is unlocked with the PIN; then the real question.
 const heldQuestions = new Map(); // id → the full question
 const isAgentQuestion = (spec) => String(spec?.kind || '').startsWith('agent-');
-const heldView = (spec) => ({ kind: 'agent-held', held: true, cancel: spec.cancel,
-  title: t('Ein KI-Agent möchte auf Keevault zugreifen'), lead: t('Entsperre zuerst das Fenster mit deiner PIN – danach siehst du die Anfrage.') });
+// #537 2b (Konrad N3): a confirmation the browser extension asks for ("Immer bestätigen") is held like an agent's question.
+const isHeldQuestion = (spec) => isAgentQuestion(spec) || spec?.kind === 'confirm-each';
+const heldView = (spec) => ({ kind: isAgentQuestion(spec) ? 'agent-held' : 'held', held: true, cancel: spec.cancel,
+  title: isAgentQuestion(spec) ? t('Ein KI-Agent möchte auf Keevault zugreifen') : t('Die Browser-Erweiterung möchte auf Keevault zugreifen'),
+  lead: t('Entsperre zuerst das Fenster mit deiner PIN – danach siehst du die Anfrage.') });
 
 /** The window was unlocked with the PIN (#507): the held agent questions now show what they ask. */
 export function revealHeldQuestions() {
   for (const [id, spec] of heldQuestions) {
     heldQuestions.delete(id);
     send({ type: 'questionClose', id });
-    send({ type: 'question', id, ...spec });
+    send({ type: 'question', id, ...spec, resent: true }); // Konrad M1: never an automatic Windows Hello for these
   }
 }
 let questionSeq = 0;
@@ -174,11 +179,14 @@ let questionSeq = 0;
 export async function answerQuestionFromWindow(id, value, pin) {
   if (!questions.has(id)) return false;
   if (heldQuestions.has(id) && String(value) !== refusals.get(id)) throw new Error(t('Erst das Fenster mit der PIN entsperren'));
-  if (pinQuestions.has(id) && String(value) !== refusals.get(id)) await passkeyPin.check(typeof pin === 'string' ? pin : '');
+  if (pinQuestions.has(id) && String(value) !== refusals.get(id)) await pinQuestions.get(id)(normalizeProof(pin)); // #537 stage 4: or { hello: true }
   const resolve = questions.get(id);
   if (!resolve) return false;
   questions.delete(id);
   pinQuestions.delete(id);
+  // The question is over for every view of it – also when the answer did not come from its own dialog (smoke run, a
+  // second window): its dialog closes instead of waiting open over the next question.
+  send({ type: 'questionClose', id });
   resolve(String(value));
   return true;
 }
@@ -210,12 +218,14 @@ export function nativeQuestion(spec) {
 
 /**
  * spec: { kind, agent, title, lead?, entry?, vault?, fields?, choices?: [{ value, label, hint }], note?, allow, cancel }
+ * check (#537 2b): check(proof) → the proof "Allow" needs (else the passkey proof when spec.pin is set).
  * → the chosen choice (or 'allow' without choices), or `cancel`. The window comes to the front and stays on top
  * while the question is open (agents wait for it). Without a ready window the native dialog asks instead.
  */
-export async function askInApp(spec) {
+export async function askInApp(spec, { check = null } = {}) {
+  if (check) spec = { ...spec, pin: true };
   showWindow();
-  const held = windowLocked && isAgentQuestion(spec); // #507
+  const held = windowLocked && isHeldQuestion(spec); // #507, #537 2b
   // The native dialog has no field for the PIN: a question that needs one is refused instead – and one that must not
   // show its names yet (#507).
   if ((spec.pin || held) && (!win || win.webContents.isLoading())) return spec.cancel;
@@ -231,7 +241,7 @@ export async function askInApp(spec) {
     return await new Promise((resolve) => {
       questions.set(id, resolve);
       refusals.set(id, spec.cancel);
-      if (spec.pin) pinQuestions.add(id);
+      if (spec.pin) pinQuestions.set(id, check || ((proof) => passkeyPin.check(proof)));
       if (held) heldQuestions.set(id, spec);
       send({ type: 'question', id, ...(held ? heldView(spec) : spec) });
       bringToFront(win); // #468: the PIN field in the question can be typed into at once

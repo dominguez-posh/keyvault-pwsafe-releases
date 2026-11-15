@@ -95,6 +95,9 @@ export async function passkeyPinAgentCheck({ js, sleep, fail, config, changed, c
     const asked = confirmAgentPasskey(ASK);
     if (!(await until(() => js(`!!document.querySelector("${QUESTION}")`), 3000))) return fail(area, 'question did not open');
     if (!(await js(`!!document.querySelector("${QUESTION} .q-pin-input")`))) return fail(area, 'question without the PIN field');
+    // #537 live test: without Windows Hello the question stays as it was – no Hello button.
+    if (await js(`!!document.querySelector("${QUESTION} .q-hello-allow")`)) fail(area, 'a Hello button although Windows Hello is off');
+    if (await js(`document.querySelector("${QUESTION} .q-pin-box")?.hidden !== false`)) fail(area, 'without Windows Hello the field is not there at once');
     // #468: the PIN field has the keyboard at once, no click needed (and no button has it).
     if (!(await until(() => js('document.activeElement === document.querySelector("' + QUESTION + ' .q-pin-input")'), 1500))) fail(area, 'the PIN field of the question has no focus');
     const id = openQuestionIds().at(-1);

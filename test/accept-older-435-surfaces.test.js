@@ -150,7 +150,7 @@ test('#435: refused on a reload with the newer state unlocked here – the dialo
   });
   try {
     const pk = passkey('alice');
-    const { id } = await files.createSecure(file, 'Team', { email: 'alice@contoso.com', passkey: pk });
+    const { id } = await files.createSecure(file, 'Team', { email: 'alice@contoso.com', passkey: pk, breakGlass: passkey('safe') }); // #539 Etappe 10
     const v = files.get(id);
     await v.memberOp({ type: 'sharing', enabled: true });
     const bob = new FileVault({ read: () => fs.readFile(file, 'utf8'), write: (s) => fs.writeFile(file, s) });

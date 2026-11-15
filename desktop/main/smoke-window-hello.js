@@ -55,10 +55,18 @@ export async function windowHelloCheck({ js, sleep, errors }) {
     if (await js(`!!document.querySelector('.settings-modal')`)) errors.push('hello: the settings stayed in the page after closing');
 
     // Lock screen: the Hello button besides the PIN; refused or canceled leaves the lock and the PIN field.
+    // #537 risk 3: the lock screen asks Hello by itself once – here it is canceled: the lock stays, the PIN field shows
+    // with the message, and Hello does not start a second time by itself.
+    simulateHello({ availability: 0, result: 6 }); // canceled
     await extensionOnly(sleep, js);
+    if (!(await until(() => js(`/Windows Hello abgebrochen/.test(document.body.innerText)`), 5000, 100))) errors.push('hello: the lock screen did not start Windows Hello by itself (risk 3) or did not report its cancel');
+    if (!windowLocked || !opened) errors.push('hello: a canceled automatic Windows Hello lifted the lock or ended the session');
     if (!(await api.state()).helloUnlock) errors.push('hello: locked window state does not offer Windows Hello');
-    const screen = JSON.parse(await js(`JSON.stringify({ hello: !!document.querySelector('.window-hello'), pin: !!document.querySelector('.pin-input') })`) || '{}');
-    if (!screen.hello || !screen.pin) errors.push(`hello: lock screen without Windows Hello button or PIN field (${JSON.stringify(screen)})`);
+    const screen = JSON.parse(await js(`JSON.stringify({ hello: !!document.querySelector('.window-hello'), pin: !!document.querySelector('.pin-input') && !document.querySelector('.pin-input').closest('[hidden]') })`) || '{}');
+    if (!screen.hello || !screen.pin) errors.push(`hello: lock screen without Windows Hello button or PIN field after the canceled start (${JSON.stringify(screen)})`);
+    simulateHello({ availability: 0, result: 0 }); // a second automatic start would now lift the lock
+    await sleep(1200);
+    if (!windowLocked) errors.push('hello: a second automatic Windows Hello after the cancel (risk 3: only once per lock)');
     simulateHello({ availability: 0, result: 6 }); // canceled
     await clickHello(js);
     await sleep(700);

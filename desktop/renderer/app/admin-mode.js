@@ -5,12 +5,13 @@ import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { focusField } from './focus.js';
 import { setSt, st } from './state.js';
-import { field } from './helpers.js';
+import { field, helloProofButton } from './helpers.js';
 import { renderDetail } from './detail.js';
 import { renderList } from './list.js';
 import { applyViewClass } from './main-menu.js';
 import { fetchState, setSettingsRev, settingsRev } from './shell.js';
 import { renderSidebar } from './sidebar.js';
+import { mpSetUp } from './master-password.js';
 
 /** Set, change or remove the app PIN; forced: the organization requires one and none is set yet. */
 /** Admin mode on or off; the list, the New menu and the open entry follow at once. */
@@ -44,12 +45,16 @@ export function adminModeDialog() {
     ]);
     return;
   }
-  const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'admin-pin', 'aria-label': t('App-PIN') });
+  // #537: the master password or the PIN of this device.
+  const label = mpSetUp() ? t('Masterpasswort oder PIN') : t('App-PIN');
+  const pin = h('input', { type: 'password', ...(mpSetUp() ? {} : { inputmode: 'numeric' }), autocomplete: 'off', class: 'admin-pin', 'aria-label': label });
   const { dialog } = modal(t('Admin-Modus aktivieren'), h('div', {},
-    h('p', {}, t('Im Admin-Modus siehst du Assets (Server, VMs), Admin Center und Verbindungen. Bestätige mit deiner App-PIN.')),
-    field(t('App-PIN'), pin)), [
+    h('p', {}, mpSetUp()
+      ? t('Im Admin-Modus siehst du Assets (Server, VMs), Admin Center und Verbindungen. Bestätige mit deinem Masterpasswort oder deiner PIN.')
+      : t('Im Admin-Modus siehst du Assets (Server, VMs), Admin Center und Verbindungen. Bestätige mit deiner App-PIN.')),
+    field(label, pin)), [
     { label: t('Abbrechen') },
-    { label: t('Aktivieren'), primary: true, onClick: async () => {
+    { label: t('Aktivieren'), primary: !st.unlock?.hello, onClick: async () => { // Lena: one primary button – Hello's
       try {
         await setAdminMode(true, pin.value);
         return true;
@@ -60,11 +65,24 @@ export function adminModeDialog() {
       }
     } },
   ]);
-  pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') dialog.querySelector('.modal-footer .btn.primary')?.click(); });
+  pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') dialog.querySelector('.modal-footer .btn:last-child')?.click(); }); // "Aktivieren", primary or not
+  // #537 stage 4: Windows Hello for this one switch, asked by the main process.
+  const hello = helloProofButton(async (proof) => {
+    try {
+      await setAdminMode(true, proof);
+      dialog.close();
+      return true;
+    } catch (e) {
+      toast(e.message, 'error');
+      return false;
+    }
+  }, { field: pin.closest('.field') });
+  if (hello) pin.closest('.field')?.before(hello);
   focusField(pin);
 }
 
 export function pinDialog({ forced = false, passkeys = false, onSaved = null } = {}) {
+  if (mpSetUp()) return devicePinDialog({ onSaved });
   const current = st.pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' }) : null;
   const next = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' });
   const repeat = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' });
@@ -92,4 +110,34 @@ export function pinDialog({ forced = false, passkeys = false, onSaved = null } =
   ].filter(Boolean));
   void close;
   setTimeout(() => (current || next).focus(), 0);
+}
+
+/**
+ * #537: with the master password set up, the PIN is only a shortcut on this device (it wraps the device key). Set,
+ * changed or removed with the master password – never with the PIN alone.
+ */
+function devicePinDialog({ onSaved = null } = {}) {
+  const has = !!st.unlock?.pin;
+  const current = h('input', { type: 'password', autocomplete: 'current-password', class: 'pin-mp' });
+  const next = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'pin-next' });
+  const repeat = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'pin-next2' });
+  modal(has ? t('PIN ändern') : t('PIN festlegen'), h('div', {},
+    h('p', { class: 'muted' }, t('Die PIN entsperrt Keevault nur auf diesem Gerät, zusätzlich zum Masterpasswort. Mindestens 6 Zeichen; nach 10 falschen PINs gilt nur noch das Masterpasswort.')),
+    field(t('Masterpasswort'), current),
+    h('div', { class: 'grid2' }, field(t('Neue PIN'), next), field(t('Wiederholen'), repeat))), [
+    { label: t('Abbrechen') },
+    has ? { label: t('PIN entfernen'), danger: true, onClick: async () => {
+      await call('setPin', { current: current.value, next: null });
+      setSt(await fetchState());
+      toast(t('PIN entfernt'));
+    } } : null,
+    { label: t('Speichern'), primary: true, onClick: async () => {
+      if (next.value !== repeat.value) throw new Error(t('Die PINs stimmen nicht überein'));
+      await call('setPin', { current: current.value, next: next.value });
+      setSt(await fetchState());
+      toast(t('PIN gespeichert'));
+      onSaved?.();
+    } },
+  ].filter(Boolean));
+  setTimeout(() => focusField(current), 0);
 }

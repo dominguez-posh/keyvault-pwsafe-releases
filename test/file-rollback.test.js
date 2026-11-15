@@ -112,7 +112,7 @@ test('an own save is remembered at once, without waiting for the file watcher (K
     pins: () => state.pins, setPins: (p) => { state.pins = p; }, pinNotes: () => state.notes, setPinNotes: (n) => { state.notes = n; },
   });
   try {
-    const { id } = await files.createSecure(file, 'Team', { email: 'alice@contoso.com', passkey: passkey('alice') });
+    const { id } = await files.createSecure(file, 'Team', { email: 'alice@contoso.com', passkey: passkey('alice'), breakGlass: passkey('safe') }); // #539 Etappe 10
     const before = state.notes[file]?.floor?.grants?.length || 0;
     const v = files.get(id);
     await v.memberOp({ type: 'sharing', enabled: true });

@@ -23,7 +23,8 @@ test('admin mode consumes the token right after the PIN', () => {
 test('taking an older file state consumes the token right after the PIN', () => {
   const files = src('main/api/files.js');
   assert.match(files, /import \{[^}]*\bpinGuard\b[^}]*\} from '\.\.\/guards\.js';/);
-  assert.match(files, /async acceptOlderUnlock\(token, pin\) \{[\s\S]*?await api\.verifyPin\(String\(pin \|\| ''\)\);\n\s*pinGuard\.consume\(\);/);
+  // #537 (#521): the master password itself once set up (kind 'password').
+  assert.match(files, /async acceptOlderUnlock\(token, pin\) \{[\s\S]*?await api\.verifyPin\(String\(pin \|\| ''\), isMigrated\(\) \? 'password' : undefined\);\n\s*pinGuard\.consume\(\);/);
 });
 
 test('locking empties the token first, before any early return', () => {

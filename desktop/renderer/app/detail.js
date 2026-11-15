@@ -8,7 +8,8 @@ import { buildItemLink } from '../../../extension/core/links.js';
 import { call } from './ipc.js';
 import { panes } from './layout.js';
 import { items, st, ui } from './state.js';
-import { choiceName, containerName, copy, notice, openUrl, writable, writableContainers } from './helpers.js';
+import { choiceName, containerName, copyFrom, notice, openUrl, revealItem, withAccess, writable, writableContainers } from './helpers.js';
+import { isSealed } from '../../../extension/core/sealed.js';
 import { ADMIN_LINKS, connectServer, movePasskeyDialog, openAdminLink } from './admin-tools.js';
 import { DRAG_PASSKEY, draggedPasskey, setDraggedPasskey } from './dragdrop.js';
 import { changelogDialog } from './file-vaults.js';
@@ -57,15 +58,18 @@ export async function renderDetail() {
   const [containerId, id] = splitKey(key);
   pane.replaceChildren(h('div', { class: 'center' }, h('span', { class: 'spinner' })));
   let item;
+  // #537 2b: an entry shown with its secrets after a confirmation – once; the next showing is sealed again.
+  const pre = ui.revealed?.key === key ? ui.revealed.item : null;
+  ui.revealed = null;
   try {
-    item = await call('item', containerId, id);
+    item = pre || await call('item', containerId, id);
     noteCreator(item); // #476: "Nur für mich" only for own entries
   } catch (e) {
     pane.replaceChildren(notice(e.message));
     return undefined;
   }
   // Linked login (domain or Microsoft login): shown and copied with the linked values; edited as stored (no copy).
-  const shown = await resolveLogin(item, (c, i) => call('item', c, i));
+  const shown = await resolveLogin(item, (c, i) => (item.linkedSource?.id === i ? item.linkedSource : call('item', c, i)));
   if (ui.selected !== key || ui.editing) return undefined;
   const canWrite = writable(st.containers.find((c) => c.id === containerId) || {});
   // #487: a server entry is read-only outside admin mode (connect works); it is edited and duplicated only there.
@@ -75,10 +79,19 @@ export async function renderDetail() {
     && (await call('linkedEntries', containerId, id).then((e) => e.length > 0, () => false));
   if (ui.selected !== key || ui.editing) return undefined;
   pane.replaceChildren(itemDetail(shown, {
-    copy: (value, label) => copy(value, label, containerId), // #480: the vault may want the app PIN
+    copy: (value, label) => copyFrom(containerId, id, value, label), // #480: the vault may want the app PIN; #537 2b: held-back secrets
+    // #537 2b: "Anzeigen" of a held-back secret – the proof, then the entry once with its secrets.
+    reveal: async () => {
+      try {
+        ui.revealed = { key, item: await revealItem(containerId, id) };
+        renderDetail();
+      } catch (e) {
+        if (e.name !== 'AccessConfirmRequired') toast(e.message, 'error');
+      }
+    },
     hoverActions: true,
     // Menu "Type into window": the existing auto-type of the selected entry (u = user name, p = password).
-    typeInto: (what) => call('autoType', containerId, id, what).catch((e) => toast(e.message, 'error')),
+    typeInto: (what) => withAccess(() => call('autoType', containerId, id, what)).catch((e) => toast(e.message, 'error')),
     // Linked to a Microsoft login: the website opens; on Microsoft's sign-in the bar offers the accounts (#425).
     openUrl: shown.linked?.microsoft ? (u) => call('openWithMicrosoft', { containerId, id, url: u })
       .then(() => toast(t('Geöffnet – bei Microsoft das Konto in der Keevault-Leiste wählen')), (e) => toast(e.message, 'error')) : openUrl,
@@ -90,6 +103,7 @@ export async function renderDetail() {
     showLinkedAssets: hasLinkedAssets ? (it) => linkedAssetsDialog(it) : null,
     linkTitle,
     saveFile: async (name, data) => {
+      if (isSealed(data)) return void toast(t('Zuerst „Anzeigen“ wählen und bestätigen'), 'error'); // #537 2b
       try {
         const path = await call('saveCertificate', name, data);
         if (path) toast(t('Gespeichert: {path}', { path }));
@@ -106,9 +120,13 @@ export async function renderDetail() {
       contextMenu({ preventDefault() {}, clientX: Math.max(8, r.right - 240), clientY: Math.max(8, r.top - height - 6) }, items);
     },
     actions: [
-      canWrite && asServer ? { action: 'edit', icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: () => {
+      canWrite && asServer ? { action: 'edit', icon: 'edit', label: t('Bearbeiten'), primary: true, onClick: async () => {
+        let editing = item;
+        if (item.sealed) { // #537 2b: editing shows the secrets – one confirmation
+          try { editing = await revealItem(containerId, id); } catch (e) { if (e.name !== 'AccessConfirmRequired') toast(e.message, 'error'); return; }
+        }
         ui.editing = 'edit';
-        ui.editingItem = item;
+        ui.editingItem = editing;
         renderDetail();
       } } : null,
       canWrite ? { icon: 'star', quick: true, on: !!item.favorite, label: item.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), onClick: () => toggleFavorite(item) } : null,

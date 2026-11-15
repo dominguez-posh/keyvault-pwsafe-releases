@@ -16,6 +16,8 @@ import { requireOpen } from './guards.js';
 import { actor, changed, send } from './session.js';
 import { helperExe } from './typing.js';
 import { detectOneDrive, parseRegistryRoots } from '../onedrive-detect.js';
+import { openWith, sealWith, subKey } from '../unlock-keys.js';
+import { adoptLineage, grantFresh, isMigrated, mayBind, recentDk, rotate, verifyPasswordCounted } from './unlock.js';
 
 // ---------------------------------------------------------------- personal vault
 // Free file vault for one person: in a synchronised folder (OneDrive, iCloud, Dropbox …) or on a network drive, never
@@ -137,7 +139,7 @@ export async function personalInfo(folder = defaultPersonalFolder()) {
   return { folder, path: filePath, exists, location: folder ? await locate(folder) : null, configured: personalPaths(), pinSet: !!s.appPin };
 }
 
-function requirePersonalLocation(info) {
+export function requirePersonalLocation(info) {
   if (!info.folder) throw new Error(t('Kein OneDrive eingerichtet – bitte OneDrive einrichten oder einen anderen synchronisierten Ordner bzw. ein Netzlaufwerk wählen.'));
   if (!info.location || !'cloud network'.split(' ').includes(info.location.kind)) {
     throw new Error(t('Der persönliche Tresor darf nicht lokal liegen – bitte einen synchronisierten Ordner (OneDrive, iCloud, Dropbox …) oder ein Netzlaufwerk wählen.'));
@@ -146,14 +148,21 @@ function requirePersonalLocation(info) {
 
 export async function createPersonal({ folder, password, pin }) {
   requireOpen();
-  if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
-  await api.verifyPin(String(pin || '')); // the PIN binds the key on this device
+  if (isMigrated()) {
+    // #537: one master password for the whole app – the personal vault gets exactly that one (checked, never a second one).
+    await verifyPasswordCounted(String(password || '')); // counted; remembers DK, which binds the new vault's key below
+    grantFresh('personal-keyring'); // the wizard's next step (security key) needs no second entry of the same MP
+  } else {
+    if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
+    await api.verifyPin(String(pin || '')); // the PIN binds the key on this device
+  }
   if (String(password || '').length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
   if (personalPaths().length) throw new Error(t('Es gibt schon einen persönlichen Tresor – für mehr Ordnung darin Ordner anlegen.'));
   const info = await personalInfo(folder || defaultPersonalFolder());
   requirePersonalLocation(info);
   if (info.exists) throw new Error(t('Dort liegt schon ein persönlicher Tresor – „Bestehenden verwenden“ wählen.'));
   const r = await files.create(info.path, t('Persönlich'), { password }, actor());
+  if (isMigrated()) await adoptLineage({ id: r.id }, files.get(r.id).ck); // H2: created with the app master password (checked above)
   // In one write with the vault's listing: whatever ends the app from here on, the key still counts as not confirmed.
   config.update({ personalVaults: [...personalPaths().filter((p) => p !== info.path), info.path], personalRecoveryPending: { ...pendingRecovery(), [r.id]: recoveryEntryId(files.get(r.id)) } });
   fileLocations.set(info.path, await locate(info.path) || info.location);
@@ -202,6 +211,13 @@ export async function renewPersonalRecovery(id, password) {
   return { recoveryKey };
 }
 
+/** #537 stage 6: a key change outside the dialog (reset with the recovery stick) made a new key – shown once, to confirm. */
+export function markRecoveryRenewed(id) {
+  const entry = recoveryEntryId(files.get(id));
+  if (!entry) return;
+  config.update({ personalRecoveryPending: { ...pendingRecovery(), [id]: entry }, personalRecoveryRenewed: { ...renewedRecovery(), [id]: entry } });
+}
+
 export function confirmPersonalRecovery(id) {
   requireOpen();
   const next = { ...pendingRecovery() };
@@ -215,7 +231,7 @@ export function confirmPersonalRecovery(id) {
 
 export async function usePersonal({ folder }) {
   requireOpen();
-  if (!config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
+  if (!isMigrated() && !config.get().appPin) throw new Error(t('Bitte zuerst eine App-PIN festlegen – sie entsperrt den persönlichen Tresor im Alltag.'));
   if (personalPaths().length) {
     // The same vault again: the wizard's first try had a wrong master password, the vault is listed already (#400).
     const again = (await personalInfo(folder || defaultPersonalFolder()).catch(() => null))?.path;
@@ -241,10 +257,20 @@ export async function bindPersonalKeys({ force = false } = {}) {
   for (const entry of personalEntries()) await bindPersonalKey(entry, { force });
 }
 
-/** Stores an unlocked personal vault's key for this device: PIN-derived AES-GCM, then DPAPI (Windows account). */
+/**
+ * Stores an unlocked personal vault's key for this device: PIN-derived AES-GCM, then DPAPI (Windows account).
+ * #537: once the master password is set up, with a key derived from the device key DK instead of the PIN.
+ */
 async function bindPersonalKey(entry, { force = false } = {}) {
   if (!entry?.vault || entry.vault.locked || !entry.vault.ck?.raw) return;
   if (!force && config.get().personalDeviceKeys?.[entry.path]) return;
+  if (isMigrated()) {
+    const dk = recentDk();
+    // H2: only the vault of the record (or its successor) – a vault opened with its own recovery key or passkey is not.
+    if (!dk || !(await mayBind(entry, entry.vault.ck))) return;
+    config.update({ personalDeviceKeys: { ...config.get().personalDeviceKeys, [entry.path]: await deviceBinding(entry.id, entry.vault.ck.raw, dk) } });
+    return;
+  }
   if (!recentPin || Date.now() - recentPin.at > 10 * 60_000 || !(await safeStorage.isAsyncEncryptionAvailable())) return;
   const salt = crypto.randomBytes(16);
   const key = crypto.pbkdf2Sync(recentPin.pin, salt, 310_000, 32, 'sha256');
@@ -256,9 +282,55 @@ async function bindPersonalKey(entry, { force = false } = {}) {
   config.update({ personalDeviceKeys: { ...config.get().personalDeviceKeys, [entry.path]: (await safeStorage.encryptStringAsync(blob)).toString('base64') } });
 }
 
-/** After a key change (#402): the device binding holds the old key – renewed with the PIN just entered, otherwise dropped. */
-export async function rebindPersonalKey(entry) {
+const bindingAad = (id) => `keevault-personal|dk|${id}`;
+
+/** #537: the binding of a personal vault's key to this device: sealed with a key from DK, then DPAPI. */
+export async function deviceBinding(id, raw, dk) {
+  const blob = JSON.stringify({ v: 2, vault: id, ct: sealWith(subKey(dk, 'personal', id), Buffer.from(raw), bindingAad(id)) });
+  return (await safeStorage.encryptStringAsync(blob)).toString('base64');
+}
+
+/** #537: a correct master password or PIN (DK) unlocks every personal vault whose key was bound here with that DK. */
+export async function unlockPersonalWithDk(dk) {
+  const stale = [];
+  const openedNow = [];
+  for (const entry of personalEntries()) {
+    const stored = config.get().personalDeviceKeys?.[entry.path];
+    if (!stored || !entry?.vault?.locked) continue;
+    try {
+      const blob = JSON.parse((await safeStorage.decryptStringAsync(Buffer.from(stored, 'base64'))).result);
+      const raw = blob.v === 2 && blob.vault === entry.id ? openWith(subKey(dk, 'personal', entry.id), blob.ct, bindingAad(entry.id)) : null;
+      if (!raw) continue; // bound with an older device key or the PIN: the master password opens it once
+      await entry.vault.unlock(new Uint8Array(raw));
+      openedNow.push(entry);
+      changed();
+    } catch (e) {
+      // M2: a key of an older generation – the master password was changed on another device; the caller refuses.
+      if (e.name === 'UnlockError') stale.push(entry);
+      diag(`PERSONAL dk unlock failed (${path.basename(entry.path)}): ${e.message}`);
+    }
+  }
+  // Konrad (check of 11001ce): the caller refuses the unlock (MasterPasswordChanged) – nothing it opened stays open.
+  if (stale.length && openedNow.length) {
+    for (const entry of openedNow) entry.vault.lock();
+    changed();
+  }
+  return { stale };
+}
+
+/**
+ * After a key change (#402): the device binding holds the old key – renewed with the PIN just entered, otherwise dropped.
+ * #537: a new master password of the personal vault is the new master password of the app – a new device key for it
+ * (Konrad), so that the old password opens nothing on this device any more.
+ */
+export async function rebindPersonalKey(entry, password = null, info = {}) {
   if (!entry?.path || !personalPaths().includes(entry.path)) return;
+  if (isMigrated() && password != null && entry.vault?.ck?.raw) {
+    await rotate(String(password), [{ entry, ck: entry.vault.ck }]);
+    // #539: the member keys' device copy under the new DK; renewing the memberships only after a new password (M3).
+    await import('./member-key.js').then((m) => m.afterPersonalRekey(entry.id, info)).catch((e) => diag(`MEMBERKEY after rekey: ${e.message}`));
+    return;
+  }
   const { [entry.path]: _old, ...keys } = config.get().personalDeviceKeys || {};
   config.update({ personalDeviceKeys: keys });
   await bindPersonalKey(entry).catch(() => {});

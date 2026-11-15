@@ -145,7 +145,9 @@ test('#512 review: an organization switches Windows Hello off, never on', async 
   assert.equal(asked, 0);
   const config = read('desktop/config.js');
   assert.match(config, /if \(key === 'windowHello' && this\.org\[key\] !== false\) continue;/, 'only false is enforced');
-  assert.match(config, /'windowHello'\]; \/\/ #512/);
+  assert.match(config, /'windowHello', \/\/ #512/);
+  // #539: the second of these policies – only true is enforced (secured files only with a passkey).
+  assert.match(config, /if \(key === 'sharedVaultPasskeyOnly' && this\.org\[key\] !== true\) continue;/);
   const api = read('desktop/main/api/window-hello.js');
   const on = api.slice(api.indexOf('async setWindowHello'), api.indexOf('async unlockWithHello'));
   assert.ok(on.indexOf("enforced.includes('windowHello')") > 0 && on.indexOf("enforced.includes('windowHello')") < on.indexOf('config.update({ windowHello: true })'));

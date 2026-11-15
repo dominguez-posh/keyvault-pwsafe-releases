@@ -4,7 +4,7 @@ import { h, icon, iconButton, toast, modal, confirmDialog } from '../../../exten
 import { ACCESS_LEVELS } from '../../../extension/core/azure.js';
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
-import { LEVEL_LABEL, copy, notice } from './helpers.js';
+import { LEVEL_LABEL, copy, notice, withAccess } from './helpers.js';
 
 export async function shareDialog(container) {
   const listEl = h('div', {}, h('span', { class: 'spinner' }));
@@ -70,8 +70,8 @@ export async function shareDialog(container) {
     add.disabled = true;
     try {
       const r = chosen.invite
-        ? await call('inviteGuest', container.id, chosen.email, level.value)
-        : await call('addMember', container.id, chosen, level.value);
+        ? await withAccess(() => call('inviteGuest', container.id, chosen.email, level.value)) // #537 2b
+        : await withAccess(() => call('addMember', container.id, chosen, level.value));
       toast(chosen.invite
         ? t('{email} als Gast eingeladen und freigegeben – die Person bekommt eine Einladungs-E-Mail', { email: chosen.email })
         : r.discoverable ? t('Freigegeben') : t('Freigegeben – Einladungslink senden, damit der Tresor automatisch erscheint'));

@@ -20,7 +20,7 @@ import { reloadAll, render } from './shell.js';
 import { pinDialog } from './admin-mode.js';
 import { updateDialog, updateListeners } from './updates.js';
 import { addContainerDialog } from './vault-wizard.js';
-import { settingsCopyBlockedNotice } from './settings-file.js';
+import { settingsCopyBlockedNotice, settingsCopyPlainGoneNotice } from './settings-file.js';
 
 let reloadTimer = null;
 
@@ -45,6 +45,8 @@ window.pwsafe.onEvent((ev) => {
     toast(t('{provider} läuft nicht – Änderungen an Tresoren in diesem Ordner werden nicht synchronisiert. Starte {provider}.', { provider: ev.provider }), 'error');
   } else if (ev.type === 'settingsCopyBlocked') {
     settingsCopyBlockedNotice(ev.folder);
+  } else if (ev.type === 'settingsCopyPlainGone') {
+    settingsCopyPlainGoneNotice();
   } else if (ev.type === 'link') {
     const entry = parseItemLink(ev.url);
     if (entry) openItemLink(entry);

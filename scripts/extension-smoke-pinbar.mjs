@@ -107,3 +107,74 @@ export async function checkPinInBar({ send, evaluate, attach, open, shadowNode, 
     await send('Target.closeTarget', { targetId: tab.targetId }).catch(() => {});
   }
 }
+
+/**
+ * #537 (Lena, Konrad): with Windows Hello on, the bar asks Hello by itself once (the field hidden until then); the
+ * imitated app refuses it (not the right PIN), so the field shows – with the focus – and Hello does not start again. The
+ * frame takes the height it reports: Hello, "or", the field and the error all inside, light, dark and in English. A second
+ * request of the same site within 60 s starts nothing by itself (Konrad, low).
+ */
+export async function checkPinBarHello({ send, evaluate, attach, open, shadowNode, clickNode, waitFor, findTarget, check, sleep, ext, origin, workerSession }) {
+  const helloOn = `(() => {
+    const app = globalThis.__kvApp;
+    if (!app) return false;
+    app.answers.snapshot = { ...app.answers.snapshot, passkeyPin: { required: true, pinSet: true, masterPassword: true, hello: true } };
+    for (const fn of app.listeners) fn({ event: 'changed' });
+    return true;
+  })()`;
+  check(await evaluate(workerSession, helloOn), '#537: Nachbildung der App nicht gefunden (Hello-Leiste)');
+  await evaluate(workerSession, 'chrome.storage.session.remove("helloAuto:localhost").then(() => true)');
+  const variants = [{ name: 'hell', auto: true }, { name: 'dunkel', dark: true, auto: false }, { name: 'EN', en: true, auto: false }];
+  try {
+    for (const v of variants) {
+      if (v.en) await evaluate(workerSession, 'chrome.storage.local.get("settings").then(({ settings = {} }) => chrome.storage.local.set({ settings: { ...settings, language: "en" } })).then(() => true)');
+      const tab = await open(`${origin}/`);
+      try {
+        await evaluate(tab.sessionId, 'startGet(), true');
+        if (!(await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag .primary')))) { check(false, `#537 (${v.name}): kein Passkey-Schild für die Hello-Leiste`); continue; }
+        await sleep(2600); // the tag drops in and swings
+        await clickNode(tab.sessionId, '.kvtag .primary');
+        const frameNode = await waitFor(() => shadowNode(tab.sessionId, 'kvpwsafe-ui', '.kvtag iframe.pinframe:not([hidden])'));
+        const pinUrl = await evaluate(workerSession, 'chrome.runtime.getURL("pin/pin.html")');
+        const target = frameNode && await waitFor(async () => (await findTarget(`${pinUrl}#`)) || findTarget(`${ext}/pin/pin.html#`));
+        if (!frameNode || !target) { check(false, `#537 (${v.name}): Leiste klappt nicht auf`); continue; }
+        const frame = await attach(target.targetId);
+        if (v.dark) await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, frame).catch(() => {});
+        if (!(await waitFor(() => evaluate(frame, '!!document.querySelector("button.hello") && !!document.querySelector("input.pin")')))) { check(false, `#537 (${v.name}): Leiste ohne Hello-Knopf oder Feld`); continue; }
+        const pinsBefore = await evaluate(workerSession, 'globalThis.__kvApp.pins.length');
+        if (v.auto) check(await evaluate(frame, 'document.querySelector("input.pin").hidden === true'), '#537: Feld in der Leiste sichtbar, bevor Windows Hello gefragt wurde');
+        const shown = await waitFor(() => evaluate(frame, '!document.querySelector("input.pin").hidden'), 9000);
+        check(shown, `#537 (${v.name}): das Feld für Masterpasswort oder PIN erscheint nicht`);
+        const asks = JSON.parse(await evaluate(workerSession, `JSON.stringify(globalThis.__kvApp.pins.slice(${pinsBefore}))`));
+        if (v.auto) {
+          check(asks.length === 1 && asks[0]?.hello === true, `#537: Windows Hello in der Leiste nicht genau einmal von selbst angefragt (${JSON.stringify(asks)})`);
+          check(await waitFor(() => evaluate(frame, 'document.activeElement === document.querySelector("input.pin")'), 2000), '#537: nach dem Abbruch hat das Feld der Leiste nicht den Fokus (Lena 2)');
+          await sleep(1500);
+          check((await evaluate(workerSession, 'globalThis.__kvApp.pins.length')) === pinsBefore + 1, '#537: zweiter automatischer Start in der Leiste');
+        } else {
+          await sleep(1500);
+          check((await evaluate(workerSession, 'globalThis.__kvApp.pins.length')) === pinsBefore, `#537 (${v.name}): Windows Hello startete für dieselbe Seite innerhalb von 60 s erneut von selbst`);
+        }
+        await sleep(600); // the frame reports its height, the tag applies it
+        const box = JSON.parse(await evaluate(frame, `JSON.stringify((() => {
+          const inside = (el) => { if (!el || el.hidden) return true; const r = el.getBoundingClientRect(); return r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight + 0.5 && r.right <= innerWidth + 0.5; };
+          const all = ['button.hello', '.hello-or', 'label', 'input.pin', '.problem', '.busy'].map((q) => document.querySelector(q));
+          const b = document.querySelector('button.hello');
+          return { inside: all.every(inside), first: document.querySelector('#main').firstElementChild === b, text: b.textContent.trim(), radius: getComputedStyle(b).borderRadius,
+            height: innerHeight, content: Math.ceil(document.querySelector('#main').getBoundingClientRect().height), lang: document.documentElement.lang };
+        })())`));
+        check(box.inside, `#537 (${v.name}): etwas in der Leiste abgeschnitten (${JSON.stringify(box)})`);
+        check(box.height >= box.content && box.height - box.content < 40, `#537 (${v.name}): die Leiste nimmt nicht die gemeldete Höhe (${JSON.stringify(box)})`);
+        check(box.first && (v.en ? /Windows Hello/.test(box.text) && box.lang === 'en' : /Windows Hello/.test(box.text)), `#537 (${v.name}): Hello nicht zuerst oder falsche Sprache (${JSON.stringify(box)})`);
+        check(box.radius === '10px', `#537 (${v.name}): Hello-Knopf ohne den Stil der Leiste (${box.radius})`);
+        await evaluate(frame, 'document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })), true').catch(() => {});
+      } finally {
+        await send('Target.closeTarget', { targetId: tab.targetId }).catch(() => {});
+      }
+    }
+  } finally {
+    await evaluate(workerSession, 'chrome.storage.local.get("settings").then(({ settings = {} }) => chrome.storage.local.set({ settings: { ...settings, language: "de" } })).then(() => true)').catch(() => {});
+    await evaluate(workerSession, `(() => { const app = globalThis.__kvApp; if (!app) return false; app.answers.snapshot = { ...app.answers.snapshot, passkeyPin: { required: true, pinSet: true } }; for (const fn of app.listeners) fn({ event: 'changed' }); return true; })()`).catch(() => {});
+  }
+  return undefined;
+}

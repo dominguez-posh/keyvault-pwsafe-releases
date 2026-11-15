@@ -3,13 +3,13 @@
 // (desktop/smoke-features.js), which have reached their size limit. OneDrive is a temporary test folder
 // (KVPWSAFE_TEST_ONEDRIVE), never the user's real one; the files are removed afterwards.
 
-import { mkdtemp, open, readFile, rm, rmdir, symlink, writeFile, mkdir, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, rmdir, symlink, writeFile, mkdir, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { buildSettingsFile, parseSettingsFile, SETTINGS_MARKER } from './settings-file.js';
 import { until } from './smoke-wait.js';
 
-const SECRET = ['"appPin"', '"pinGuard"', '"personalDeviceKeys"', '"personalVaults"', '"approvedAgents"', '"adminTools"', '"hash"'];
+const SECRET = ['"appPin"', '"pinGuard"', '"personalDeviceKeys"', '"personalVaults"', '"approvedAgents"', '"adminTools"', '"hash"', '"unlockKeys"', '"hello"', '"helloKey"', '"blob"', '"settingsCopyPlainGone"'];
 const exists = (f) => stat(f).then(() => true, () => false);
 
 export async function settingsFileCheck({ js, sleep, config, vault, changed, ensurePin, fail, vaultListRun }) {
@@ -18,7 +18,7 @@ export async function settingsFileCheck({ js, sleep, config, vault, changed, ens
   const exportFile = path.join(dir, 'export.json');
   const copy = path.join(dir, 'Keevault', 'Keevault-Einstellungen.json');
   const env = { od: process.env.KVPWSAFE_TEST_ONEDRIVE, file: process.env.KVPWSAFE_TEST_SETTINGS_FILE };
-  const keep = ['theme', 'setupOffered', 'personalVaults', 'settingsCopyPending', 'settingsCopy', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'updateMode', 'clientId', 'breakGlass', 'defaultContainer', 'containers', 'hiddenContainers', 'sourceBadges', 'containerOrder'];
+  const keep = ['theme', 'setupOffered', 'personalVaults', 'settingsCopyPending', 'settingsCopy', 'settingsCopyPlainGone', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'updateMode', 'clientId', 'breakGlass', 'defaultContainer', 'containers', 'hiddenContainers', 'sourceBadges', 'containerOrder'];
   const before = Object.fromEntries(keep.map((k) => [k, config.get()[k]]));
   const closeAll = () => js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); document.querySelector(".main-menu")?.remove(); true');
   const menu = async (action) => {
@@ -65,6 +65,7 @@ export async function settingsFileCheck({ js, sleep, config, vault, changed, ens
       if (config.get().theme === 'dark') f('import applied before it was confirmed');
       const keys = await js('[...document.querySelectorAll("dialog[open].settings-import-modal li[data-key]")].map((l) => l.dataset.key).join(",")');
       if (!/\btheme\b/.test(keys) || /appPin|adminTools|helperExe/.test(keys)) f(`preview shows ${keys}`);
+      if (!(await js('/Herkunft nicht geprüft/.test(document.querySelector("dialog[open].settings-import-modal .settings-plain-origin")?.textContent || "")'))) f('a plain file is not marked "unverschlüsselt, Herkunft nicht geprüft" in the preview (#537 E5)');
       const dropped = await js('document.querySelector("dialog[open].settings-import-modal [data-dropped]")?.dataset.dropped || ""');
       for (const k of ['appPin', 'adminTools', 'helperExe', 'containers', 'breakGlass']) if (!dropped.split(',').includes(k)) f(`preview does not name ${k} as not taken over (${dropped})`);
       const refused = await js('[...document.querySelectorAll("dialog[open].settings-import-modal li[data-refused]")].filter((l) => /nicht übernommen \\(Sicherheit\\)/.test(l.textContent)).map((l) => l.dataset.key).join(",")');
@@ -150,14 +151,10 @@ export async function settingsFileCheck({ js, sleep, config, vault, changed, ens
       searching();
     }
 
-    // The copy in OneDrive follows the change, without anything secret.
-    const copied = await until(async () => (await readFile(copy, 'utf8').catch(() => '')).includes('"dark"'), 6000);
-    if (!copied) f('no copy in OneDrive after the change');
-    else {
-      const text = await readFile(copy, 'utf8');
-      const leaked = SECRET.filter((s) => text.includes(s));
-      if (leaked.length) f(`OneDrive copy contains ${leaked.join(', ')}`);
-    }
+    // #537 E5: without a personal vault there is no copy in OneDrive at all – never a plain one (the encrypted copy:
+    // desktop/smoke-settings-sealed.js).
+    await sleep(1200);
+    if (await exists(copy)) f('a copy was written to OneDrive without a personal vault (it would be plain)');
 
     // The Keevault folder in OneDrive is a junction: nothing is written there, a notice says so.
     const elsewhere = path.join(dir, 'Elsewhere');
@@ -196,23 +193,22 @@ export async function settingsFileCheck({ js, sleep, config, vault, changed, ens
     await writeFile(copy, buildSettingsFile({ theme: 'light', language: 'de', appPin: { hash: 'x' } }, { device: 'Altes-Notebook', now: new Date('2026-11-01T09:00:00Z') }));
     process.env.KVPWSAFE_TEST_ONEDRIVE = dir;
     await js('[...document.querySelectorAll("dialog[open].settings-onedrive-modal .modal-footer .btn")].find((b) => /Erneut prüfen/.test(b.textContent))?.click(); true');
-    if (!(await until(() => js('!!document.querySelector("dialog[open].settings-import-modal")'), 6000))) return f('"Erneut prüfen" does not offer the settings found');
-    if (!(await js('/Einstellungen von Altes-Notebook/.test(document.querySelector("dialog[open].settings-import-modal")?.textContent || "")'))) f('first-start offer does not name device and date');
-    await js('document.querySelector("dialog[open].settings-import-modal .modal-footer .btn.primary")?.click(); true');
-    if (!(await until(() => config.get().theme === 'light', 5000))) f('first-start import did not apply the settings');
+    // #537 E5: the plain copy of before is not offered by itself any more – a notice names the menu import instead.
+    if (!(await until(() => js('/alte, unverschlüsselte Kopie/.test(document.getElementById("toast")?.textContent || "")'), 6000))) f('first start: no notice about the old plain copy');
+    if (await js('!!document.querySelector("dialog[open].settings-import-modal")')) f('first start offered the plain copy for import');
+    if (config.get().theme === 'light') f('first start took the plain copy over');
     if (!(await until(() => !config.get().settingsCopyPending, 3000))) f('copy still held back after the first-start question');
-    if (JSON.stringify(config.get().appPin) !== pin) f('first-start import changed the app PIN');
-    // Then the question for the copy: nothing is written before "Ja", afterwards this device keeps it.
+    if (JSON.stringify(config.get().appPin) !== pin) f('the first start changed the app PIN');
+    // Then the question for the copy: nothing is written before "Ja"; after it the plain copy goes (no personal vault here).
     if (!(await until(() => js('!!document.querySelector("dialog[open].settings-consent-modal")'), 6000))) f('first start does not ask for the OneDrive copy');
     else {
       await sleep(800);
-      if (!/Altes-Notebook/.test(await readFile(copy, 'utf8').catch(() => ''))) f('copy overwritten before the user agreed');
-      // #353: another program has the file open at the moment of the rename (OneDrive, a scanner): the copy is retried, not lost.
-      const reader = await open(copy, 'r');
-      setTimeout(() => reader.close().catch(() => {}), 700);
+      if (!/Altes-Notebook/.test(await readFile(copy, 'utf8').catch(() => ''))) f('copy touched before the user agreed');
+      if (!(await js('/ohne persönlichen Tresor wird keine angelegt/.test(document.querySelector("dialog[open].settings-consent-modal")?.textContent || "")'))) f('the copy question does not say it is encrypted and needs a personal vault');
       await js('document.querySelector("dialog[open].settings-consent-modal .modal-footer .btn.primary")?.click(); true');
       if (!(await until(() => config.get().settingsCopy === true, 3000))) f('"Ja, sichern" did not switch the copy on');
-      if (!(await until(async () => /Demo-PC/.test(await readFile(copy, 'utf8').catch(() => '')), 6000))) f('no copy written after "Ja, sichern"');
+      if (!(await until(async () => !(await exists(copy)), 6000))) f('the old plain copy stayed in OneDrive after "Ja, sichern"');
+      if (!config.get().settingsCopyPlainGone) f('removing the plain copy was not noted');
     }
   } catch (e) {
     f(e.message);

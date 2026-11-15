@@ -2,6 +2,7 @@
 // bridge pipe as CTAP2 messages. The user confirms in the desktop app, which signs with keys from the vault.
 
 import { spawn, execFile } from 'node:child_process';
+import { normalizeProof } from './proof.js';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -277,7 +278,7 @@ export class WindowsProvider {
       return;
     }
     // #439: the PIN for this one use – wrong, missing or none set: nothing is signed and the request stays open.
-    await this.pin.check(decision.pin);
+    await this.pin.check(normalizeProof(decision.pin)); // #537 stage 4: or { hello: true }
     const candidate = (await vault.passkeyCandidates(p.rpId, p.parsed.allowList))
       .find((c) => c.containerId === decision.containerId && c.itemId === decision.itemId && c.passkey.credentialId === decision.credentialId);
     if (!candidate) throw new Error(t('Passkey nicht gefunden'));

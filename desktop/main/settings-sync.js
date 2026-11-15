@@ -49,8 +49,9 @@ export async function syncSettings() {
     config.update({ settingsLocalAt: 0 }, { synced: true });
     return null;
   }
-  const at = Math.max(Date.now(), (remote?.updated || 0) + 1);
-  await files.setAppSettings(entry.id, value, at);
+  // #537 2b: written on top of what is there at that moment ("Immer bestätigen", the reset log stay as they are now).
+  const snapshot = config.syncSnapshot();
+  const { updated: at } = await files.updateAppSettings(entry.id, (now) => ({ ...now, ...snapshot }), Math.max(Date.now(), (remote?.updated || 0) + 1));
   config.update({ settingsSyncedAt: at, settingsLocalAt: 0 }, { synced: true });
   return 'pushed';
 }

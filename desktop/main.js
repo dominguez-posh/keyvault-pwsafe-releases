@@ -26,6 +26,7 @@ import {
 import {
   agentAdmitted, auditAgent, chooseAgentMicrosoft, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, mcpTrusted, trustAgentEntry, waitForUnlock,
 } from './main/agents.js';
+import { confirmInApp } from './main/access.js';
 import { applyBrowserIntegration } from './main/browser.js';
 import { excludeFromErrorReporting } from './main/clipboard.js';
 import { passkeyPin, pinGuard } from './main/guards.js';
@@ -101,8 +102,8 @@ app.whenReady().then(async () => {
     setPins: (fileIds) => config.update({ fileIds }),
     pinNotes: () => config.get().fileIdNotes,
     setPinNotes: (fileIdNotes) => config.update({ fileIdNotes }),
-    onChange: () => changed(),
-    onRekey: (entry) => rebindPersonalKey(entry),
+    onChange: () => { changed(); scheduleSettingsCopy(); }, // #537 E5: a key change or an unlocked personal vault – the copy follows
+    onRekey: (entry, password, info) => rebindPersonalKey(entry, password, info),
   }));
   await files.load();
   refreshFileLocations().catch(() => {});
@@ -174,6 +175,7 @@ app.whenReady().then(async () => {
     features: () => ({ passkeys: !!config.get().mcpPasskeys, microsoft: !!config.get().mcpMicrosoft }),
     confirmPasskey: confirmAgentPasskey,
     chooseMicrosoft: chooseAgentMicrosoft,
+    confirmEach: (vaultId, entryId, agent) => confirmInApp(vaultId, entryId, 'agent', agent), // #537 2b
     scope: () => {
       const s = config.get();
       const scopes = (Array.isArray(s.mcpScopes) ? s.mcpScopes : []).filter((x) => x && typeof x.vaultId === 'string')

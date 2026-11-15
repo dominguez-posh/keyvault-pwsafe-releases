@@ -40,6 +40,9 @@ export function lockedViews({ setView, state, reload, load, pinReady }) {
    * over this one, and a held PIN goes with it, unsent.
    */
   let draft = null; // { pin, held, confirmed, send } of the PIN view drawn ahead
+  // #537 risk 3 (Lucas: "überall automatisch"): Windows Hello starts by itself once per popup – the app still shows its
+  // card before Hello (Konrad, 9f3c6f9). After a cancel the field and the button, no second start.
+  let helloAutoTried = false;
 
   /** Konrad (#534): a PIN view drawn ahead that is not used goes without leaving its digits behind. */
   function dropDraft() {
@@ -57,7 +60,11 @@ export function lockedViews({ setView, state, reload, load, pinReady }) {
       window.kvPinAdopted = true; // early.js stops drawing and handling keys
       window.kvEarlyRelease?.(); // and lets go of the field
     }
-    const pin = early || (pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), 'aria-label': t('PIN') }) : null);
+    // #537 stage 4: once the master password is set up the field takes it or the PIN of this device. `st` is not there yet
+    // for the PIN view drawn ahead (#534: before the app answered) – that view must not throw, or it never gets a handler.
+    const mp = !!st?.desktop?.passkeyPin?.masterPassword;
+    const secretLabel = mp ? t('Masterpasswort oder PIN') : t('PIN');
+    const pin = early || (pinSet ? h('input', { type: 'password', inputmode: mp ? 'text' : 'numeric', autocomplete: 'off', placeholder: secretLabel, 'aria-label': secretLabel }) : null);
     // #508: unlocking can take a while (silent sign-in, then the vaults): the button says what is going on, the field is
     // locked meanwhile; a wrong PIN or a timeout comes back as a clear message above the field.
     const here = pinSet || st?.demo;
@@ -101,9 +108,37 @@ export function lockedViews({ setView, state, reload, load, pinReady }) {
     pin?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') button.click();
     });
+    // #537 stage 4: Windows Hello, asked by the app after this click (Konrad: only from the popup, after a gesture).
+    const askHello = async () => {
+      helloButton.disabled = true;
+      button.disabled = true;
+      helloButton.replaceChildren(h('span', { class: 'spinner', 'aria-hidden': 'true' }), t('Windows Hello …'));
+      unlocking = true;
+      try {
+        await call('unlockHello');
+        unlocking = false;
+        busy(t('Lade Tresore …'));
+        await reload();
+      } catch (err) {
+        unlocking = false;
+        renderLocked(unlockError(err));
+      }
+    };
+    // A script's click is no gesture (Konrad): only a real click or the one start of the popup itself.
+    const helloButton = !pending && !st?.demo && st?.desktop?.passkeyPin?.hello ? h('button', { type: 'button', class: 'btn primary hello-unlock', onclick: (e) => { if (e.isTrusted) askHello(); } },
+      icon('shield'), error ? t('Erneut mit Windows Hello') : t('Mit Windows Hello entsperren')) : null;
+    const autoHello = !!helloButton && !error && !helloAutoTried;
+    if (helloButton) button.classList.remove('primary'); // one primary button (Lena): Hello's
+    if (autoHello) {
+      helloAutoTried = true;
+      if (pin) pin.hidden = true;
+      button.hidden = true;
+      setTimeout(() => { if (helloButton.isConnected && document.visibilityState === 'visible') askHello(); }, 250);
+    }
     setView(h('div', { class: 'center' }, icon('lock', 40), h('h2', {}, t('Tresor gesperrt')),
-      h('p', { class: 'muted' }, pinSet ? t('PIN eingeben – Keevault entsperrt im Hintergrund, ohne Fenster.') : t('Entsperre Keevault in der Desktop-App – danach geht es hier sofort weiter.')),
+      h('p', { class: 'muted' }, pinSet ? (mp ? t('Masterpasswort oder PIN eingeben – Keevault entsperrt im Hintergrund, ohne Fenster.') : t('PIN eingeben – Keevault entsperrt im Hintergrund, ohne Fenster.')) : t('Entsperre Keevault in der Desktop-App – danach geht es hier sofort weiter.')),
       error ? h('div', { class: 'notice error' }, error) : null,
+      helloButton,
       pin,
       button));
     // #534: focused at once (the timeout catches a page that gets its focus a moment later).
@@ -129,6 +164,13 @@ export function lockedViews({ setView, state, reload, load, pinReady }) {
       return false;
     }
     if (mine.confirmed) return true;
+    // #537: with the master password or Windows Hello on, the view drawn ahead (PIN field only, no Hello button) is
+    // replaced by the full one – unless something was typed or held already, which stays as it is.
+    const pp = st.desktop?.passkeyPin;
+    if ((pp?.hello || pp?.masterPassword) && !mine.held && !mine.pin.value) {
+      dropDraft();
+      return false;
+    }
     mine.confirmed = true;
     if (mine.held) {
       draft = null;

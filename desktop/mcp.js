@@ -216,12 +216,13 @@ export class McpService {
    * policy(agent) → { write }: an agent writes only with write === true.
    */
   constructor({ vault, confirmRead, confirmWrite, audit, admitted = () => false, scope = () => ({ all: true }), policy = () => ({ write: false }), trusted = () => false, trust = () => {}, waitUnlock = async () => false,
-    features = () => ({}), confirmPasskey = async () => false, chooseMicrosoft = async () => null }) {
+    features = () => ({}), confirmPasskey = async () => false, chooseMicrosoft = async () => null, confirmEach = async () => false }) {
     // features(): { passkeys, microsoft } – both off unless turned on in the settings (#308, #315).
     // confirmPasskey({ agent, title, username, vault, rpId, origin }) → boolean, asked for every single use. The app (#439) also
     // asks for the PIN there and throws instead (no PIN set): true means confirmed with the PIN, nothing is signed otherwise.
     // chooseMicrosoft({ agent, purpose, accounts: [{ key, title, username, vault }] }) → key of the chosen account or null.
-    Object.assign(this, { vault, confirmRead, confirmWrite, audit, admitted, scope, policy, trusted, trust, waitUnlock, features, confirmPasskey, chooseMicrosoft });
+    // confirmEach(vaultId, entryId, agent) (#537 2b): asked with proof → true; refused throws; false: not wanted (grants).
+    Object.assign(this, { vault, confirmRead, confirmWrite, audit, admitted, scope, policy, trusted, trust, waitUnlock, features, confirmPasskey, chooseMicrosoft, confirmEach });
     this.clients = new Set();
     this.grants = new WeakMap();
     // Timed grants by agent name ("for 1 hour"): survive a restart of the agent process, end when the app locks.
@@ -348,7 +349,8 @@ export class McpService {
         const c = await this.container(a.vaultId);
         const item = await (await this.session()).getItem(c.id, a.entryId, { fresh: true });
         this.requireScope(c.id, item.folder);
-        await this.requireRead(client, item, c);
+        if (await this.confirmEach(c.id, item.id, client.agent)) this.stillOpen(); // #537 2b: asked with proof, no grant counts
+        else await this.requireRead(client, item, c);
         if (tool === 'get_totp') {
           if (!item.totp) throw fail(t('Kein Einmalcode (TOTP) hinterlegt'));
           const { code, remaining } = await totpCode(item.totp);
@@ -459,6 +461,7 @@ export class McpService {
         if (!chosen) throw fail(t('Vom Benutzer abgelehnt'));
         const [vaultId, entryId] = [key.slice(0, key.indexOf('/')), key.slice(key.indexOf('/') + 1)];
         Object.assign(entry, { vault: vaultId, entry: entryId, account: chosen.username });
+        if (await this.confirmEach(vaultId, entryId, client.agent)) this.stillOpen(); // #537 2b
         const item = await v.getItem(vaultId, entryId, { fresh: true });
         const otp = item.totp ? await totpCode(item.totp) : null;
         return { vaultId, entryId, title: item.title, username: item.username, password: item.password,

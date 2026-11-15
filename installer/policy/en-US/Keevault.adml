@@ -9,6 +9,7 @@
       <string id="SUPPORTED_Keevault_0_7_0">Keevault 0.7.0 or later</string>
       <string id="SUPPORTED_Keevault_0_9_8">Keevault 0.9.8 or later</string>
       <string id="SUPPORTED_Keevault_0_9_33">Keevault 0.9.33 or later</string>
+      <string id="SUPPORTED_Keevault_0_10_0">Keevault 0.10.0 or later</string>
       <string id="SUPPORTED_Keevault_0_7_10">Keevault 0.7.10 or later</string>
       <string id="Vaults">Connect vaults automatically</string>
       <string id="Vaults_Help">These Azure Key Vaults appear in Keevault for all affected users automatically after sign-in (labeled "Policy").
@@ -69,6 +70,8 @@ Applies to the per-user EXE installation only; MSI and MSIX never update themsel
       <string id="ExtensionIds_Help">IDs of the browser extensions (32 letters a–p) that may talk to the app, separated by commas. Only needed when you deploy your own extension ID; the default is the ID of the published Keevault extension.</string>
       <string id="WindowHello">Allow unlocking the window with Windows Hello</string>
       <string id="WindowHello_Help">Disabled: the app window unlocks only with the app PIN, not with Windows Hello (face, fingerprint, Windows Hello PIN). Enabled or not configured: the user decides; only the user switches Windows Hello on, with the app PIN, never the policy (default: off). Applies only to the window lock while just the browser extension is unlocked.</string>
+      <string id="SharedVaultPasskeyOnly">Secured file vaults only with a passkey</string>
+      <string id="SharedVaultPasskeyOnly_Help">Enabled: secured file vaults (with users and roles) open only with a passkey or security key, never with the app's master password, Windows Hello or the app PIN; the app also no longer links a membership to the master password. Disabled or not configured: default – secured vaults also open with the app's master password unless an admin switched on "Passkeys only" for the vault.</string>
       <string id="WindowsProvider">Keevault as passkey provider in Windows</string>
       <string id="WindowsProvider_Help">Enabled: Keevault appears in the Windows passkey dialog (Windows 11). Disabled: the passkey provider is not registered. Not configured: the user decides (default: on).</string>
       <string id="SignInWindows">Sign in through the Windows dialog</string>

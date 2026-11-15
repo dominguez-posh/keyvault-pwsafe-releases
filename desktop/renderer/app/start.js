@@ -13,6 +13,9 @@ import { settingsDialog } from './settings.js';
 import { render } from './shell.js';
 import { focusField } from './focus.js';
 import { helloUnlockButton } from './window-hello.js';
+import { helloKeyLockButton, lockScreenAutoHello, resetLockAutoHello } from './hello-unlock.js';
+import { stickResetLink } from './mp-reset.js';
+import { mpSetUp, unlockSecretField } from './master-password.js';
 
 function languageSelect() {
   return h('select', { class: 'lang-select', title: t('Sprache'), onchange: async (e) => {
@@ -70,18 +73,26 @@ export async function openFile() {
  * opens with the app PIN alone: no second sign-in, the vaults are there at once. "Alles sperren" ends both.
  */
 function renderWindowLocked(error) {
-  const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), class: 'pin-input', onkeydown: (e) => {
+  let windowHello = null;
+  let windowField = null;
+  // #537: master password, or the PIN of this device, once the master password is set up.
+  const secret = mpSetUp() ? unlockSecretField({ onEnter: () => open() }) : null;
+  const pin = secret ? secret.input : h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), class: 'pin-input', onkeydown: (e) => {
     if (e.key === 'Enter') open();
   } });
   const button = h('button', { class: 'btn primary block window-unlock', onclick: () => open() }, icon('unlock'), t('Entsperren'));
+  windowHello = helloUnlockButton({ done: () => { resetLockAutoHello(); return render(); }, failed: (message) => renderLocked(message) });
+  windowField = secret ? secret.el : field(t('PIN'), pin);
+  lockScreenAutoHello(windowHello, { fieldEl: windowField, error });
   async function open() {
     if (!pin.value) return focusField(pin);
     button.disabled = true;
     pin.disabled = true;
     button.replaceChildren(h('span', { class: 'spinner' }), t('Öffnen …'));
     try {
-      await call('verifyPin', pin.value);
+      await call('verifyPin', pin.value, secret?.kind());
       await call('unlock', { entra: true });
+      resetLockAutoHello();
       await render();
     } catch (e) {
       renderLocked(e.message);
@@ -95,11 +106,13 @@ function renderWindowLocked(error) {
     // #507: a Windows passkey request behind the lock – no site, account or vault; allowed after the PIN, refused any time.
     h('div', { id: 'windows-waiting', class: 'notice info windows-held', hidden: true }, h('span', {}, t('Eine Anmeldung mit Passkey wartet')), ' ',
       h('button', { type: 'button', class: 'linklike windows-held-decline', onclick: () => declineHeldWindowsRequests().catch((e) => toast(e.message, 'error')) }, t('Ablehnen'))),
-    // #512: Windows Hello when switched on; the PIN below always works too.
-    helloUnlockButton({ done: () => render(), failed: (message) => renderLocked(message) }),
-    field(t('PIN'), pin),
+    // #512: Windows Hello when switched on; the PIN below always works too (#537 risk 3: shown after Hello did not go through).
+    windowHello,
+    windowField,
     button,
-    h('div', { class: 'card-links' }, h('button', { class: 'linklike lock-all', onclick: () => call('lock').catch((e) => toast(e.message, 'error')) }, t('Alles sperren'))),
+    h('div', { class: 'card-links' }, h('button', { class: 'linklike lock-all', onclick: () => call('lock').catch((e) => toast(e.message, 'error')) }, t('Alles sperren')),
+      // #537 stage 6 (Konrad): the reset with the recovery stick also behind the window's lock alone; `unlock` lifts it.
+      mpSetUp() ? stickResetLink({ done: async () => { await call('unlock', { entra: true }); await render(); } }) : null),
   );
   focusField(pin);
   checkWindowsRequests();
@@ -109,15 +122,20 @@ export function renderLocked(error) {
   if (st.windowLocked) return renderWindowLocked(error);
   const entra = h('button', { class: 'btn primary block', onclick: () => open(true, entra) }, icon('unlock'), t('Mit Microsoft Entra ID entsperren'));
   const local = h('button', { class: 'btn block', onclick: () => open(false, local) }, icon('note'), t('Nur Datei-Tresore öffnen'));
-  const pin = st.pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), class: 'pin-input', onkeydown: (e) => {
+  const secret = mpSetUp() ? unlockSecretField({ onEnter: () => open(true, entra) }) : null; // #537
+  const pin = secret ? secret.input : st.pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: t('PIN'), class: 'pin-input', onkeydown: (e) => {
     if (e.key === 'Enter') open(true, entra);
   } }) : null;
-  async function open(withEntra, button) {
+  const lockHello = mpSetUp() ? helloKeyLockButton({ done: () => open(true, entra, { viaHello: true }), failed: (message) => renderLocked(message) }) : null;
+  const lockField = secret ? secret.el : pin ? field(t('PIN'), pin) : null;
+  lockScreenAutoHello(lockHello, { fieldEl: lockField, error });
+  async function open(withEntra, button, { viaHello = false } = {}) {
     button.disabled = true;
     button.replaceChildren(h('span', { class: 'spinner' }), withEntra ? (st.signInMode === 'windows' ? t('Anmeldung mit deinem Windows-Konto …') : t('Anmeldung im Browser …')) : t('Öffnen …'));
     try {
-      if (pin) await call('verifyPin', pin.value);
+      if (pin && !viaHello) await call('verifyPin', pin.value, secret?.kind());
       const r = await call('unlock', { entra: withEntra });
+      resetLockAutoHello(); // #537 risk 3: the next lock asks Hello by itself again
       if (r.discoverError) toast(t('Tresor-Suche: {message}', { message: r.discoverError }), 'error');
       // #475: an old short PIN is known once entered – say so right away, not only on the next lock screen.
       if (r.pinShort) toast(t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern'), 'warn');
@@ -139,7 +157,10 @@ export function renderLocked(error) {
       : t('Melde dich mit deinem Arbeitskonto an. Die Anmeldung öffnet sich im Standardbrowser.')),
     error ? notice(error) : null,
     h('div', { id: 'windows-waiting', class: 'notice info', hidden: true }, t('Windows wartet auf einen Passkey – entsperre Keevault, um fortzufahren.')),
-    pin ? field(t('PIN'), pin) : null,
+    // #537 stage 3: Windows Hello unwraps the device key; the master password below always works too (risk 3: it shows
+    // after Hello did not go through – Hello starts by itself once per lock).
+    lockHello,
+    lockField,
     pin && st.pinShort ? h('div', { class: 'notice warn pin-short' }, t('Deine PIN ist kürzer als 6 Zeichen – bitte ändern')) : null,
     st.pinSet ? null : h('p', { class: 'muted small' }, t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')),
     entra,
@@ -149,6 +170,8 @@ export function renderLocked(error) {
       icon('ac-elevate'), t('PIM: Rolle aktivieren')) : null,
     h('div', { class: 'card-links' },
       h('button', { class: 'linklike', onclick: settingsDialog }, t('Einstellungen')),
+      // #537 stage 6: the recovery stick resets the master password (shown only when one is there).
+      mpSetUp() ? stickResetLink({ done: () => open(true, entra, { viaHello: true }) }) : null,
       h('button', { class: 'linklike', onclick: async () => {
         await call('signOut');
         toast(t('Abgemeldet – beim nächsten Entsperren Konto wählen'));

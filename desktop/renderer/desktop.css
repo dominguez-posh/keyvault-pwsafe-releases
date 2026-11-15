@@ -57,6 +57,12 @@ body { overflow: hidden; }
 .choice { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
 .choice:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
 .choice:disabled { opacity: .55; cursor: default; }
+/* #537 live test: Windows Hello beside each passkey of a Windows request; "or" between Hello and the field. */
+.choice-row { display: flex; gap: 6px; align-items: stretch; }
+.choice-row .choice { flex: 1; min-width: 0; }
+.hello-proof-box { display: grid; gap: 6px; margin-bottom: 4px; }
+.hello-or { margin: 0; }
+.q-pin .q-hello-allow { margin-bottom: 6px; }
 .chosen { flex: 1; min-width: 0; }
 .modal-body h3 { margin: 12px 0 8px; }
 /* Tabbed dialogs (settings): the bar stays visible while a panel scrolls. */
@@ -96,6 +102,9 @@ body { overflow: hidden; }
 .log-list li { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
 .log-list .log-when { flex: none; width: 128px; color: var(--muted); font-size: 12px; }
 .log-list li.untrusted { color: var(--danger); }
+/* #539 Etappe 10: what the emergency stick did stands out; the code an admin types. */
+.log-list li.break-glass { border-left: 3px solid var(--danger); padding-left: 8px; background: color-mix(in srgb, var(--danger) 6%, transparent); }
+.safety-code-input { margin-top: 6px; width: 100%; max-width: 240px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
 .unlock-panel details { border-top: 1px solid var(--border); padding-top: 10px; }
 .unlock-panel summary { cursor: pointer; color: var(--accent); }
 .diagnosis { margin: 0 0 10px; font-size: 12px; }
@@ -701,8 +710,12 @@ html.web-demo-embedded .list-pane, html.web-demo-embedded .detail-pane { backgro
 .admin-link:hover, .admin-link:focus-visible { border-color: color-mix(in srgb, var(--c, var(--accent)) 55%, var(--border)); background: color-mix(in srgb, var(--c, var(--accent)) 7%, var(--surface));
   transform: translateY(-1px); box-shadow: 0 4px 14px rgb(0 0 0 / .08); outline: none; }
 .admin-link:active { transform: none; }
-.admin-logo { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: #fff;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--c) 82%, #fff), var(--c)); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .18); }
+/* Centers: own symbol in Keevault's blue on its soft tone, so no tile looks like a vendor's logo (#538). PIM keeps the
+   filled violet tile as the one action. */
+.admin-logo { flex: none; width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; color: var(--accent);
+  background: var(--accent-soft); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent); }
+.admin-pim .admin-logo { color: #fff; background: linear-gradient(145deg, color-mix(in srgb, var(--c) 82%, #fff), var(--c));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .18); }
 .admin-text { display: grid; min-width: 0; line-height: 1.25; }
 .admin-text b { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-text small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

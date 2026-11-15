@@ -5,7 +5,7 @@ import { pickFilterBar, pickKindMatches } from '../../../extension/core/ui-item.
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { items, st, ui } from './state.js';
-import { containerName, writable } from './helpers.js';
+import { containerName, withAccess, writable } from './helpers.js';
 import { splitKey } from './detail.js';
 import { draggedPasskey } from './dragdrop.js';
 import { isMicrosoftSummary, smallAvatar } from './icons.js';
@@ -13,7 +13,7 @@ import { reloadAll } from './shell.js';
 
 export async function connectServer(containerId, id, method) {
   try {
-    const r = await call('connectServer', { containerId, id, method });
+    const r = await withAccess(() => call('connectServer', { containerId, id, method })); // #537 2b
     if (method === 'rdp') {
       toast(r.credentialGuard ? t('Remotedesktop gestartet – das Passwort liegt in der Zwischenablage, im Windows-Dialog mit Strg+V einfügen (Credential Guard erlaubt keine gespeicherten Anmeldedaten, und Windows lässt dort kein Eintippen zu).')
         : r.prompt ? t('Remotedesktop gestartet – bitte dort anmelden') : t('Remotedesktop gestartet'));
@@ -27,23 +27,7 @@ export async function connectServer(containerId, id, method) {
   }
 }
 
-// PIM "My roles" (activate eligible Entra roles) – the page aka.ms/pim leads to, opened directly so the sign-in can be
-// handed to the browser extension (only admin center hosts are allowed, see main.js). SharePoint goes through the M365
-// admin center, which knows the tenant.
-// Shown as a panel in the entry: PIM on top, the rest grouped; each with its own symbol (dom.js "ac-…") in a colour
-// close to the product's, so the centers are told apart at a glance.
-export const ADMIN_LINKS = [
-  { id: 'pim', name: 'PIM', url: 'https://portal.azure.com/#view/Microsoft_Azure_PIMCommon/ActivationMenuBlade/~/aadmigratedroles', icon: 'ac-elevate', color: '#8661c5', title: t('Rolle mit Privileged Identity Management aktivieren') },
-  { id: 'entra', name: 'Entra ID', url: 'https://entra.microsoft.com', icon: 'ac-id', color: '#0078d4', group: 'identity', host: 'entra.microsoft.com' },
-  { id: 'defender', name: 'Defender', url: 'https://security.microsoft.com', icon: 'ac-shield', color: '#2d5bb9', group: 'identity', host: 'security.microsoft.com' },
-  { id: 'purview', name: 'Purview', url: 'https://purview.microsoft.com', icon: 'ac-compliance', color: '#6b4fbb', group: 'identity', host: 'purview.microsoft.com' },
-  { id: 'm365', name: 'Microsoft 365', url: 'https://admin.microsoft.com', icon: 'ac-apps', color: '#d83b01', group: 'm365', host: 'admin.microsoft.com' },
-  { id: 'exchange', name: 'Exchange', url: 'https://admin.exchange.microsoft.com', icon: 'mail', color: '#0364b8', group: 'm365', host: 'admin.exchange.microsoft.com' },
-  { id: 'teams', name: 'Teams', url: 'https://admin.teams.microsoft.com', icon: 'ac-people', color: '#5b5fc7', group: 'm365', host: 'admin.teams.microsoft.com' },
-  { id: 'sharepoint', name: 'SharePoint', url: 'https://admin.microsoft.com/sharepoint', icon: 'ac-share', color: '#038387', group: 'm365', host: 'SharePoint Admin Center' },
-  { id: 'intune', name: 'Intune', url: 'https://intune.microsoft.com', icon: 'ac-devices', color: '#0f7b6c', group: 'm365', host: 'intune.microsoft.com' },
-  { id: 'azure', name: 'Azure Portal', url: 'https://portal.azure.com', icon: 'ac-cloud', color: '#0089d6', group: 'azure', host: 'portal.azure.com' },
-];
+export { ADMIN_LINKS } from './admin-links.js';
 
 /**
  * Passkey saved in the wrong entry: pick another login (writable vault) – entries of the same site and with the same
@@ -113,7 +97,7 @@ async function movePasskeyTo(data, targetKey) {
   const [fromContainer, fromId] = splitKey(data.from);
   const [containerId, id] = splitKey(targetKey);
   try {
-    await call('movePasskey', { from: { containerId: fromContainer, id: fromId }, to: { containerId, id }, credentialId: data.credentialId });
+    await withAccess(() => call('movePasskey', { from: { containerId: fromContainer, id: fromId }, to: { containerId, id }, credentialId: data.credentialId })); // #537 2b
     toast(t('Passkey verschoben'));
     ui.selected = targetKey;
     ui.editing = null; // started from the edit form: its copy of the entry is outdated now (#453)
@@ -128,7 +112,7 @@ async function movePasskeyTo(data, targetKey) {
 /** Opens PIM or an admin center in the browser; the extension signs in with the entry's account. */
 export async function openAdminLink(link, key) {
   try {
-    const r = await call('openAdminCenter', { url: link.url, key });
+    const r = await withAccess(() => call('openAdminCenter', { url: link.url, key })); // #537 2b
     toast(r.signIn ? t('{center} geöffnet – die Browser-Erweiterung meldet dich an', { center: link.name }) : t('{center} geöffnet – ohne Browser-Erweiterung bitte selbst anmelden', { center: link.name }));
   } catch (e) {
     toast(e.message, 'error');

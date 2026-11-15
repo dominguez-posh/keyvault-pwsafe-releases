@@ -139,7 +139,7 @@ test('file: the change keeps history, folders, logo and settings readable with t
   assert.equal(fresh.getItem(a.id).password, 'two');
   assert.equal(fresh.history(a.id).length, 2);
   assert.ok(fresh.folderList.some((f) => f.path === 'Kunden/Contoso'));
-  assert.deepEqual((await fresh.appSettings()).value, { lang: 'de' });
+  assert.equal((await fresh.appSettings()).value.lang, 'de'); // (#537 2b: plus its stamp recordAt)
 });
 
 test('the personal vault renews its recovery key through the real key change, with a new master password (#402)', async () => {
@@ -152,8 +152,8 @@ test('the personal vault renews its recovery key through the real key change, wi
   assert.ok(body.includes('KEY_CHANGE.enabled ?'), 'the plain wrapping remains only while the key change is switched off');
   const ui = readFileSync(new URL('../desktop/renderer/app/personal.js', import.meta.url), 'utf8');
   const at = ui.indexOf('await askNewMasterPassword()');
-  assert.ok(at > 0 && ui.slice(at, at + 200).includes('!password) return;'), 'cancelling the password dialog changes nothing');
-  assert.ok(ui.includes("call('renewPersonalRecovery', c.id, password)"));
+  assert.ok(at > 0 && ui.slice(at, at + 200).includes('!asked) return;'), 'cancelling the password dialog changes nothing');
+  assert.ok(ui.includes("call('renewPersonalRecovery', c.id, asked?.password ?? null)")); // #539 M3: { password, option }
   assert.ok(ui.includes('KEY_CHANGE.enabled ? await askNewMasterPassword()'), 'no password dialog while switched off');
 });
 

@@ -73,7 +73,7 @@ export async function repairOlder(doc, floor, newerDoc = null) {
     const cur = i >= 0 ? members[i] : { id: f.id, requested: f.grants[0]?.at, credentials: [], removedCredentials: [], wrapped: null };
     const sigs = new Set(f.grants.map((g) => g.sig));
     if (i < 0 || f.grants.some((g) => !(cur.grants || []).some((x) => x?.sig === g.sig))) restored.push(f.email);
-    const next = { ...cur, email: f.email, ecdh: f.ecdh, sign: f.sign, grants: [...f.grants, ...(cur.grants || []).filter((g) => !sigs.has(g?.sig))] };
+    const next = { ...cur, email: f.email, ecdh: f.ecdh, sign: f.sign, breakGlass: f.breakGlass === true ? true : undefined, grants: [...f.grants, ...(cur.grants || []).filter((g) => !sigs.has(g?.sig))] }; // #539 N1
     const n = newer.get(f.id);
     if (n?.sign === f.sign) {
       const removedCredentials = [...new Set([...(next.removedCredentials || []), ...(n.removedCredentials || [])])];

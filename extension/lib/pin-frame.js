@@ -12,7 +12,7 @@ import { t } from '../core/i18n.js';
 
 export const PIN_PAGE = 'pin/pin.html';
 /** What the PIN page asks the worker for; a sender of the dynamic origin gets nothing else. */
-export const PIN_PAGE_COMMANDS = new Set(['state', 'webauthn:pinFrame', 'webauthn:pinApprove', 'webauthn:cancel']);
+export const PIN_PAGE_COMMANDS = new Set(['state', 'webauthn:pinFrame', 'webauthn:pinApprove', 'webauthn:cancel', 'webauthn:pinFrameSize']); // #537 Lena 3: its height
 
 /** Where our PIN page may be: what runtime.getURL gives (the dynamic id where the browser uses it) and the fixed id. */
 const pinPageUrls = () => [chrome.runtime.getURL(PIN_PAGE), ...(chrome.runtime.id ? [`chrome-extension://${chrome.runtime.id}/${PIN_PAGE}`] : [])];
@@ -82,15 +82,24 @@ export function pinFrameCommands({ loadRequest, saveRequest, approve, pinState, 
   return {
     'webauthn:pinFrame': async (msg, sender) => {
       const req = await bound(msg, sender, true);
-      await toTag(req, { type: 'pinframe:ready' }).catch(() => {});
-      return { pin: await pinState(), rpId: req.rpId };
+      const pin = await pinState();
+      await toTag(req, { type: 'pinframe:ready', hello: pin?.hello === true }).catch(() => {}); // #537: the frame's height
+      return { pin, rpId: req.rpId };
+    },
+    // Lena 3: the frame's height as it draws it – clamped, only from the frame bound to this request.
+    'webauthn:pinFrameSize': async (msg, sender) => {
+      const req = await bound(msg, sender, false);
+      const height = Math.max(40, Math.min(360, Math.round(Number(msg.height) || 0)));
+      await toTag(req, { type: 'pinframe:size', height }).catch(() => {});
+      return true;
     },
     'webauthn:pinApprove': async (msg, sender) => {
       const req = await bound(msg, sender, false);
       const seen = await toTag(req, { type: 'pinframe:clear' }).catch(() => null);
       if (seen?.clear !== true) throw Object.assign(new Error(t('Nicht angemeldet: Die Leiste war verdeckt, verschoben oder gerade erst erschienen. Bitte die PIN erneut eingeben.')), { name: 'Covered' });
       const { containerId, itemId, credentialId, pin } = msg;
-      return approve({ requestId: req.id, containerId, itemId, credentialId, pin: typeof pin === 'string' ? pin : '' });
+      // #537 stage 4: { hello: true } after a click in this frame (same visibility check) – the app asks Windows Hello.
+      return approve({ requestId: req.id, containerId, itemId, credentialId, pin: (pin && typeof pin === 'object' && pin.hello === true ? { hello: true } : typeof pin === 'string' ? pin : '') });
     },
   };
 }

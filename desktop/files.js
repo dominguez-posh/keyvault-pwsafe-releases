@@ -6,7 +6,7 @@ import { watchFile, unwatchFile } from 'node:fs';
 import path from 'node:path';
 import { FileVault } from '../extension/core/filevault.js';
 import { canWrite } from '../extension/core/members.js';
-import { setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries } from '../extension/core/protect.js';
+import { setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries, withEscrowValidity, unlockWithPassword } from '../extension/core/protect.js';
 import { t } from '../extension/core/i18n.js';
 import { vaultIdentity } from './file-identity.js';
 import { floorOf, mergeFloors, repairFromFloor } from '../extension/core/rollback.js';
@@ -348,7 +348,8 @@ export class FileContainers {
       const passkeys = vault.credentials(rpId);
       return { kind: 'file', secure: true, protected: true, locked: vault.locked, passkeys, methods: { password: false, recovery: false, passkeys: [], invites: [] } };
     }
-    return { kind: 'file', protected: true, locked: vault.locked, methods: describeKeyring(vault.keyring, rpId), passkeys: passkeyEntries(vault.keyring, rpId) };
+    const methods = await withEscrowValidity(describeKeyring(vault.keyring, rpId), vault.keyring, vault.ck);
+    return { kind: 'file', protected: true, locked: vault.locked, methods, passkeys: passkeyEntries(vault.keyring, rpId) };
   }
 
   async unlock(id, params) {
@@ -364,6 +365,15 @@ export class FileContainers {
     await vault.unlock(r.ck);
     this.onChange();
     return { via: r.entry.type, entryId: r.entry.id };
+  }
+
+  /** #539: a secured file with the member key of the app's master password (main process only, never from the window). */
+  async unlockWithMemberKey(id, mk) {
+    const vault = this.get(id);
+    if (!vault.secure) throw new Error(t('Nur abgesicherte Dateien haben Benutzer'));
+    const r = await this.serial(id, () => vault.unlockWithPasskey(null, null, { mk }));
+    if (!r.pending) this.onChange();
+    return r.pending ? r : { via: 'app', role: r.role };
   }
 
   async lock(id) {
@@ -382,9 +392,12 @@ export class FileContainers {
       if (vault.secure) throw new Error(t('Abgesicherte Dateien verwalten Zugriff über Benutzer und Rollen'));
       if (vault.locked) throw new Error(t('Der Datei-Tresor ist gesperrt'));
       if (op?.type === 'rekey') {
-        // New key (#402): the device binding (PIN) holds the old key and is renewed or dropped.
-        const r = await vault.rekey(op.password, actor);
-        await this.onRekey(this.entries.get(id));
+        // New key (#402): the device binding (PIN) holds the old key and is renewed or dropped. #537: with the new
+        // password, which for the personal vault is the app's master password from now on.
+        // #539 M3: is it a new password? Only then may "master password compromised" renew the memberships.
+        const same = await unlockWithPassword(vault.keyring, String(op.password ?? '')).then(() => true, () => false);
+        const r = await vault.rekey(op.password, actor, { dropEscrow: Array.isArray(op.dropEscrow) ? op.dropEscrow.filter((x) => typeof x === 'string') : [] });
+        await this.onRekey(this.entries.get(id), op.password, { changed: !same });
         this.onChange();
         return r;
       }
@@ -395,6 +408,8 @@ export class FileContainers {
         && vault.keyring?.entries?.find((e) => e.id === op.entryId)?.type === 'password') throw new Error(t('Das Masterpasswort des persönlichen Tresors lässt sich nicht entfernen'));
       const { keyring, ...extra } = await applyKeyringOp(vault.keyring, vault.ck, op, actor);
       await vault.setKeyring(keyring);
+      // #537: a new master password of the personal vault is the app's new master password (new device key).
+      if (op?.type === 'setPassword' && this.isPersonal(this.entries.get(id)?.path)) await this.onRekey(this.entries.get(id), op.password);
       return extra;
     });
   }
@@ -409,10 +424,10 @@ export class FileContainers {
     return r;
   }
 
-  members(id, rpId) {
+  members(id, rpId, mk = null) {
     const vault = this.get(id);
     if (!vault.secure || vault.locked) throw new Error(t('Der Datei-Tresor ist gesperrt'));
-    return vault.describeMembers(rpId);
+    return vault.describeMembers(rpId, mk);
   }
 
   async memberOp(id, op) {
@@ -474,8 +489,24 @@ export class FileContainers {
     await this.serial(id, () => this.get(id).setAppSettings(value, updated));
   }
 
+  /**
+   * #537 2b: read, change and write the app settings in one step (no other write in between). fn(value) → new value.
+   * → { value, updated }
+   */
+  async updateAppSettings(id, fn, at = Date.now()) {
+    return this.serial(id, async () => {
+      const v = this.get(id);
+      const cur = await v.appSettings();
+      const value = fn(cur?.value && typeof cur.value === 'object' ? cur.value : {});
+      const updated = Math.max(at, (cur?.updated || 0) + 1);
+      await v.setAppSettings(value, updated);
+      return { value, updated };
+    });
+  }
+
   /** Format 1 → secured file (new ID). Returns the new ID. */
   async migrate(id, creator) {
+    if (!creator?.breakGlass) throw new Error(t('Erst den Notfall-Stick (Break-Glass) einrichten')); // #539 Etappe 10
     const entry = this.entries.get(id);
     const newId = await this.get(id).migrateToSecure(creator);
     this.entries.delete(id);
@@ -490,6 +521,7 @@ export class FileContainers {
 
   /** Secured file (passkey only): the creator becomes admin. creator: { email, passkey } → { id } (unlocked). */
   async createSecure(filePath, name, creator) {
+    if (!creator?.breakGlass) throw new Error(t('Erst den Notfall-Stick (Break-Glass) einrichten')); // #539 Etappe 10
     const io = fileIo(filePath);
     if ((await io.read()) != null) throw new Error(t('Die Datei existiert bereits – zum Öffnen „Datei öffnen“ verwenden'));
     const vault = await FileVault.createSecure(io, { name, ...creator });

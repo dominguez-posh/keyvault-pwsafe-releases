@@ -4,7 +4,7 @@ import { h, icon, setChildren, toast, modal, formatDateTime } from '../../../ext
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { progressListeners } from './state.js';
-import { field, notice } from './helpers.js';
+import { field, notice, withAccess } from './helpers.js';
 import { reloadAll } from './shell.js';
 import { licenses } from './vault-dialogs.js';
 
@@ -38,7 +38,7 @@ export function backupDialog(c) {
     { label: t('Speicherort wählen und Backup erstellen'), primary: true, onClick: async () => {
       if (!allowed) throw new Error(t('Backup und Wiederherstellung sind nur für Besitzer (Owner) der Subscription möglich.'));
       body.append(progress.el);
-      const r = await call('createBackup', c.id);
+      const r = await withAccess(() => call('createBackup', c.id)); // #537 2b
       if (!r) return false;
       backupPasswordDialog(r);
       return true;

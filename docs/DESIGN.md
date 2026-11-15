@@ -18,6 +18,25 @@ Neue Oberflächen nutzen bereits diese Zielwerte. Die übrigen Web-Farben und To
 3. Jede Oberfläche muss hell und dunkel funktionieren.
 4. Text auf `--accent` nutzt `--on-accent` (Website: siehe [Bedienelemente](#website-und-portale)), nie festes Weiß.
 5. Weicht etwas von dieser Vorgabe ab, entscheidet Lucas über die Design-Verantwortliche und den Teamleiter.
+6. Keine fremden Markenlogos, Produktsymbole oder Favicons fremder Dienste in der Oberfläche, auch nicht nachgezeichnet oder in deren Logofarben (Entscheidung von Lucas vom 13.11.2026, #538). Die Icon-Sets von Microsoft sind nur für Diagramme, Schulung und Dokumentation freigegeben. Fremde Dienste bekommen eigene Symbole, die ihre Aufgabe zeigen, und ihren Namen als Text. Ausnahme: das Symbol, das ein Nutzer selbst für einen Eintrag speichert.
+7. Höchstens ein primärer Knopf je Dialog (Entscheidung Keevault CTO (14.11.2026), Lucas informiert; #537). Bietet ein Dialog Windows Hello an, ist „Mit Windows Hello erlauben“ der primäre Knopf, die Aktion der Fußzeile dann nicht primär (`primary: !st.unlock?.hello`). Gefährliche Aktionen bleiben `danger`.
+
+### Admin-Center-Kacheln
+
+Jedes Admin Center hat ein eigenes Strichsymbol aus `extension/core/dom.js` (`ac-…`), das seine Aufgabe zeigt, Liste in `desktop/renderer/app/admin-links.js`. Die Kacheln nutzen `--accent` auf `--accent-soft`, nur PIM hat als Aktion eine gefüllte Kachel in `--pim`. Ein Unit-Test (`test/admin-links.test.js`) und der Smoke-Test prüfen, dass jedes Center ein eigenes Symbol hat.
+
+| Center | Symbol | Bedeutung |
+|---|---|---|
+| PIM | `ac-elevate` | Schild mit Pfeil nach oben: Rolle anheben |
+| Entra ID | `ac-id` | Ausweis: Identitäten |
+| Defender | `ac-radar` | Radar: Bedrohungen beobachten |
+| Purview | `ac-compliance` | Dokument mit Lupe: Daten prüfen |
+| Microsoft 365 | `ac-admin` | Dashboard: Verwaltungsübersicht |
+| Exchange | `ac-mailbox` | Posteingangsfach: Postfächer |
+| Teams | `ac-chat` | Sprechblasen: Besprechungen und Chat |
+| SharePoint | `ac-sites` | gestapelte Ebenen: Websites |
+| Intune | `ac-devices` | Laptop und Telefon: Geräte |
+| Azure Portal | `ac-cloud` | Wolke: Cloud-Ressourcen |
 
 ## Geltungsbereich
 

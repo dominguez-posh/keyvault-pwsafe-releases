@@ -78,11 +78,26 @@ test('472 review: both PIN dialogs check the open requests before Enter confirms
   assert.equal((src.match(/pinRequests\.remove\(reqKey\);/g) || []).length, 2, 'both deregister when closed');
   assert.match(src, /const reqKey = `q:\$\{q\.id\}`/);
   assert.match(src, /const reqKey = `w:\$\{r\.id\}`/);
-  assert.match(src, /pinInput, pinMulti, pinError/);
+  // #537 risk 3: Hello on top, then the box with "or", the label, the field (hidden until Hello did not go through).
+  assert.match(src, /h\('div', \{ class: 'field q-pin' \}, helloAllow, pinBox, pinError\)/);
+  assert.match(src, /pinBox\?\.append\(\.\.\.\[helloOr\(\), h\('label', \{ for: 'q-pin-input' \}, proofPrompt\(q\)\), pinInput, pinMulti\]\.filter\(Boolean\)\)/);
+  // One automatic start, never for a held request, never after a cancel (autoHelloOnce in helpers.js).
+  assert.match(src, /tryAutoHello = \(\) => \{ if \(choice !== null && !q\.held\) auto\(\(\) => \{ lastQuestionAuto = Date\.now\(\); submitPin\(true\); \}\); \};/);
+  // Konrad M1: only the one open request, its dialog on top, once within 60 s, never held or sent again after the lock.
+  assert.match(src, /pinRequests\.single\(reqKey\) && onTop\(dialog\) && Date\.now\(\) - lastQuestionAuto >= questionAutoGap\(\)/);
+  assert.match(src, /const mayAuto = !!st\.unlock\?\.hello && !window\.kvSmokeNoAutoHello && !q\.held && !q\.resent;/);
+  assert.match(src, /if \(pinBox\?\.hidden\) allow\.hidden = true;/, 'Lena 1: "allow" hidden while Hello runs');
+  const agents = await readFile(new URL('../desktop/main/agents.js', import.meta.url), 'utf8');
+  assert.match(agents, /send\(\{ type: 'question', id, \.\.\.spec, resent: true \}\);/);
+  // Lena 3: the delay and the disabled state hold for the Hello button too; Enter/space on it does not restart the delay.
+  assert.match(src, /for \(const b of \[allow, helloAllow\]\.filter\(Boolean\)\) \{\s+b\.disabled = choice === null \|\| !!q\.held;/);
+  assert.match(src, /\(e\.target === allow \|\| \(helloAllow && e\.target === helloAllow\)\) && \(e\.key === 'Enter' \|\| e\.key === ' '\)/);
+  assert.doesNotMatch(src, /leer lassen/, 'Lena 5: no "leave the field empty" in the Windows dialog either'); // #537 live test: Hello its own button, "or" above the field
+  assert.doesNotMatch(src, /helloHint/, 'no "leave the field empty" in the agent question');
 });
 
 test('472 review: settings patches with PIN-only keys are refused', async () => {
-  assert.deepEqual([...PIN_ONLY_SETTINGS], ['appPin', 'pinGuard', 'personalDeviceKeys', 'windowHello']); // #512: windowHello
+  assert.deepEqual([...PIN_ONLY_SETTINGS], ['appPin', 'pinGuard', 'personalDeviceKeys', 'windowHello', 'unlockKeys', 'personalVaults', 'confirmEachVaults', 'confirmEachPersonalOnly', 'appSettingsSeen', 'memberKeySeen', 'memberKeyDevice', 'helloOffered']); // #512: windowHello, #537: unlockKeys, personalVaults (H2), #539
   assert.deepEqual(pinOnlyKeys({ appPin: null }), ['appPin'], 'clearing the PIN');
   assert.deepEqual(pinOnlyKeys({ appPin: { hash: 'x' } }), ['appPin']);
   assert.deepEqual(pinOnlyKeys({ pinGuard: null, zoom: 1 }), ['pinGuard']);

@@ -25,13 +25,20 @@ export function floorOf(doc, roster = null) {
   const sh = doc.keyring.sharing;
   const sharings = valid ? (sh && valid.includes(sh) && roster.sharingSig === sh.sig ? [{ enabled: !!sh.enabled, at: sh.at, by: sh.by, sig: sh.sig }] : []) : null;
   // Konrad N1 (#521): only what is kept whole is known – a forged sharing setting made taking an older state stop as incomplete.
-  const signed = valid ? [...rejections, ...sharings].map((x) => x.sig) : null;
+  // #539 N2 (Konrad): the counting "passkeys only" setting is known like the others.
+  const po0 = doc.keyring.passkeyOnly;
+  const poSig = po0 && roster?.passkeyOnlySig && po0.sig === roster.passkeyOnlySig ? [po0.sig] : [];
+  const signed = valid ? [...rejections, ...sharings].map((x) => x.sig).concat(poSig) : null;
   const members = roster?.accepted ? (doc.keyring.members || []).map((m) => ({
     id: m.id, email: m.email, ecdh: m.ecdh, sign: m.sign, grants: (m.grants || []).filter((g) => roster.accepted.has(`${m.id} ${g.sig}`)),
+    ...(m.breakGlass === true ? { breakGlass: true } : {}), // #539 N1: signed with the grants
   })).filter((m) => m.grants.length) : null;
+  // #539: the counting "passkeys only" setting (signed fields only) – a file put back without it stays "on".
+  const po = doc.keyring.passkeyOnly;
+  const passkeyOnly = po && roster?.passkeyOnlySig && po.sig === roster.passkeyOnlySig ? { enabled: !!po.enabled, at: po.at, by: po.by, sig: po.sig } : null;
   return {
     id: doc.id, keyVersion: doc.keyring.keyVersion || 0, grants: counted,
-    ...(signed ? { signed, rejections, sharings } : {}), ...(members ? { members } : {}),
+    ...(signed ? { signed, rejections, sharings } : {}), ...(members ? { members } : {}), ...(passkeyOnly ? { passkeyOnly } : {}),
   };
 }
 
@@ -55,7 +62,11 @@ export function mergeFloors(a, b) {
     rejections: unionBySig(a.rejections, b.rejections), sharings: unionBySig(a.sharings, b.sharings),
   } : {};
   const members = a.members || b.members ? { members: mergeMembers(a.members, b.members) } : {};
-  return { id: a.id, keyVersion: Math.max(a.keyVersion || 0, b.keyVersion || 0), grants: [...new Set([...(a.grants || []), ...(b.grants || [])])], ...signed, ...members };
+  const po = [a.passkeyOnly, b.passkeyOnly].filter((x) => typeof x?.at === 'string').sort((x, y) => y.at.localeCompare(x.at))[0];
+  return {
+    id: a.id, keyVersion: Math.max(a.keyVersion || 0, b.keyVersion || 0), grants: [...new Set([...(a.grants || []), ...(b.grants || [])])], ...signed, ...members,
+    ...(po ? { passkeyOnly: po } : {}),
+  };
 }
 
 /**
@@ -73,7 +84,7 @@ export async function repairFromFloor(doc, floor) {
     const i = members.findIndex((m) => m.id === f.id);
     const cur = i >= 0 ? members[i] : { id: f.id, requested: f.grants[0]?.at, credentials: [], removedCredentials: [], wrapped: null };
     const sigs = new Set(f.grants.map((g) => g.sig));
-    const next = { ...cur, email: f.email, ecdh: f.ecdh, sign: f.sign, grants: [...f.grants, ...(cur.grants || []).filter((g) => !sigs.has(g?.sig))] };
+    const next = { ...cur, email: f.email, ecdh: f.ecdh, sign: f.sign, breakGlass: f.breakGlass === true ? true : undefined, grants: [...f.grants, ...(cur.grants || []).filter((g) => !sigs.has(g?.sig))] };
     if (i >= 0) members[i] = next;
     else members.push(next);
   }

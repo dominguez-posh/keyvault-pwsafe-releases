@@ -37,6 +37,7 @@ $DefaultVault     = ''        # z. B. 'https://kv-team-it.vault.azure.net' (Stan
 $BrowserIntegration = $null   # $true | $false – Datei-Tresore in der Browser-Erweiterung
 $WindowsProvider  = $null     # $true | $false – Keevault als Passkey-Anbieter in Windows
 $WindowHello      = $null     # $false verbietet das Entsperren des Fensters mit Windows Hello (ab 0.9.33); $true erzwingt nichts
+$SharedVaultPasskeyOnly = $null # $true: abgesicherte Datei-Tresore nur mit Passkey, nie mit dem Masterpasswort (ab 0.10.0); $false erzwingt nichts
 $SignInWindows    = $null     # $true | $false – Anmeldung im Windows-Dialog (WAM) statt im Browser
 $McpScope         = ''        # selected | all – Zugriff für KI-Agenten
 $ExtensionIds     = ''        # z. B. 'pbkjijhihclckeeefbepoedgdmajioip,abc…' (nur bei eigener Erweiterungs-ID)
@@ -83,6 +84,7 @@ Set-Bool 'SelfUpdate' $SelfUpdate
 Set-Bool 'BrowserIntegration' $BrowserIntegration
 Set-Bool 'WindowsProvider' $WindowsProvider
 Set-Bool 'WindowHello' $WindowHello
+Set-Bool 'SharedVaultPasskeyOnly' $SharedVaultPasskeyOnly
 Set-Bool 'SignInWindows' $SignInWindows
 Set-Text 'DefaultVault' $DefaultVault
 Set-Text 'McpScope' $McpScope

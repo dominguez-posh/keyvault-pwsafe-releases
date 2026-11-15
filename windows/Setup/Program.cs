@@ -14,6 +14,8 @@
 //   Keevault-Update.exe --pipe-acl <pipe>      the app's pipe: current user only, no network (PipeAcl.cs, #511; --pipe-acl-show prints it;
 //                                              --pipe-peer <pipe> --server <exe> prints the relay's check of the other end)
 //   Keevault-Update.exe --hello-status / --hello-verify <hwnd>  Windows Hello for the window lock (Hello.cs, #512)
+//   Keevault-Update.exe --hello-key-status / --hello-key-create|-sign <name> --hwnd <hwnd> / --hello-key-delete <name>
+//                                              Windows Hello key for the master password (HelloKey.cs, #537)
 //   Keevault-Update.exe --rdp                  stdin host/port/user/password → mstsc with a temporary credential (Rdp.cs)
 //   … --screenshot <png> --page welcome|progress|done|error|update|updated|waiting [--theme light|dark] [--lang de|en]
 //                                              renders one page into a PNG without showing a window (tests, docs)
@@ -76,6 +78,11 @@ namespace Keevault.Setup
             // #512: Windows Hello for the app's window lock (Hello.cs); --hello-status shows nothing.
             if (args.Has("hello-status")) return Hello.Status();
             if (args.Has("hello-verify")) return Hello.Verify(args.Get("hello-verify"));
+            // #537: Windows Hello key (KeyCredentialManager) for the master password (HelloKey.cs); status shows nothing.
+            if (args.Has("hello-key-status")) return HelloKey.Status();
+            if (args.Has("hello-key-create")) return HelloKey.Create(args.Get("hello-key-create"), args.Get("hwnd"));
+            if (args.Has("hello-key-sign")) return HelloKey.SignWith(args.Get("hello-key-sign"), args.Get("hwnd"));
+            if (args.Has("hello-key-delete")) return HelloKey.Delete(args.Get("hello-key-delete"));
             // Test of the rollback in a temporary folder (test/setup-rollback.test.js).
             if (args.Has("rollback-selftest")) return Rollback.SelfTest(args.Get("rollback-selftest"));
             var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };

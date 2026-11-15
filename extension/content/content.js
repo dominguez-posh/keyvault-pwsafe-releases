@@ -133,7 +133,7 @@
     const frame = el('iframe', 'pinframe');
     frame.title = 'Keevault';
     frame.hidden = true;
-    const box = { requestId: cur.requestId, guard: null, loads: 0, ready: false, timer: setTimeout(() => pinFallback(box), PIN_FRAME_WAIT) };
+    const box = { requestId: cur.requestId, frame, guard: null, loads: 0, ready: false, timer: setTimeout(() => pinFallback(box), PIN_FRAME_WAIT) };
     box.show = () => {
       box.ready = true;
       clearTimeout(box.timer);
@@ -388,7 +388,13 @@
         toPage({ id: pageId, result: msg.result, error: msg.error, fallback: msg.fallback });
       }
     } else if (msg.type === 'pinframe:ready') {
-      if (pinBox?.requestId === msg.requestId && !pinBox.ready && pinBox.loads <= 1) pinBox.show();
+      if (pinBox?.requestId === msg.requestId && !pinBox.ready && pinBox.loads <= 1) {
+        pinBox.frame?.classList.toggle('hello', msg.hello === true); // #537: room for the Windows Hello button
+        pinBox.show();
+      }
+    } else if (msg.type === 'pinframe:size') {
+      // Lena 3: the frame reports what it needs (clamped by the worker); our own frame only.
+      if (pinBox?.requestId === msg.requestId && pinBox.frame && Number.isFinite(msg.height)) pinBox.frame.style.height = `${Math.max(40, Math.min(360, msg.height))}px`;
     } else if (msg.type === 'pinframe:clear') {
       // Only our own frame, reported by the worker, loaded once, seen by the browser without a break for a while.
       sendResponse({ clear: !!pinBox && pinBox.requestId === msg.requestId && pinBox.ready && pinBox.loads === 1 && pinBox.guard?.clear() === true });

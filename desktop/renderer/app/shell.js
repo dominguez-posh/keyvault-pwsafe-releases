@@ -15,11 +15,14 @@ import { renderList } from './list.js';
 import { applyViewClass } from './main-menu.js';
 import { firstStartDue, offerFirstStart, remindPendingRecovery, resetRecoveryReminder } from './personal.js';
 import { askSettingsCopy } from './settings-file.js';
+import { showMpResetNotices } from './mp-reset.js';
 import { checkWindowsRequests } from './requests.js';
 import { startExtensionHint } from './ext-hint.js';
 import { renderSidebar } from './sidebar.js';
 import { renderLocked, renderSetup } from './start.js';
 import { checkOtherInstallation, updateDialog } from './updates.js';
+import { offerMasterPassword } from './master-password.js';
+import { offerHelloAfterUpgrade } from './hello-unlock.js';
 
 // Installed version, always at the bottom right (the detail pane keeps room below its content, see desktop.css).
 // The update channel comes from the effective setting (policy included), never from a stamp in the build: the same
@@ -88,9 +91,11 @@ export async function render() {
   // (skipped when the personal vault brought the vaults along from another device). Each opens only once.
   // The desktop demo (fresh profile each start) shows the same first start, with example resources and its own PIN.
   else if (firstStartDue()) offerFirstStart();
-  else if (!remindPendingRecovery() && !document.querySelector('dialog[open]')) {
+  else if (!remindPendingRecovery() && !document.querySelector('dialog[open]') && !offerMasterPassword()) { // #537 (E2)
     // #478: installations from before the update are asked once whether the settings may go to OneDrive as a copy.
-    askSettingsCopy().then((asked) => { if (!asked && !st.smoke && !st.demo) checkOtherInstallation(); }).catch(() => {});
+    // #537 stage 6: a reset of the master password (here or on another device) is shown once, before anything else asks.
+    // #537 live test: after an upgrade from the app PIN, "Windows Hello aktivieren?" once on this device.
+    showMpResetNotices().then((shown) => shown || offerHelloAfterUpgrade()).then((asked) => (asked ? true : askSettingsCopy())).then((asked) => { if (!asked && !st.smoke && !st.demo) checkOtherInstallation(); }).catch(() => {});
   }
   await renderDetail();
   if (pendingItemLink) openItemLink(pendingItemLink);

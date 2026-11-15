@@ -9,6 +9,7 @@
 import { b64uEncode, b64uDecode, utf8, fromUtf8, concat, randomBytes, sha256 } from './util.js';
 import { hkdf, seal, unseal, passkeyKey, ContainerKey, UnlockError } from './protect.js';
 import { t } from './i18n.js';
+import { identityAad, appCredential, openAppSecret, isAppCredential, ownAppCredentials, liveCredentials } from './member-app.js';
 
 export const FILE_ROLES = ['admin', 'editor', 'reader'];
 export const ROLE_NAMES = { admin: 'Admin', editor: 'Bearbeiten', reader: 'Lesen' };
@@ -55,8 +56,7 @@ export async function loadIdentity(secret) {
   };
 }
 
-const identityAad = (scope, memberId, credId) => `kvpwsafe/identity/${scope}/${memberId}/${credId}`;
-const wrapAad = (scope, memberId, kv) => `kvpwsafe/member-key/${scope}/${memberId}/${kv}`;
+export const wrapAad = (scope, memberId, kv) => `kvpwsafe/member-key/${scope}/${memberId}/${kv}`;
 
 async function sealIdentity(identity, prfOutput, aad) {
   return seal(await passkeyKey(b64uDecode(prfOutput)), utf8(JSON.stringify(identity.secret)), aad);
@@ -118,8 +118,11 @@ export async function safetyCode(member) {
 
 // ---------------------------------------------------------------- roster (verified grants)
 
+// #539 Etappe 10 (Konrad N1): the break-glass mark is signed with the grant when set – added or taken away later, the
+// member's grants no longer verify. Unset it is left out (canonical drops undefined): every older grant stays as signed.
 const grantBody = (scope, member, g) => ({
   file: scope, member: member.id, email: member.email, ecdh: member.ecdh, sign: member.sign, role: g.role, status: g.status, at: g.at, by: g.by,
+  breakGlass: member.breakGlass === true ? true : undefined,
 });
 
 /** #440: an entry dated later than this ahead of the own clock does not count (yet); it stays in the file. */
@@ -200,7 +203,11 @@ export async function verifyRoster(keyring, known = null, nowMs = Date.now()) {
   const sh = keyring.sharing;
   const sharingSig = sh?.sig && roleAt(sh.by, sh.at) === 'admin'
     && (await verifyObject(byId.get(sh.by)?.sign, { file: keyring.scope, sharing: sh.enabled, at: sh.at, by: sh.by }, sh.sig)) ? sh.sig : null;
-  return { members, roleAt, current: (id) => members.get(id) || null, accepted, counts, lastAt: (id) => lastAt.get(id) || '', tampered, invalid, sharingSig };
+  // #539: the same for the setting "passkeys only" (members-mp.js); this one also counts by the #440 time rules.
+  const po = keyring.passkeyOnly;
+  const passkeyOnlySig = po?.sig && typeof po.at === 'string' && roleAt(po.by, po.at) === 'admin' && counts(po)
+    && (await verifyObject(byId.get(po.by)?.sign, { file: keyring.scope, passkeyOnly: !!po.enabled, at: po.at, by: po.by }, po.sig)) ? po.sig : null;
+  return { members, roleAt, current: (id) => members.get(id) || null, accepted, counts, lastAt: (id) => lastAt.get(id) || '', tampered, invalid, sharingSig, passkeyOnlySig };
 }
 
 /** #440: the date a member signs with – never before their own last entry, so their next one counts everywhere. */
@@ -227,18 +234,32 @@ async function addGrant(keyring, ctx, member, role, status) {
 const replaceMember = (keyring, member) => ({ ...keyring, members: keyring.members.map((m) => (m.id === member.id ? member : m)), updated: now() });
 
 /**
- * New secured keyring. creator: { email, passkey: { credentialId, rpId, prfSalt, prfOutput, label, platform } }
+ * The first credentials of a new member: a passkey and/or (#539) the app credential sealed with the member key MK.
+ * passkey: { credentialId, rpId, prfSalt, prfOutput, label, platform }; mk: Uint8Array(32).
+ */
+async function firstCredentials(identity, scope, memberId, { passkey, mk }) {
+  if (!passkey && !mk) throw new Error('passkey or member key required');
+  const out = [];
+  if (passkey) {
+    const credId = newId();
+    out.push(credentialEntry(passkey, await sealIdentity(identity, passkey.prfOutput, identityAad(scope, memberId, credId)), credId, passkey.platform));
+  }
+  if (mk) out.push(await appCredential(identity.secret, mk, scope, memberId, `app-${newId()}`));
+  return out;
+}
+
+/**
+ * New secured keyring. creator: { email, passkey?, mk? } (at least one, see firstCredentials).
  * Returns { keyring, ck, identity, memberId, id } (id = file ID derived from the creator's signing key).
  */
-export async function createSecureKeyring({ email, passkey }) {
+export async function createSecureKeyring({ email, passkey, mk }) {
   const identity = await newIdentity();
   const scope = await fileIdFor(identity.sign);
   const ck = await ContainerKey.generate();
   const memberId = newId();
-  const credId = newId();
   let member = {
     id: memberId, email, ecdh: identity.ecdh, sign: identity.sign, requested: now(), grants: [],
-    credentials: [credentialEntry(passkey, await sealIdentity(identity, passkey.prfOutput, identityAad(scope, memberId, credId)), credId, passkey.platform)],
+    credentials: await firstCredentials(identity, scope, memberId, { passkey, mk }),
     removedCredentials: [],
   };
   let keyring = { v: 2, scope, root: identity.sign, keyVersion: 1, members: [member], sharing: null, created: now() };
@@ -249,29 +270,31 @@ export async function createSecureKeyring({ email, passkey }) {
 }
 
 /** Access request of a new user (no container key needed): { keyring, identity, memberId, safetyCode }. */
-export async function requestAccess(keyring, { email, passkey }) {
-  if (!keyring.sharing?.enabled) throw new Error(t('Die Freigabe ist für diese Datei nicht aktiviert – bitte einen Admin der Datei fragen'));
+export async function requestAccess(keyring, { email, passkey, mk, sharingOff = false }) {
+  // sharingOff (#539): a new identity replacing one's own (master password compromised) needs no open sharing – its
+  // request is signed with the old identity (members-mp.js), and an admin still compares the code.
+  if (!sharingOff && !keyring.sharing?.enabled) throw new Error(t('Die Freigabe ist für diese Datei nicht aktiviert – bitte einen Admin der Datei fragen'));
   const identity = await newIdentity();
   const memberId = newId();
-  const credId = newId();
   const member = {
     id: memberId, email, ecdh: identity.ecdh, sign: identity.sign, requested: now(), grants: [],
-    credentials: [credentialEntry(passkey, await sealIdentity(identity, passkey.prfOutput, identityAad(keyring.scope, memberId, credId)), credId, passkey.platform)],
+    credentials: await firstCredentials(identity, keyring.scope, memberId, { passkey, mk }),
     removedCredentials: [],
   };
   return { keyring: { ...keyring, members: [...keyring.members, member], updated: now() }, identity, memberId, safetyCode: await safetyCode(member) };
 }
 
-/** Passkeys of all members that this client (rpId) can use – pending requests included. */
+/** Passkeys of all members that this client (rpId) can use – pending requests included (never app credentials, #539). */
 export function secureCredentials(keyring, rpId) {
-  return keyring.members.flatMap((m) => (m.credentials || []).filter((c) => c.rpId === rpId && !(m.removedCredentials || []).includes(c.id))
+  return keyring.members.flatMap((m) => liveCredentials(m).filter((c) => !isAppCredential(c) && c.rpId === rpId)
     .map((c) => ({ credentialId: c.credentialId, prfSalt: c.prfSalt })));
 }
 
 /** Opens the identity behind a passkey and, if access is granted, the container key. */
 export async function unlockSecure(keyring, credentialId, prfOutput, known = null) {
-  const member = keyring.members.find((m) => (m.credentials || []).some((c) => c.credentialId === credentialId));
-  const cred = member?.credentials.find((c) => c.credentialId === credentialId && !(member.removedCredentials || []).includes(c.id));
+  const isCred = (c) => c.credentialId === credentialId && !isAppCredential(c);
+  const member = keyring.members.find((m) => (m.credentials || []).some(isCred));
+  const cred = member?.credentials.find((c) => isCred(c) && !(member.removedCredentials || []).includes(c.id));
   if (!cred) throw new UnlockError(t('Dieser Passkey passt nicht zu diesem Tresor'));
   let identity;
   try {
@@ -279,6 +302,27 @@ export async function unlockSecure(keyring, credentialId, prfOutput, known = nul
   } catch {
     throw new UnlockError(t('Dieser Passkey passt nicht zu diesem Tresor'));
   }
+  return finishUnlock(keyring, member, cred, identity, known);
+}
+
+/**
+ * #539: opens the identity behind the own app credential (member key MK of the app's master password). Several members
+ * of this file with the tag (an old identity waiting for its replacement): the active one first, else the newest.
+ * → like unlockSecure, plus `via: 'app'`.
+ */
+export async function unlockSecureApp(keyring, mk, known = null) {
+  const own = await ownAppCredentials(keyring, mk);
+  const roster = own.length ? await verifyRoster(keyring, known) : null;
+  const rank = (x) => ({ active: 0, pending: 1 }[roster.current(x.member.id)?.status] ?? 2);
+  own.sort((a, b) => rank(a) - rank(b) || String(b.member.requested || '').localeCompare(String(a.member.requested || '')));
+  for (const { member, cred } of own) {
+    const secret = await openAppSecret(cred, mk, keyring.scope, member.id);
+    if (secret) return { ...(await finishUnlock(keyring, member, cred, await loadIdentity(secret), known)), via: 'app' };
+  }
+  throw new UnlockError(t('Diese Datei ist nicht mit deinem Masterpasswort verbunden'));
+}
+
+async function finishUnlock(keyring, member, cred, identity, known) {
   const roster = await verifyRoster(keyring, known);
   const state = roster.current(member.id);
   if (identity.sign !== member.sign) throw new UnlockError(t('Die Mitgliedsdaten dieser Datei sind ungültig'));
@@ -341,6 +385,9 @@ export async function applySecureOp(keyring, ctx, op) {
     case 'approve': {
       requireAdmin(roster, ctx);
       if (!FILE_ROLES.includes(op.role)) throw new Error('Unknown role');
+      // #539 Etappe 10 (Konrad): a request carrying the break-glass mark is approved only by addBreakGlass (members-mp.js),
+      // which registered and test-opened the stick – never by the everyday approve or a replacement.
+      if (target.breakGlass === true && op.breakGlassStick !== true) throw new Error(t('Ein Notfall-Zugang wird nur über „Notfall-Stick hinzufügen“ eingerichtet'));
       let m = await addGrant(keyring, ctx, target, op.role, 'active');
       m = { ...m, wrapped: { kv: keyring.keyVersion, ...(await wrapKey(ctx.ck.raw, m.ecdh, wrapAad(keyring.scope, m.id, keyring.keyVersion))) } };
       return { keyring: replaceMember(keyring, m) };
@@ -348,6 +395,8 @@ export async function applySecureOp(keyring, ctx, op) {
     case 'setRole': {
       requireAdmin(roster, ctx);
       if (!FILE_ROLES.includes(op.role)) throw new Error('Unknown role');
+      // #539 Etappe 10 (Konrad M1): only an active member changes role – a request becomes active only by approve (code).
+      if (roster.current(target.id)?.status !== 'active') throw new Error(t('Nur aktive Mitglieder haben eine Rolle – Anfragen werden mit dem Sicherheitscode freigegeben'));
       if (op.role !== 'admin' && activeAdmins(roster).join() === target.id) throw new Error(t('Die Datei braucht mindestens einen Admin'));
       return { keyring: replaceMember(keyring, await addGrant(keyring, ctx, target, op.role, 'active')) };
     }
@@ -386,6 +435,14 @@ export async function applySecureOp(keyring, ctx, op) {
       const credId = newId();
       const sealed = await sealIdentity(ctx.identity, op.passkey.prfOutput, identityAad(keyring.scope, me.id, credId));
       return { keyring: replaceMember(keyring, { ...me, credentials: [...me.credentials, credentialEntry(op.passkey, sealed, credId, op.passkey.platform)] }) };
+    }
+    case 'addAppCredential': {
+      // #539: the own identity also at the app's master password (member key MK). Not with "passkeys only" (ctx.passkeyOnly).
+      if (ctx.passkeyOnly) throw new Error(t('Dieser Tresor lässt sich nur mit Passkey öffnen'));
+      const me = keyring.members.find((m) => m.id === ctx.memberId);
+      if ((await ownAppCredentials({ ...keyring, members: [me] }, op.mk)).length) return { keyring };
+      const cred = await appCredential(ctx.identity.secret, op.mk, keyring.scope, me.id, `app-${newId()}`);
+      return { keyring: replaceMember(keyring, { ...me, credentials: [...me.credentials, cred] }) };
     }
     case 'removeCredential': {
       const me = keyring.members.find((m) => m.id === ctx.memberId);
@@ -440,9 +497,11 @@ export async function describeSecure(keyring, roster, myId, rpId) {
       // #440: a signed grant for this account that does not count here (dated back, or by someone not admin then).
       // Devices without a floor may count it – an admin takes the account out with a signed rejection.
       invalid: roster.invalid?.has(id) || undefined,
-      credentials: id === myId ? m.credentials.filter((c) => !(m.removedCredentials || []).includes(c.id))
-        .map((c) => ({ id: c.id, label: c.label, platform: c.platform, created: c.created, usable: c.rpId === rpId })) : undefined,
-      passkeyCount: (m.credentials || []).filter((c) => !(m.removedCredentials || []).includes(c.id)).length,
+      credentials: id === myId ? liveCredentials(m)
+        .map((c) => ({ id: c.id, label: c.label, platform: c.platform, created: c.created, usable: !isAppCredential(c) && c.rpId === rpId, ...(isAppCredential(c) ? { kind: 'app' } : {}) })) : undefined,
+      passkeyCount: liveCredentials(m).filter((c) => !isAppCredential(c)).length,
+      app: liveCredentials(m).some(isAppCredential) || undefined, // #539: also opens with the person's master password
+      breakGlass: m.breakGlass === true || undefined, // #539 Etappe 10: the emergency stick (members-mp.js)
     });
   }
   const order = { active: 0, pending: 1, removed: 2 };
@@ -479,5 +538,7 @@ export function mergeSecureKeyrings(a, b) {
   const rejected = [...new Map([...(a.rejected || []), ...(b.rejected || [])].map((r) => [JSON.stringify(r), r])).values()];
   const members = [...byId.values()];
   const sharing = [a.sharing, b.sharing].filter(Boolean).sort((x, y) => y.at.localeCompare(x.at))[0] || null;
-  return { ...a, keyVersion: Math.max(a.keyVersion, b.keyVersion), members, sharing, rejected };
+  // #539: signed like the sharing setting (members-mp.js); the newest of both.
+  const passkeyOnly = [a.passkeyOnly, b.passkeyOnly].filter((x) => typeof x?.at === 'string').sort((x, y) => y.at.localeCompare(x.at))[0] || null;
+  return { ...a, keyVersion: Math.max(a.keyVersion, b.keyVersion), members, sharing, rejected, ...(passkeyOnly ? { passkeyOnly } : {}) };
 }

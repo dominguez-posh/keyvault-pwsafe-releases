@@ -5,7 +5,7 @@ import { t, getLanguage } from '../../../extension/core/i18n.js';
 import { pickImage, LOGO_MAX_CHARS } from '../../../extension/core/image.js';
 import { call } from './ipc.js';
 import { logos, st } from './state.js';
-import { copy, field, formatDate, notice, openUrl } from './helpers.js';
+import { copy, field, formatDate, helloProofButton, notice, openUrl, secretLabel } from './helpers.js';
 import { progressLine } from './backup.js';
 import { renderList } from './list.js';
 import { reloadAll } from './shell.js';
@@ -163,13 +163,28 @@ export async function exportDialog(c) {
         h('li', {}, t('Nicht per E-Mail versenden und nicht in Cloud-Ordnern ablegen.')),
         h('li', {}, t('Zertifikatsdateien sind nicht enthalten, nur ihre Passwörter.')))));
   // #473: warning → app PIN → save dialog. The main process refuses the export without the confirmation it hands out.
-  const pin = st.pinSet ? h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'export-pin', 'aria-label': t('App-PIN') }) : null;
-  if (pin) body.append(h('p', {}, t('Bestätige den Export mit deiner App-PIN.')), field(t('App-PIN'), pin));
+  // #537 stage 4: the master password or the PIN of this device, or Windows Hello (asked by the main process).
+  const mp = !!st.unlock?.migrated;
+  const pin = st.pinSet ? h('input', { type: 'password', ...(mp ? {} : { inputmode: 'numeric' }), autocomplete: 'off', class: 'export-pin', 'aria-label': secretLabel() }) : null;
+  let helloToken = null;
+  const pinField = pin ? field(secretLabel(), pin) : null;
+  const hello = pin ? helloProofButton(async (proof) => {
+    try {
+      helloToken = await call('confirmExportPin', c.id, proof);
+      dialog.querySelector('.modal-footer .btn.danger')?.click();
+      return true;
+    } catch (e) {
+      toast(e.message, 'error');
+      return false;
+    }
+  }, { field: pinField }) : null;
+  if (pin) body.append(h('p', {}, mp ? t('Bestätige den Export mit deinem Masterpasswort, deiner PIN oder Windows Hello.') : t('Bestätige den Export mit deiner App-PIN.')), hello, pinField);
   const { dialog } = modal(t('Einträge exportieren'), body, [
     { label: t('Abbrechen') },
     { label: t('Speicherort wählen und exportieren'), danger: true, onClick: async () => {
-      let token = null;
-      if (pin) {
+      let token = helloToken;
+      helloToken = null;
+      if (pin && !token) {
         try {
           token = await call('confirmExportPin', c.id, pin.value);
         } catch (e) {

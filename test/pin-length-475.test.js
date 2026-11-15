@@ -41,7 +41,7 @@ test('475: an existing 4-character PIN still unlocks and is marked short; a 6-ch
   assert.equal('short' in markShort({ ...fresh, short: true }, '258013'), false, 'mark removed');
 
   const s = await src('desktop/main/api/app.js');
-  assert.match(s, /pinShort: !!settings\.appPin\?\.short/);
+  assert.match(s, /pinShort: !isMigrated\(\) && !!settings\.appPin\?\.short/); // #537: no PIN hash notice once the master password is set up
   assert.match(s, /const marked = markShort\(record, pin\);\s*if \(marked\) config\.update\(\{ appPin: marked \}\);/);
 });
 
@@ -54,7 +54,7 @@ test('475: settings and the lock screen show the notice, in German and English; 
   assert.match(start, /if \(r\.pinShort\) toast\(t\('Deine PIN ist kürzer als 6 Zeichen/);
   const dialog = await src('desktop/renderer/app/admin-mode.js');
   assert.doesNotMatch(dialog, /[Mm]indestens 4 Zeichen/);
-  assert.equal((dialog.match(/[Mm]indestens 6 Zeichen/g) || []).length, 2);
+  assert.equal((dialog.match(/[Mm]indestens 6 Zeichen/g) || []).length, 3); // #537: the PIN dialog after the move says it too
   for (const [de, en] of Object.entries(EN)) {
     if (/PIN/.test(de)) assert.doesNotMatch(`${de} ${en}`, /(mindestens|at least) 4 (Zeichen|characters)/i, de);
   }

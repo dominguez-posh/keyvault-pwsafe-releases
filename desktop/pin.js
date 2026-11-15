@@ -17,7 +17,11 @@ export const isShortPin = (pin) => String(pin ?? '').length < MIN_PIN_LENGTH;
 // #472 (review): settings that only the PIN functions write (setPin, verifyPin, the PIN guard, binding the personal
 // vault). A settings patch from the window must not set, clear or replace them, not even with null.
 // #512: windowHello likewise – switched on only through setWindowHello with the PIN.
-export const PIN_ONLY_SETTINGS = Object.freeze(['appPin', 'pinGuard', 'personalDeviceKeys', 'windowHello']);
+// #537: unlockKeys (device key and its wrappers) likewise – only desktop/main/unlock.js writes it. personalVaults too
+// (Konrad H2): which vault is the personal one decides whose master password the app takes. #537 2b: what this device
+// remembers of "Immer bestätigen" (on, scope, highest record stamp) – the fallback while the record can't be read.
+export const PIN_ONLY_SETTINGS = Object.freeze(['appPin', 'pinGuard', 'personalDeviceKeys', 'windowHello', 'unlockKeys', 'personalVaults',
+  'confirmEachVaults', 'confirmEachPersonalOnly', 'appSettingsSeen', 'memberKeySeen', 'memberKeyDevice', 'helloOffered']); // #539: the member key seen here
 
 /** The PIN-only keys a settings patch tries to write (empty: the patch may go through). */
 export const pinOnlyKeys = (patch) => (patch && typeof patch === 'object'

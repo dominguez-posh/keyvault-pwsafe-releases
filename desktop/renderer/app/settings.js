@@ -13,6 +13,8 @@ import { reloadAll, render } from './shell.js';
 import { managedUpdateHint, updateDialog } from './updates.js';
 import { reinstallSettingsPart } from './ext-reinstall.js';
 import { helloSettingsPart } from './window-hello.js';
+import { masterPasswordDialog, mpSetUp } from './master-password.js';
+import { helloKeySettingsPart } from './hello-unlock.js';
 import { earlyAccessThanks } from './help.js';
 
 export function settingsDialog() {
@@ -185,7 +187,8 @@ export function settingsDialog() {
           ? t('Verbundene Tresore, Ansicht und Verhalten liegen verschlüsselt im persönlichen Tresor. Auf einem neuen Gerät übernimmt Keevault sie, sobald du dort den persönlichen Tresor öffnest. PIN, Geräteschlüssel und Freigaben für KI-Agenten bleiben auf dem Gerät.')
           : t('Dafür zuerst einen persönlichen Tresor einrichten.')),
         h('label', { class: 'inline' }, settingsCopy, t('Kopie der Einstellungen im OneDrive ablegen')),
-        h('p', { class: 'muted small' }, t('Liegt unverschlüsselt im Ordner „Keevault“ deines OneDrive und enthält nur Tresorliste, Ansicht und Verhalten – nie PIN, Geräteschlüssel, Anmeldungen, Lizenz oder Wiederherstellungsschlüssel. Ein neues Gerät bietet sie bei der Einrichtung zum Import an. Export und Import auch über das Menü.')),
+        h('p', { class: 'muted small' }, t('Liegt verschlüsselt mit dem Schlüssel deines persönlichen Tresors im Ordner „Keevault“ deines OneDrive und enthält nur Tresorliste, Ansicht und Verhalten – nie PIN, Masterpasswort, Geräteschlüssel, Anmeldungen, Lizenz oder Wiederherstellungsschlüssel. Ohne persönlichen Tresor wird keine Kopie angelegt. Ein neues Gerät übernimmt sie mit dem Masterpasswort. Der Export über das Menü ist unverschlüsselt.')),
+        s.settingsCopyPlainGone ? h('p', { class: 'small settings-copy-plain-gone' }, t('Die frühere unverschlüsselte Kopie wurde ersetzt. Ältere Fassungen können noch im OneDrive-Versionsverlauf oder im Papierkorb liegen – lösche sie dort bei Bedarf.')) : null,
         copyBlocked),
       section(t('Updates'),
         managed
@@ -203,7 +206,16 @@ export function settingsDialog() {
       h('div', { class: 'grid2' },
         field(t('Automatisch sperren nach (Minuten)'), autoLock, t('0 = nur beim Sperren des Computers')),
         field(t('Zwischenablage leeren nach (Sekunden)'), clip, t('0 = nie'))),
-      section(t('App-PIN'),
+      // #537: one master password for the whole app; the PIN only a shortcut on this device.
+      section(t('Masterpasswort'),
+        h('p', { class: 'muted small mp-status' }, mpSetUp()
+          ? (st.unlock?.pin ? t('Eingerichtet. Auf diesem Gerät entsperrt zusätzlich deine PIN.') : t('Eingerichtet. Auf diesem Gerät entsperrt nur das Masterpasswort.'))
+          : t('Noch nicht eingerichtet – Keevault fragt bisher nur die App-PIN.')),
+        !st.opened ? h('p', { class: 'muted small' }, t('Zum Ändern zuerst entsperren.'))
+          : mpSetUp() ? h('button', { type: 'button', class: 'btn small mp-pin', onclick: () => pinDialog() }, icon('key', 14), st.unlock?.pin ? t('PIN ändern') : t('PIN festlegen'))
+          : h('button', { type: 'button', class: 'btn small mp-setup', onclick: () => masterPasswordDialog().then(() => render()) }, icon('key', 14), t('Masterpasswort einrichten …')),
+        mpSetUp() ? helloKeySettingsPart() : null), // #537 stage 3: Hello unwraps the device key
+      mpSetUp() ? null : section(t('App-PIN'),
         h('p', { class: 'muted small' }, st.pinSet
           ? t('Eine PIN ist gesetzt und wird beim Entsperren abgefragt.')
           : `${t('Keine PIN – jeder an diesem PC kann die App entsperren, solange Windows angemeldet ist.')} ${t('Tipp: Mit einer PIN (unter Einstellungen) entsperrst du ohne neues Microsoft-Fenster – deine Tresore erscheinen sofort.')}`),

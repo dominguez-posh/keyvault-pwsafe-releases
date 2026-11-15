@@ -10,7 +10,7 @@
 
 import { createKeyring, ContainerKey, mergeKeyrings, keyVersionOf, keyMatches, UnlockError } from './protect.js';
 import {
-  createSecureKeyring, unlockSecure, verifyRoster, applyRejections, applySecureOp, rekeyMembers, mergeSecureKeyrings, describeSecure, requestAccess,
+  createSecureKeyring, unlockSecure, unlockSecureApp, verifyRoster, applyRejections, applySecureOp, rekeyMembers, mergeSecureKeyrings, describeSecure, requestAccess,
   signObject, verifyObject, unwrapKey, fileIdFor, canWrite, secureCredentials,
 } from './members.js';
 import { keyChangeSigned, keyChangeAt, keyCheck, keyUnsignedMessage, mergeLosesProof } from './key-proof.js';
@@ -21,6 +21,8 @@ export { normalizeFolder };
 import { t } from './i18n.js';
 import { isImageDataUrl } from './image.js';
 import { belowFloor, floorOf, mergeFloors } from './rollback.js';
+import { applyMpOp, describeMp, passkeyOnlyEnabled, settlePasskeyOnly } from './members-mp.js';
+import { mergeMemberKeyLists } from './member-app.js';
 
 export const FILE_FORMAT = 'kvpwsafe-file';
 export const FILE_EXTENSION = 'kvpws';
@@ -117,6 +119,7 @@ export function mergeDocs(disk, ours) {
     folderIcons: mergeByUpdated(disk.folderIcons, ours.folderIcons),
     appSettings: (ours.appSettings?.updated || 0) >= (disk.appSettings?.updated || 0) ? ours.appSettings : disk.appSettings,
     license: ours.license || disk.license,
+    memberKeys: mergeMemberKeyLists(disk.memberKeys, ours.memberKeys), // #539 (personal vault): every key of both, Konrad M1
     ...(secure ? { log } : {}),
     updated: Math.max(disk.updated || 0, ours.updated || 0),
   };
@@ -152,8 +155,8 @@ export class FileVault {
   }
 
   /** New secured file: the creator becomes its first admin. creator: { email, passkey } */
-  static async createSecure(io, { name, email, passkey }) {
-    const r = await createSecureKeyring({ email, passkey });
+  static async createSecure(io, { name, email, passkey, mk, breakGlass }) {
+    const r = await createSecureKeyring({ email, passkey, mk }); // #539 mk: the app's member key (master password)
     const vault = new FileVault(io);
     vault.doc = { format: FILE_FORMAT, version: 2, id: r.id, name, keyring: r.keyring, items: {}, folders: {}, log: [], created: Date.now(), updated: Date.now() };
     r.ck.kv = r.keyring.keyVersion;
@@ -161,6 +164,7 @@ export class FileVault {
     vault.wrapSeen = vault.ownWrap();
     vault.roster = await verifyRoster(r.keyring);
     await vault.addLog({ action: 'file-create', name, email, keyCheck: await keyCheck(r.ck, r.id, 1) }); // #521: proof of the first key
+    if (breakGlass) await vault.memberOp({ type: 'breakGlass', stick: breakGlass }, { persist: false }); // #539 Etappe 10
     return vault;
   }
 
@@ -246,16 +250,18 @@ export class FileVault {
   }
 
   /** Secured files: unlock with a member passkey. Returns { pending, safetyCode } while access is not granted yet. */
-  async unlockWithPasskey(credentialId, prfOutput) {
+  async unlockWithPasskey(credentialId, prfOutput, { mk } = {}) {
     await this.load();
-    const r = await unlockSecure(this.doc.keyring, credentialId, prfOutput, this.known);
+    // #539: with the member key of the app's master password instead – never where "passkeys only" holds.
+    if (mk && passkeyOnlyEnabled(this.doc.keyring, await verifyRoster(this.doc.keyring, this.known), this.known)) throw new UnlockError(t('Dieser Tresor lässt sich nur mit Passkey öffnen'));
+    const r = mk ? await unlockSecureApp(this.doc.keyring, mk, this.known) : await unlockSecure(this.doc.keyring, credentialId, prfOutput, this.known);
     if (r.pending) return r;
     if (!(await keyChangeSigned(this.doc, r.ck, r.roster, this.doc.keyring.keyVersion))) throw new UnlockError(keyUnsignedMessage()); // #521
     r.ck.kv = this.doc.keyring.keyVersion;
     Object.assign(this, { ck: r.ck, identity: r.identity, memberId: r.memberId, roster: r.roster });
     this.wrapSeen = this.ownWrap();
     await this.decryptAll();
-    return { memberId: r.memberId, role: r.role, platform: r.platform, hasPlatform: r.hasPlatform };
+    return { memberId: r.memberId, role: r.role, platform: r.platform, hasPlatform: r.hasPlatform, via: r.via };
   }
 
   /** Our own wrapping of the container key as stored (#435: compared to notice a key change of the same generation). */
@@ -432,7 +438,7 @@ export class FileVault {
     }
     const known = this.secure ? mergeFloors(this.floor, floorOf(this.doc, this.roster)) : null;
     const merged = mergeDocs(disk, this.doc);
-    if (this.secure) merged.keyring = await applyRejections(merged.keyring, known); // what we held counted, the disk's is new (#440)
+    if (this.secure) merged.keyring = await settlePasskeyOnly(await applyRejections(merged.keyring, known), [this.doc.keyring.passkeyOnly, disk?.keyring?.passkeyOnly, known?.passkeyOnly, this.known?.passkeyOnly], known); // #440; #539 only a valid passkeyOnly
     // #523: a merge that takes the proof of our key away (key-proof.js mergeLosesProof) is not written.
     if (this.secure && disk && this.ck && (await mergeLosesProof(this, merged, await verifyRoster(merged.keyring, known)))) {
       await this.load(); // usually refuses itself: the disk is an older state than this device has seen
@@ -673,8 +679,8 @@ export class FileVault {
     this.requireUnlocked();
     const rec = this.doc.appSettings;
     if (!rec?.data) return null;
-    try {
-      return { updated: rec.updated, value: JSON.parse(await this.ck.decrypt(rec.data, this.aad('app-settings'))) };
+    try { // #537 2b (Konrad): `at` – the stamp inside the encrypted value (recordAt; an older app keeps it), else 0
+      const value = JSON.parse(await this.ck.decrypt(rec.data, this.aad('app-settings'))); return { updated: rec.updated, value, at: Number.isFinite(value?.recordAt) ? value.recordAt : 0 };
     } catch {
       return null;
     }
@@ -682,7 +688,7 @@ export class FileVault {
 
   async setAppSettings(value, updated = Date.now()) {
     this.requireWrite();
-    this.doc.appSettings = { updated, data: await this.ck.encrypt(JSON.stringify(value), this.aad('app-settings')) };
+    this.doc.appSettings = { updated, data: await this.ck.encrypt(JSON.stringify({ ...value, recordAt: updated }), this.aad('app-settings')) };
     await this.persist();
   }
 
@@ -698,7 +704,7 @@ export class FileVault {
    * Real key change of a format-1 file (#402): new key, everything re-encrypted, new master password and recovery key.
    * One write of the whole file: stopped before it, the old state stays whole. Returns { recoveryKey, dropped }.
    */
-  rekey(password, actor = '') { return rekeyFile(this, password, actor); }
+  rekey(password, actor = '', opts = {}) { return rekeyFile(this, password, actor, opts); }
 
   /** License key of this vault (signed, bound to the file ID – stored as is). */
   license() {
@@ -722,8 +728,8 @@ export class FileVault {
     await this.persist();
   }
 
-  async describeMembers(rpId) {
-    return describeSecure(this.doc.keyring, this.roster, this.memberId, rpId);
+  async describeMembers(rpId, mk = null) {
+    return { ...(await describeSecure(this.doc.keyring, this.roster, this.memberId, rpId)), ...(await describeMp(this.doc.keyring, this.roster, this.known, mk)) };
   }
 
   credentials(rpId) {
@@ -731,12 +737,13 @@ export class FileVault {
   }
 
   /** Access request by a new user; the file stays locked for them until an admin approves. */
-  async requestAccess({ email, passkey }) {
+  async requestAccess({ email, passkey, mk }) {
     await this.load();
     const roster = await verifyRoster(this.doc.keyring, this.known);
-    const sharing = await describeSecure(this.doc.keyring, roster, null, passkey.rpId);
+    const sharing = await describeSecure(this.doc.keyring, roster, null, passkey?.rpId);
     if (!sharing.sharing) throw new Error(t('Die Freigabe ist für diese Datei nicht aktiviert – bitte einen Admin der Datei fragen'));
-    const r = await requestAccess(this.doc.keyring, { email, passkey });
+    if (mk && passkeyOnlyEnabled(this.doc.keyring, roster, this.known)) throw new Error(t('Dieser Tresor lässt sich nur mit Passkey öffnen')); // #539
+    const r = await requestAccess(this.doc.keyring, { email, passkey, mk });
     this.doc.keyring = r.keyring;
     this.doc.updated = Date.now();
     await this.persist();
@@ -744,11 +751,11 @@ export class FileVault {
   }
 
   /** Member management (see applySecureOp); removing a member changes the container key. */
-  async memberOp(op) {
+  async memberOp(op, { persist = true } = {}) {
     this.requireUnlocked();
-    const ctx = { ck: this.ck, identity: this.identity, memberId: this.memberId, known: this.known };
+    const ctx = { ck: this.ck, identity: this.identity, memberId: this.memberId, known: this.known, passkeyOnly: passkeyOnlyEnabled(this.doc.keyring, this.roster, this.known) };
     const target = op.memberId && this.memberEmail(op.memberId);
-    const r = await applySecureOp(this.doc.keyring, ctx, op);
+    const r = (await applyMpOp(this.doc.keyring, ctx, op)) || (await applySecureOp(this.doc.keyring, ctx, op)); // #539 first
     const undo = r.rotate && [structuredClone(this.doc), this.ck, this.roster, this.wrapSeen];
     this.doc.keyring = r.keyring;
     this.roster = await verifyRoster(this.doc.keyring, this.known);
@@ -760,6 +767,10 @@ export class FileVault {
       sharing: { action: op.enabled ? 'sharing-on' : 'sharing-off' },
       addCredential: { action: 'passkey-add', label: op.passkey?.label },
       removeCredential: { action: 'passkey-remove' },
+      addAppCredential: { action: 'app-credential-add' }, // #539
+      passkeyOnly: { action: op.enabled ? 'passkey-only-on' : 'passkey-only-off' },
+      replace: { action: 'member-replace', target },
+      breakGlass: { action: 'break-glass-add', label: op.stick?.label }, // #539 Etappe 10
     }[op.type];
     if (log) await this.addLog(log);
     if (r.rotate) await this.rotateKey();
@@ -769,7 +780,7 @@ export class FileVault {
       throw new Error(t('Der Schlüsselwechsel ließ sich nicht gültig nachweisen (Uhrzeit dieses Geräts prüfen) – nichts gespeichert.'));
     }
     this.doc.updated = Date.now();
-    await this.persist();
+    if (persist) await this.persist();
   }
 
   /** New container key: re-encrypts everything and wraps the key for the remaining members. */
@@ -789,13 +800,13 @@ export class FileVault {
    * Converts an unlocked format-1 file into a secured one; the caller becomes its admin. The file gets a new
    * ID and key, the old password / recovery key / invitations stop working. Returns the new ID.
    */
-  async migrateToSecure({ email, passkey }) {
+  async migrateToSecure({ email, passkey, mk, breakGlass }) {
     this.requireUnlocked();
     if (this.secure) throw new Error(t('Die Datei ist bereits abgesichert'));
     const items = [...this.items].filter(([, x]) => x.item && !x.entry.deleted);
     const folders = this.folderList.map((f) => f.path);
     const logo = await this.logo();
-    const target = await FileVault.createSecure(this.io, { name: this.doc.name, email, passkey });
+    const target = await FileVault.createSecure(this.io, { name: this.doc.name, email, passkey, mk, breakGlass });
     if (logo) target.doc.logo = { updated: Date.now(), data: await target.ck.encrypt(logo, target.aad('logo')) };
     for (const [id, x] of items) {
       const r = rev();

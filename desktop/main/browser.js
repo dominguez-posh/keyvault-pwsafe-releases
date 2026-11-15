@@ -1,6 +1,8 @@
 // Browser extension through the desktop app: approval of a browser, the commands it may call, native messaging host.
 
 import { app } from 'electron';
+import { helloUnlock } from './hello-key.js';
+import { normalizeProof } from '../proof.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { BrowserBridge, launchPath, pipePath, protectPipe, registerNativeHost, unregisterNativeHost } from '../bridge.js';
@@ -14,7 +16,10 @@ import { appRoot, demo, devIsolated } from './boot.js';
 import { bridge, config, opened, setBridge, vault, win } from './state.js';
 import { approveAgent, askInApp, mcpHandlers, mcpScriptPath } from './agents.js';
 import { api } from './api/index.js';
-import { adminFlagsGuard, passkeyPin, requireOpen } from './guards.js';
+import { accessConfirm, adminFlagsGuard, passkeyPin, requireOpen } from './guards.js';
+import { answerFor, askAccess, confirmInApp, confirmMoveInApp, sealFor, strictVault, unsealForSave } from './access.js';
+import { isSealed } from '../../extension/core/sealed.js';
+import { usableItem } from './devices.js';
 import { effectiveRpId, getAssertion } from '../../extension/core/webauthn.js';
 import { copyToClipboard } from './clipboard.js';
 import { storedVaultSettings } from '../../extension/core/vault-settings.js';
@@ -76,7 +81,7 @@ export async function refreshStaleForBrowser() {
   staleRefresh = vault.summaries({ maxAgeMs: INDEX_MAX_AGE }).then(changed, () => {}).finally(() => { staleRefresh = null; });
 }
 
-export const APP_CAPS = ['passkeySign', 'copy', ...ITEM_CAPS]; // (not the other way round: the key scanner would read the pair as a text)
+export const APP_CAPS = ['passkeySign', 'copy', 'unlockRequest', 'itemReveal', ...ITEM_CAPS]; // (not the other way round: the key scanner would read the pair as a text)
 
 /** An extension that reports no usable version or an old one gets one hint in the app (the claim is not trusted for
  * anything else; an old extension cannot show a hint itself). Returns whether the hint applies. */
@@ -122,7 +127,18 @@ export const confirmBrowserMove = async ({ from, to, entries }) => (await askInA
   cancel: 'deny',
 })) === 'allow';
 
-const itemHandlers = browserItemHandlers({ vault: liveVault, requireOpen, changed, movePasskey: (args) => api.movePasskey(args), confirm: confirmBrowserMove, checkMove: checkLeaveToPersonal });
+const plainItemHandlers = browserItemHandlers({ vault: liveVault, requireOpen, changed, movePasskey: (args) => api.movePasskey(args), confirm: confirmBrowserMove, checkMove: checkLeaveToPersonal, confirmMove: confirmMoveInApp });
+
+// #537 2b: an older version of an entry of a vault with "Immer bestätigen" goes to the browser sealed, like the entry.
+const itemHandlers = { ...plainItemHandlers, version: async (msg) => sealFor(msg?.containerId, await plainItemHandlers.version(msg)) };
+
+/** #537 2b: a copy from the browser of a secret handed out under "Immer bestätigen" is confirmed in the app first. */
+async function confirmBrowserCopy(text) {
+  if (isSealed(text)) throw new Error(t('Dieser Tresor verlangt für jeden Zugriff eine Bestätigung (Windows Hello, Masterpasswort oder PIN).'));
+  const src = await accessConfirm.sourceOf(text);
+  if (!src || !(await strictVault(src.containerId)) || accessConfirm.take(src.containerId, src.itemId, 'copy')) return;
+  if (!(await askAccess({ containerId: src.containerId, itemId: src.itemId, purpose: 'copy' }))) throw new Error(t('Im Keevault-Fenster nicht bestätigt'));
+}
 
 export const browserHandlers = {
   ...itemHandlers,
@@ -170,6 +186,17 @@ export const browserHandlers = {
     await api.unlock({ entra: true, background: true });
     return true;
   },
+  /**
+   * #537 stage 4: unlock from the extension's popup with Windows Hello, asked by the app (Konrad: the popup sends it only
+   * after a click there; only with a Hello wrapper; one request at a time and a wait after a cancel; PIN queue and
+   * counter). Opens the session for the extension only – the window lock stays (background, #507).
+   */
+  unlockRequest: async () => {
+    if (opened) return true;
+    await helloUnlock.unlockForExtension();
+    await api.unlock({ entra: true, background: true });
+    return true;
+  },
   containers: () => browserContainers(),
   // Copies for the extension (#337): the browser's clipboard has no way to keep a value out of Windows' clipboard
   // history and cloud clipboard – the app's has, and clears it again after the configured time.
@@ -177,6 +204,7 @@ export const browserHandlers = {
     requireOpen();
     if (typeof text !== 'string' || !text || text.length > 100_000) throw new Error(t('Nichts zu kopieren'));
     // #480: a value from a vault that wants the app PIN for copying is copied in the app (PIN there), not from the browser.
+    await confirmBrowserCopy(text);
     await checkCopy(text).catch((e) => { throw e.name === 'CopyPinRequired' ? new Error(t('Dieser Tresor verlangt beim Kopieren die App-PIN – bitte in der Keevault-App kopieren.')) : e; });
     await copyToClipboard(text);
     return true;
@@ -192,14 +220,29 @@ export const browserHandlers = {
   // #439: no private passkey key goes to the browser; save puts the stored ones back.
   item: async ({ containerId, itemId }) => {
     requireOpen();
-    return withoutPasskeyKeys(await noteServed(containerId, await vault.getItem(containerId, itemId, { fresh: true })));
+    return withoutPasskeyKeys(await sealFor(containerId, await noteServed(containerId, await vault.getItem(containerId, itemId, { fresh: true }))));
+  },
+  /**
+   * #537 2b: the entry with its secrets for filling or copying ('fill' | 'copy'). A vault with "Immer bestätigen": asked in
+   * the app first (master password, PIN or Windows Hello, once for this use); the answer has the linked login resolved.
+   */
+  itemReveal: async ({ containerId, itemId, purpose, site }) => {
+    requireOpen();
+    const use = purpose === 'copy' ? 'copy' : 'fill';
+    // The page the browser fills (its claim; the card names it, Konrad N3).
+    if (!(await confirmInApp(containerId, itemId, use, '', use === 'fill' && typeof site === 'string' ? site.slice(0, 260) : ''))) return withoutPasskeyKeys(await noteServed(containerId, await vault.getItem(containerId, itemId, { fresh: true })));
+    const { loginLink, ...item } = await usableItem(containerId, itemId);
+    accessConfirm.noteRevealed(containerId, item);
+    if (use === 'copy') accessConfirm.grant(containerId, itemId, 'copy'); // the copy right after this confirmation
+    return withoutPasskeyKeys(item);
   },
   // Changes from the browser show up in the app (and other browsers) at once.
   // #466: the saved item has the stored keys back – the answer goes without them, like item.
   save: async ({ containerId, item, expectedVersion }) => {
     requireOpen();
     await checkRequired(containerId, item); // #480: required fields of the vault
-    const saved = await vault.saveItem(containerId, await withStoredPasskeyKeys(containerId, await adminFlagsGuard(containerId, item, { browser: true })), { expectedVersion });
+    const unsealed = await unsealForSave(containerId, item); // #537 2b: a sealed entry keeps its stored secrets
+    const saved = await vault.saveItem(containerId, await withStoredPasskeyKeys(containerId, await adminFlagsGuard(containerId, unsealed, { browser: true })), { expectedVersion });
     changed();
     return withoutPasskeyKeys(saved);
   },
@@ -221,7 +264,7 @@ export const browserHandlers = {
    */
   passkeySign: async ({ containerId, itemId, credentialId, origin, rpId, challenge, pin }) => {
     requireOpen();
-    await passkeyPin.check(typeof pin === 'string' ? pin : '');
+    await passkeyPin.check(normalizeProof(pin)); // #537 stage 4: or { hello: true } – the app asks Hello itself
     const rp = effectiveRpId(String(origin || ''), rpId);
     const candidate = (await vault.passkeyCandidates(rp))
       .find((c) => c.containerId === containerId && c.itemId === itemId && c.passkey.credentialId === credentialId);
@@ -243,11 +286,13 @@ export const browserHandlers = {
 };
 
 // Browsers and the Windows provider share the pipe but get separate command sets.
-const bridgeHandlers = new Proxy({}, {
-  get: (_target, cmd) => (msg, client) => {
+export const bridgeHandlers = new Proxy({}, { // (exported for the smoke check of #537 2b: answers as the pipe sends them)
+  get: (_target, cmd) => async (msg, client) => {
     const set = client?.origin === WINDOWS_ORIGIN ? windowsHandlers : client?.origin?.startsWith('mcp:') ? mcpHandlers : browserHandlers;
     if (!Object.hasOwn(set, cmd)) throw new Error(`Unknown command ${String(cmd)}`);
-    return set[cmd](msg, client);
+    const result = await set[cmd](msg, client);
+    // #537 2b (Konrad M1): an entry the browser just wrote or moved goes back sealed when its vault has "Immer bestätigen".
+    return set === browserHandlers ? answerFor('bridge', cmd, msg, result) : result;
   },
 });
 

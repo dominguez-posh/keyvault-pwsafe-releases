@@ -18,6 +18,7 @@ import { loggingApi } from './logging.js';
 import { complianceApi } from './compliance.js';
 import { vaultSettingsApi } from './vault-settings.js';
 import { windowHelloApi } from './window-hello.js';
+import { unlockApi } from './unlock.js';
 import { lockNow } from '../session.js';
 import { windowLocked } from '../state.js';
 import { t } from '../../../extension/core/i18n.js';
@@ -40,6 +41,7 @@ export const api = {
   ...complianceApi,
   ...vaultSettingsApi,
   ...windowHelloApi,
+  ...unlockApi,
 };
 
 /**
@@ -49,7 +51,9 @@ export const api = {
  */
 export const WINDOW_LOCKED_API = new Set(['state', 'verifyPin', 'unlock', 'lock', 'signOut', 'updateSettings', 'log', 'titleBarDim', 'updateState',
   'checkForUpdates', 'installUpdate', 'openExternal', 'otherInstallation', 'openAppsSettings', 'answerQuestion', 'windowsRequests', 'windowsDecision',
-  'unlockWithHello']);
+  'unlockWithHello',
+  // #537 stage 6: the reset needs the recovery stick's PRF (equal to the master password); then `unlock` lifts the lock.
+  'stickResetAvailable', 'resetMasterPasswordWithStick']);
 
 /** Refused while the window is locked alone: the session stays open for the extension (no lockNow). */
 export const windowLockedRefusal = (method) => (windowLocked && !WINDOW_LOCKED_API.has(method)
@@ -63,11 +67,13 @@ ipcMain.handle('api', async (event, method, args) => {
   const refused = windowLockedRefusal(method);
   if (refused) return refused;
   try {
-    return { ok: true, result: await fn(...(Array.isArray(args) ? args : [])) };
+    const list = Array.isArray(args) ? args : [];
+    // #537 2b (Konrad M1): an entry just written leaves sealed when its vault has "Immer bestätigen" (access.js).
+    return { ok: true, result: await (await import('../access.js')).answerFor('window', method, list, await fn(...list)) };
   } catch (e) {
     if (e instanceof LockedError && method !== 'unlock') await lockNow();
     // Raw Azure/Graph text (subscription, resource group, object ID, UPN) never reaches the window: log only, masked.
     if (e?.name === 'AzureError') diag(`AZURE ${method} ${e.status} ${e.code || ''} ${maskForLog(e.message)}`);
-    return { ok: false, error: { name: e.name, message: uiMessage(e), status: e.status } };
+    return { ok: false, error: { name: e.name, message: uiMessage(e), status: e.status, ...(e.name === 'FreshProofRequired' ? { purpose: e.purpose } : {}), ...(e.name === 'AccessConfirmRequired' ? { access: e.access } : {}) } };
   }
 });

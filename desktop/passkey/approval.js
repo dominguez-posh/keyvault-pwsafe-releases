@@ -8,7 +8,7 @@ import { b64uDecode, b64uEncode, randomBytes } from '../../extension/core/util.j
 const b64 = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer)));
 
 /** Registers an approver: ES256 only, no resident key, no extension. → { credentialId, publicKey, authData, attachment } */
-export async function registerApprover({ label, timeout }) {
+export async function registerApprover({ label, timeout, signal }) {
   const credential = await navigator.credentials.create({
     publicKey: {
       rp: { id: 'localhost', name: 'Keevault' },
@@ -20,6 +20,7 @@ export async function registerApprover({ label, timeout }) {
       extensions: { prf: {} },
       timeout,
     },
+    signal,
   });
   return {
     credentialId: b64uEncode(new Uint8Array(credential.rawId)),
@@ -34,7 +35,7 @@ export async function registerApprover({ label, timeout }) {
  * Assertion for the given challenge (base64url) from one of the registered credentials [{ credentialId, prfSalt }], with the
  * credential's PRF output (the secret that opens the wrapped signing key). → { credentialId, authData, clientDataJSON, signature, prfOutput }
  */
-export async function assertApproval({ challenge, credentials, timeout }) {
+export async function assertApproval({ challenge, credentials, timeout, signal }) {
   const assertion = await navigator.credentials.get({
     publicKey: {
       rpId: 'localhost',
@@ -44,6 +45,7 @@ export async function assertApproval({ challenge, credentials, timeout }) {
       extensions: { prf: { evalByCredential: Object.fromEntries(credentials.map((c) => [c.credentialId, { first: b64uDecode(c.prfSalt) }])) } },
       timeout,
     },
+    signal,
   });
   const prf = assertion.getClientExtensionResults().prf?.results?.first;
   if (!prf) throw new Error('Der Sicherheitsschlüssel liefert kein hmac-secret (PRF).');
