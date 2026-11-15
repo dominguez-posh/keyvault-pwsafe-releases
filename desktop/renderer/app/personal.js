@@ -6,7 +6,7 @@ import { t } from '../../../extension/core/i18n.js';
 import { KEY_CHANGE } from '../../../extension/core/protect.js';
 import { call } from './ipc.js';
 import { setSt, st } from './state.js';
-import { field, notice } from './helpers.js';
+import { field, notice, secretLabel } from './helpers.js';
 import { protectCtx } from './protection.js';
 import { fetchState, reloadAll, render } from './shell.js';
 import { REMOTE_KINDS, select, syncState } from './sidebar.js';
@@ -14,6 +14,8 @@ import { vaultWizard } from './vault-wizard.js';
 import { focusField } from './focus.js';
 import { firstStartSettings } from './settings-file.js';
 import { accountStepsDue, accountWizard } from './first-start.js';
+import { mpSetUp, withFreshPassword } from './master-password.js';
+import { compromisedOption } from './member-key.js';
 
 // Asked for the unconfirmed recovery key once per unlock; afterwards the notice in the sidebar stays (#399).
 let recoveryAsked = false;
@@ -54,14 +56,15 @@ export async function personalWizard() {
     const state = s.level === 'ok' || !s.text ? t('bereit') : s.text;
     return notice(t('{what} · {state}', { what, state }), s.level === 'problem' ? 'warn' : 'info');
   };
-  const pinFields = () => st.pinSet
+  // #537: with the master password set up there is no PIN here – the vault gets the app's master password.
+  const pinFields = () => mpSetUp() ? { el: null, pin: () => null, repeat: null } : st.pinSet
     ? { el: field(t('App-PIN'), h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'wiz-pin' })), pin: () => body.querySelector('.wiz-pin').value, repeat: null }
     : { el: h('div', { class: 'grid2' },
       field(t('Neue App-PIN'), h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'wiz-pin' })),
       field(t('Wiederholen'), h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'wiz-pin2' }))),
     pin: () => body.querySelector('.wiz-pin').value, repeat: () => body.querySelector('.wiz-pin2').value };
   const ensurePin = async (pf) => {
-    if (st.pinSet) return pf.pin();
+    if (mpSetUp() || st.pinSet) return pf.pin();
     if (pf.pin() !== pf.repeat()) throw new Error(t('Die PINs stimmen nicht überein'));
     await call('setPin', { current: null, next: pf.pin() });
     setSt(await fetchState());
@@ -75,7 +78,7 @@ export async function personalWizard() {
         h('p', {}, t('Ein kostenloser Tresor nur für dich: verschlüsselt in deinem OneDrive (oder einem anderen synchronisierten Ordner bzw. auf einem Netzlaufwerk) und auf jedem deiner Geräte verfügbar.')),
         h('ul', { class: 'wizard-points' },
           h('li', {}, t('Verschlüsselt mit deinem Masterpasswort – niemand sonst kann ihn öffnen, auch kein Admin.')),
-          h('li', {}, t('Im Alltag entsperrst du mit deiner App-PIN; optional zusätzlich mit einem FIDO-Stick.')),
+          h('li', {}, mpSetUp() ? t('Im Alltag entsperrst du mit dem Masterpasswort, deiner PIN oder Windows Hello; optional zusätzlich mit einem FIDO-Stick.') : t('Im Alltag entsperrst du mit deiner App-PIN; optional zusätzlich mit einem FIDO-Stick.')),
           h('li', {}, t('Nicht teilbar und ohne Lizenz.')),
           h('li', {}, t('Mehr Ordnung (z. B. privat und geschäftlich): Ordner im persönlichen Tresor anlegen.'))),
         buttons(btn(t('Abbrechen'), () => close()), btn(t('Weiter'), async () => { s.info = await call('personalInfo'); go(1); }, { primary: true })),
@@ -104,10 +107,12 @@ export async function personalWizard() {
       const pw2 = h('input', { type: 'password', autocomplete: 'new-password' });
       const pf = pinFields();
       content = s.mode === 'create' ? [
-        h('p', {}, t('Das Masterpasswort verschlüsselt den Tresor. Wähle es lang und einzigartig (mindestens 12 Zeichen) – du brauchst es auf neuen Geräten und zum Ändern der PIN.')),
+        mpSetUp()
+          ? h('p', {}, t('Der Tresor wird mit deinem Keevault-Masterpasswort verschlüsselt. Gib es zur Bestätigung zweimal ein.'))
+          : h('p', {}, t('Das Masterpasswort verschlüsselt den Tresor. Wähle es lang und einzigartig (mindestens 12 Zeichen) – du brauchst es auf neuen Geräten und zum Ändern der PIN.')),
         h('div', { class: 'grid2' }, field(t('Masterpasswort'), pw), field(t('Wiederholen'), pw2)),
-        strengthMeter(pw),
-        h('p', { class: 'muted small' }, st.pinSet ? t('Deine App-PIN entsperrt den Tresor auf diesem Gerät.') : t('Lege eine App-PIN fest – sie entsperrt den Tresor auf diesem Gerät.')),
+        mpSetUp() ? null : strengthMeter(pw),
+        mpSetUp() ? null : h('p', { class: 'muted small' }, st.pinSet ? t('Deine App-PIN entsperrt den Tresor auf diesem Gerät.') : t('Lege eine App-PIN fest – sie entsperrt den Tresor auf diesem Gerät.')),
         pf.el,
         buttons(btn(t('Zurück'), () => go(1)), btn(t('Tresor erstellen'), async () => {
           if (pw.value.length < 12) throw new Error(t('Das Masterpasswort braucht mindestens 12 Zeichen'));
@@ -122,15 +127,16 @@ export async function personalWizard() {
           reloadAll().catch((e) => toast(e.message, 'error'));
         }, { primary: true })),
       ] : [
-        h('p', {}, t('Entsperre den vorhandenen Tresor einmal mit seinem Masterpasswort. Danach reicht auf diesem Gerät deine App-PIN.')),
+        h('p', {}, mpSetUp() ? t('Entsperre den vorhandenen Tresor einmal mit seinem Masterpasswort. Danach entsperrt ihn auf diesem Gerät, was Keevault entsperrt (Masterpasswort, PIN oder Windows Hello).') : t('Entsperre den vorhandenen Tresor einmal mit seinem Masterpasswort. Danach reicht auf diesem Gerät deine App-PIN.')),
         field(t('Masterpasswort'), pw),
         pf.el,
         buttons(btn(t('Zurück'), () => go(1)), btn(t('Verwenden und entsperren'), async () => {
           const pin = await ensurePin(pf);
           const r = await call('usePersonal', { folder: s.info.folder });
           s.id = r.id;
-          await call('unlockContainer', r.id, { password: pw.value });
-          await call('bindPersonalWithPin', pin);
+          // #537: binds it to this device; a vault with another master password asks the current one first (H2).
+          await withFreshPassword(() => call('unlockContainer', r.id, { password: pw.value }));
+          if (!mpSetUp()) await call('bindPersonalWithPin', pin);
           await reloadAll();
           go(4); // an existing vault has its recovery key already
         }, { primary: true })),
@@ -247,18 +253,23 @@ export function pendingRecoveryVault() {
   return st?.containers?.find((c) => c.personal && !c.locked && pending.includes(c.id)) || null;
 }
 
-/** Asks for the new master password the key change needs (#402): → the password, or null when cancelled. */
+/**
+ * Asks for the new master password the key change needs (#402): → { password, option } or null when cancelled.
+ * #539 M3: with "master password compromised" (preselected) – option.after() renews the memberships after the change.
+ */
 function askNewMasterPassword() {
   return new Promise((resolve) => {
     const pw1 = h('input', { type: 'password', autocomplete: 'new-password', 'data-rekey': 'password' });
     const pw2 = h('input', { type: 'password', autocomplete: 'new-password', 'data-rekey': 'repeat' });
+    const option = compromisedOption({ preselect: true });
     const { dialog } = modal(t('Neues Masterpasswort'), h('div', {},
       h('div', { class: 'field' }, h('label', {}, t('Neues Masterpasswort')), pw1, strengthMeter(pw1)),
-      h('div', { class: 'field' }, h('label', {}, t('Wiederholen')), pw2)), [
+      h('div', { class: 'field' }, h('label', {}, t('Wiederholen')), pw2),
+      h('p', { class: 'muted small' }, t('Erneuern nur, wenn das neue Masterpasswort ein anderes ist als das bisherige.')), option.element), [
       { label: t('Abbrechen'), onClick: () => resolve(null) },
       { label: t('Schlüssel wechseln'), primary: true, onClick: () => {
         if (pw1.value !== pw2.value) throw new Error(t('Die Passwörter stimmen nicht überein'));
-        resolve(pw1.value);
+        resolve({ password: pw1.value, option });
       } },
     ]);
     dialog.addEventListener('close', () => resolve(null));
@@ -291,9 +302,10 @@ export async function askPendingRecovery(c) {
     });
     if (choice === 'kept') await call('confirmPersonalRecovery', c.id);
     if (choice !== 'new') return;
-    const password = KEY_CHANGE.enabled ? await askNewMasterPassword() : null;
-    if (KEY_CHANGE.enabled && !password) return;
-    const { recoveryKey } = await call('renewPersonalRecovery', c.id, password);
+    const asked = KEY_CHANGE.enabled ? await askNewMasterPassword() : null;
+    if (KEY_CHANGE.enabled && !asked) return;
+    const { recoveryKey } = await withFreshPassword(() => call('renewPersonalRecovery', c.id, asked?.password ?? null));
+    await asked?.option.after(); // #539 M3: only after a new password (the main process checks)
     // Locked in the meantime: the key stays out of sight, the mark stays and the next unlock asks again.
     if (!(await fetchState()).opened) return;
     const confirmed = await showCode(t('Wiederherstellungsschlüssel'), recoveryKey,
@@ -325,10 +337,13 @@ export function resetRecoveryReminder() {
 
 /** After the personal vault was opened with its master password on this device: bind it to the PIN. */
 export function personalPinPrompt() {
-  const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off' });
-  modal(t('Mit PIN entsperren'), h('div', {},
-    h('p', {}, t('Gib deine App-PIN ein – dann entsperrt sie den persönlichen Tresor auf diesem Gerät, ohne Masterpasswort.')),
-    field(t('App-PIN'), pin)), [
+  // #537 stage 4: once the master password is set up – the master password or the PIN of this device.
+  const pin = h('input', { type: 'password', ...(mpSetUp() ? {} : { inputmode: 'numeric' }), autocomplete: 'off' });
+  modal(mpSetUp() ? t('Persönlichen Tresor an dieses Gerät binden') : t('Mit PIN entsperren'), h('div', {},
+    h('p', {}, mpSetUp()
+      ? t('Gib dein Masterpasswort oder deine PIN ein – dann öffnet sich der persönliche Tresor auf diesem Gerät mit dem Entsperren von Keevault.')
+      : t('Gib deine App-PIN ein – dann entsperrt sie den persönlichen Tresor auf diesem Gerät, ohne Masterpasswort.')),
+    field(secretLabel(), pin)), [
     { label: t('Später') },
     { label: t('Übernehmen'), primary: true, onClick: async () => { await call('bindPersonalWithPin', pin.value); toast(t('Persönlicher Tresor mit PIN verbunden')); } },
   ]);

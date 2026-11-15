@@ -5,6 +5,7 @@
 
 import { b64uEncode, b64uDecode, utf8, fromUtf8, concat, randomBytes } from './util.js';
 import { t } from './i18n.js';
+import { ESCROW_ROLES, createEscrowKeys, escrowMac, escrowMacValid, openEscrow, wrapForEscrow } from './escrow.js';
 
 export const PBKDF2_ITERATIONS = 600_000;
 const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
@@ -182,6 +183,97 @@ async function addEntry(keyring, ck, entry, kek, replaceType) {
   return { ...keyring, entries: [...kept, e], removed: [...new Set([...(keyring.removed || []), ...removed])], updated: now() };
 }
 
+/**
+ * #537 (Konrad): a recovery or break-glass stick as an asymmetric entry (see escrow.js). stick: { credentialId, rpId,
+ * prfSalt, prfOutput, label, device?, role: 'recovery' | 'breakglass' }. A stick already in the keyring (as passkey or
+ * stick) is refused: the break-glass stick must not be the one an admin uses every day. Test-opened before it counts.
+ */
+export async function addEscrow(keyring, ck, stick, actor = '') {
+  if (!ESCROW_ROLES.includes(stick?.role)) throw new Error(t('Unbekannte Rolle des Sicherheitsschlüssels'));
+  if (keyring.entries.some((e) => (e.type === 'passkey' || e.type === 'escrow') && e.credentialId === stick.credentialId)) {
+    throw new Error(t('Dieser Sicherheitsschlüssel ist in diesem Tresor schon eingetragen – für Notfall und Wiederherstellung einen eigenen verwenden'));
+  }
+  const device = ['key', 'hello', 'phone'].includes(stick.device) ? stick.device : undefined;
+  const keys = await createEscrowKeys(keyring.scope, stick);
+  const e = {
+    id: newId(), created: now(), kv: keyVersionOf(keyring), type: 'escrow', role: stick.role, credentialId: stick.credentialId, rpId: stick.rpId,
+    prfSalt: stick.prfSalt, label: stick.label || '', createdBy: actor, ...(device ? { device } : {}), ...keys,
+  };
+  Object.assign(e, await wrapForEscrow(e, keyring.scope, ck.raw, entryAad(keyring, e)));
+  const back = await openEscrow(e, keyring.scope, stick.prfOutput, entryAad(keyring, e));
+  if (b64uEncode(back) !== b64uEncode(ck.raw)) throw new Error(t('Der Sicherheitsschlüssel ließ sich nicht testweise entsperren'));
+  e.mac = await escrowMac(ck.raw, keyring.scope, e);
+  return { ...keyring, entries: [...keyring.entries, e], updated: now() };
+}
+
+/** #537 (H1): the sticks with whether the container key vouches for them – for the key change dialog. */
+export async function checkEscrows(keyring, ck) {
+  const out = [];
+  for (const e of (keyring?.entries || []).filter((x) => x.type === 'escrow')) {
+    out.push({ id: e.id, role: e.role, label: e.label || '', createdBy: e.createdBy || '', valid: await escrowMacValid(ck.raw, keyring.scope, e) });
+  }
+  return out;
+}
+
+/**
+ * #537 (Konrad, check of 11001ce): marks the sticks in describeKeyring's result with whether the container key vouches
+ * for them (`valid`). Without the key (locked) none counts as valid, so the key change dialog names none as staying.
+ */
+export async function withEscrowValidity(methods, keyring, ck) {
+  if (!methods?.escrows?.length) return methods;
+  const checked = ck ? await checkEscrows(keyring, ck).catch(() => []) : [];
+  const valid = new Set(checked.filter((e) => e.valid).map((e) => e.id));
+  return { ...methods, escrows: methods.escrows.map((e) => ({ ...e, valid: valid.has(e.id) })) };
+}
+
+/**
+ * The sticks of the current generation, wrapped again for a new key – their secrets are not needed (#537). Only entries
+ * whose MAC the old key confirms (H1); the others are dropped and reported. → { entries, rejected: [labels] }
+ */
+async function carryEscrows(oldKeyring, oldCk, next, ck, drop = []) {
+  const entries = [];
+  const rejected = [];
+  for (const old of oldKeyring.entries.filter((e) => e.type === 'escrow' && (e.kv || 1) === keyVersionOf(oldKeyring) && !drop.includes(e.id))) {
+    if (!(await escrowMacValid(oldCk.raw, oldKeyring.scope, old))) {
+      rejected.push(old.label || old.credentialId || old.id);
+      continue;
+    }
+    const { epk: _epk, wrapped: _wrapped, check: _check, mac: _mac, ...fields } = old;
+    const e = { ...fields, id: newId(), kv: keyVersionOf(next), carried: now() };
+    Object.assign(e, await wrapForEscrow(e, next.scope, ck.raw, entryAad(next, e)));
+    e.mac = await escrowMac(ck.raw, next.scope, e);
+    entries.push(e);
+  }
+  return { entries, rejected };
+}
+
+// ---------------------------------------------------------------- lineage (#537, Konrad H2)
+// Each key change seals the fingerprints of all earlier keys of the vault under the new key. A device that bound an
+// older key can so tell a real successor of its vault (changed on another device) from a vault someone else made.
+const lineageAad = (scope, version) => `kvpwsafe/keyring-lineage/${scope}/${version}`;
+
+/** Fingerprint of a container key (not invertible, separate from every use of the key). */
+export async function ckFingerprint(ck) {
+  return b64uEncode(new Uint8Array(await crypto.subtle.digest('SHA-256', concat(utf8('kvpwsafe/lineage/v1'), ck.raw))));
+}
+
+async function lineageOf(keyring, ck) {
+  if (!keyring?.lineage) return [];
+  try {
+    const list = JSON.parse(fromUtf8(await unseal(ck.raw, keyring.lineage, lineageAad(keyring.scope, keyVersionOf(keyring)))));
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Is ck (the current key of keyring) the key with this fingerprint, or one that followed it by key changes? */
+export async function descendsFrom(keyring, ck, fingerprint) {
+  if (!fingerprint) return false;
+  if ((await ckFingerprint(ck)) === fingerprint) return true;
+  return (await lineageOf(keyring, ck)).includes(fingerprint);
+}
+
 const retiredError = () => new Error(t('Nach dem Entfernen des Masterpassworts gibt es ein neues nur mit dem Schlüsselwechsel'));
 
 /**
@@ -239,7 +331,7 @@ const prevAad = (scope, version) => `kvpwsafe/keyring-prev/${scope}/${version}`;
  * keepPrev: the old key, sealed under the new one, stays in the keyring until the data is re-encrypted (Key Vault: the
  * change takes many writes and may be resumed). Returns { keyring, ck, recoveryKey, dropped }.
  */
-export async function rekeyKeyring(keyring, oldCk, { password, keepPrev = false }, actor = '') {
+export async function rekeyKeyring(keyring, oldCk, { password, keepPrev = false, dropEscrow = [] }, actor = '') {
   if (!KEY_CHANGE.enabled) throw new Error(t('Der Schlüsselwechsel ist in dieser Version noch nicht eingeschaltet'));
   if (String(password || '').length < 8) throw new Error(t('Das Masterpasswort muss mindestens 8 Zeichen lang sein'));
   const ck = await ContainerKey.generate();
@@ -257,6 +349,13 @@ export async function rekeyKeyring(keyring, oldCk, { password, keepPrev = false 
   ck.kv = version;
   if (keepPrev) next.prev = await seal(ck.raw, oldCk.raw, prevAad(keyring.scope, version));
   next = await setPassword(next, ck, password, actor);
+  // #537: recovery and break-glass sticks stay (asymmetric, no stick needed); only those named in dropEscrow end,
+  // and those the old key does not vouch for (H1).
+  const carried = await carryEscrows(keyring, oldCk, next, ck, dropEscrow);
+  if (carried.rejected.length) dropped.escrows = carried.rejected;
+  next = { ...next, entries: [...next.entries, ...carried.entries] };
+  const history = [...(await lineageOf(keyring, oldCk)), await ckFingerprint(oldCk)].slice(-20);
+  next.lineage = await seal(ck.raw, utf8(JSON.stringify(history)), lineageAad(keyring.scope, version));
   const r = await newRecoveryKey(next, ck, actor);
   // Each entry carries the check of its generation too, so that it survives a reset of the keyring's own fields by an old app.
   r.keyring.entries = r.keyring.entries.map((e) => ({ ...e, check: next.check }));
@@ -287,7 +386,7 @@ export function rekeyLoss(keyring) {
 
 export function removeEntry(keyring, entryId) {
   const entries = keyring.entries.filter((e) => e.id !== entryId);
-  if (!entries.some((e) => e.type === 'password' || e.type === 'passkey' || e.type === 'recovery')) {
+  if (!entries.some((e) => e.type === 'password' || e.type === 'passkey' || e.type === 'recovery' || e.type === 'escrow')) {
     throw new Error(t('Mindestens ein Masterpasswort, ein Passkey oder ein Wiederherstellungsschlüssel muss bleiben'));
   }
   // A retired master password is replaced only by a key change (#402): else the old one stays valid for old file versions.
@@ -295,11 +394,11 @@ export function removeEntry(keyring, entryId) {
   return { ...keyring, entries, ...(retired ? { pwRetired: true } : {}), removed: [...new Set([...(keyring.removed || []), entryId])], updated: now() };
 }
 
-async function tryEntries(keyring, entries, kekFor) {
+async function tryEntries(keyring, entries, kekFor, open = async (e) => unseal(await kekFor(e), e.wrapped, entryAad(keyring, e))) {
   // Wrappers of an earlier key generation (merged in from an old file version) never open the current one (#402).
   for (const e of entries.filter((x) => (x.kv || 1) === keyVersionOf(keyring))) {
     try {
-      const raw = await unseal(await kekFor(e), e.wrapped, entryAad(keyring, e));
+      const raw = await open(e);
       const ck = await ContainerKey.fromRaw(raw);
       if (!(await keyMatches(keyring, ck))) continue;
       ck.kv = keyVersionOf(keyring);
@@ -327,6 +426,14 @@ export async function unlockWithPasskey(keyring, credentialId, prfOutput) {
   return r;
 }
 
+/** #537: a recovery or break-glass stick (asymmetric entry). role narrows it to one purpose. → { ck, entry } */
+export async function unlockWithEscrow(keyring, credentialId, prfOutput, { role } = {}) {
+  const entries = keyring.entries.filter((e) => e.type === 'escrow' && e.credentialId === credentialId && (!role || e.role === role));
+  const r = await tryEntries(keyring, entries, null, (e) => openEscrow(e, keyring.scope, prfOutput, entryAad(keyring, e)));
+  if (!r) throw new UnlockError(t('Dieser Sicherheitsschlüssel passt nicht zu diesem Tresor'));
+  return r;
+}
+
 /** Recovery key or invitation code. Returns { ck, entry } (entry.type tells which). */
 export async function unlockWithCode(keyring, code) {
   const secret = parseCode(code);
@@ -342,6 +449,11 @@ export const passkeyEntries = (keyring, rpId) => keyring.entries
   .filter((e) => e.type === 'passkey' && e.rpId === rpId)
   .map((e) => ({ credentialId: e.credentialId, prfSalt: e.prfSalt }));
 
+/** #537: recovery and break-glass sticks usable by a client (rpId), for the PRF evaluation. */
+export const escrowEntries = (keyring, rpId, role) => keyring.entries
+  .filter((e) => e.type === 'escrow' && e.rpId === rpId && (!role || e.role === role))
+  .map((e) => ({ credentialId: e.credentialId, prfSalt: e.prfSalt, role: e.role }));
+
 /** Public view of a keyring (no key material). */
 export function describeKeyring(keyring, rpId) {
   const entries = keyring?.entries || [];
@@ -356,6 +468,9 @@ export function describeKeyring(keyring, rpId) {
     recovery: entries.some((e) => e.type === 'recovery'),
     passkeys: entries.filter((e) => e.type === 'passkey').map((e) => ({
       id: e.id, label: e.label, rpId: e.rpId, usable: e.rpId === rpId, created: e.created, createdBy: e.createdBy, device: e.device || '',
+    })),
+    escrows: entries.filter((e) => e.type === 'escrow').map((e) => ({
+      id: e.id, role: e.role, label: e.label, rpId: e.rpId, usable: e.rpId === rpId, created: e.created, createdBy: e.createdBy, device: e.device || '',
     })),
     invites: entries.filter((e) => e.type === 'invite').map((e) => ({
       id: e.id, label: e.label, expires: e.expires, expired: new Date(e.expires) <= new Date(), created: e.created, createdBy: e.createdBy,
@@ -377,7 +492,12 @@ export async function applyKeyringOp(keyring, ck, op, actor = '') {
       return { keyring: await setPassword(keyring, ck, op.password, actor, { add: op.add === true }) };
     case 'addPasskey':
       return { keyring: await addPasskey(keyring, ck, op.passkey, actor) };
+    case 'addEscrow':
+      return { keyring: await addEscrow(keyring, ck, op.stick, actor) };
     case 'removeEntry':
+      // #537 (Konrad M1): a recovery or break-glass stick ends only with a key change (rekey, dropEscrow) – removing the
+      // entry alone would leave a lost stick opening every older copy of the file.
+      if (keyring.entries.find((e) => e.id === op.entryId)?.type === 'escrow') throw new Error(t('Einen Sicherheitsschlüssel für Notfall und Wiederherstellung entfernt nur ein Schlüsselwechsel'));
       return { keyring: removeEntry(keyring, op.entryId) };
     case 'newRecovery':
       if (KEY_CHANGE.enabled) throw new Error(t('Ein neuer Wiederherstellungsschlüssel braucht den Schlüsselwechsel'));
@@ -400,9 +520,10 @@ export async function setupKeyring(scope, { password, passkey }, actor = '') {
   return { keyring: r.keyring, ck: created.ck, recoveryKey: r.recoveryKey };
 }
 
-/** Unlock with { password } | { credentialId, prfOutput } | { code } → { ck, entry }. */
+/** Unlock with { password } | { credentialId, prfOutput, escrow? } | { code } → { ck, entry }. */
 export function unlockKeyring(keyring, params) {
   if (params.password != null) return unlockWithPassword(keyring, params.password);
+  if (params.prfOutput && params.escrow) return unlockWithEscrow(keyring, params.credentialId, params.prfOutput, { role: params.role });
   if (params.prfOutput) return unlockWithPasskey(keyring, params.credentialId, params.prfOutput);
   return unlockWithCode(keyring, params.code);
 }

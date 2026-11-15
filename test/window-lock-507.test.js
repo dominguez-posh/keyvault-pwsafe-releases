@@ -71,7 +71,19 @@ test('#507 review N2: the locked window changes only language, view and the inst
   const app = read('main/api/app.js');
   const update = app.slice(app.indexOf('updateSettings: async (patch) => {'), app.indexOf('async unlock({'));
   assert.ok(update.indexOf('lockScreenRefused(patch)') < update.indexOf('config.update(patch)'), 'refused before anything is stored');
-  assert.match(update, /return windowLocked \? lockScreenSettings\(config\.get\(\), forcedLanguage\(\)\) : config\.get\(\);/);
+  // The answer: locked, only the lock screen's settings (behavior below); the API hands it the lock state.
+  assert.match(update, /return settingsForWindow\(config\.get\(\), \{ locked: windowLocked, language: forcedLanguage\(\) \}\);/);
+  const { settingsForWindow, LOCK_SCREEN_SETTINGS: allowed } = await import('../desktop/window-lock-settings.js');
+  const all = { language: 'de', theme: 'dark', containers: ['x'], tenantId: 't', appPin: { hash: 'h' }, unlockKeys: { blob: 'b' }, mcpEnabled: true, offlineMirror: true };
+  const locked = settingsForWindow(all, { locked: true, language: 'en' });
+  // Only the lock screen's settings – the vault lists come as empty lists (the locked window shows none).
+  assert.ok(Object.entries(locked).every(([k, v]) => allowed.includes(k) || (Array.isArray(v) && !v.length)), JSON.stringify(locked));
+  assert.equal(locked.language, 'en');
+  assert.deepEqual(locked.containers, [], 'no vault of the configuration');
+  for (const k of ['tenantId', 'appPin', 'unlockKeys', 'mcpEnabled']) assert.ok(!(k in locked), k);
+  const open = settingsForWindow(all, { locked: false });
+  assert.ok(open.containers && open.tenantId && open.offlineMirror, 'open: the settings the window shows');
+  assert.ok(!('appPin' in open) && !('unlockKeys' in open), 'open: never the device keys');
 });
 
 test('#507: the extension unlock locks the window before the session opens; the window unlock signs in no second time', () => {
@@ -97,7 +109,8 @@ test('#507: locking ends both; the tray says "Erweiterung entsperrt"; vault even
 
 test('#507 (Lucas): an agent question behind the window lock shows no names and cannot be allowed until the PIN', () => {
   const agents = read('main/agents.js');
-  assert.match(agents, /const held = windowLocked && isAgentQuestion\(spec\);/);
+  assert.match(agents, /const held = windowLocked && isHeldQuestion\(spec\);/); // #537 2b: also the extension's confirmations
+  assert.match(agents, /const isHeldQuestion = \(spec\) => isAgentQuestion\(spec\) \|\| /);
   assert.match(agents, /send\(\{ type: 'question', id, \.\.\.\(held \? heldView\(spec\) : spec\) \}\)/);
   const view = agents.slice(agents.indexOf('const heldView'), agents.indexOf('export function revealHeldQuestions'));
   assert.doesNotMatch(view, /spec\.(agent|entry|vault|title|username|fields|changes|choices)/, 'nothing of the question but its refusal');
@@ -106,7 +119,8 @@ test('#507 (Lucas): an agent question behind the window lock shows no names and 
   const app = read('main/api/app.js');
   const windowPath = app.slice(app.indexOf('if (opened && windowLocked && !background)'), app.indexOf('if (background && !opened)'));
   assert.match(windowPath, /revealHeldQuestions\(\)/);
-  assert.match(read('renderer/app/requests.js'), /allow\.disabled = choice === null \|\| !!q\.held;/);
+  // Both buttons (allow and, with Windows Hello, "Mit Windows Hello erlauben"): disabled while held.
+  assert.match(read('renderer/app/requests.js'), /for \(const b of \[allow, helloAllow\]\.filter\(Boolean\)\) \{\s+b\.disabled = choice === null \|\| !!q\.held;/);
 });
 
 // #507 review N1: a Windows passkey request behind the window's lock shows no site, account, entry or vault and no

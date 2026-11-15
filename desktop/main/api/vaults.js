@@ -16,6 +16,7 @@ import { diag } from '../diag.js';
 import { cleanVaultName, renameInVault } from '../../../extension/core/session-meta.js';
 import { uiMessage } from '../../../extension/core/azure-errors.js';
 import { requireFeature, requireOpen } from '../guards.js';
+import { requireVaultUse } from '../access.js';
 import { changed, cleanEmail, containerResource, refreshAll, refreshing, send, signedIn } from '../session.js';
 
 /** ARM/Graph for a subscription's tenant: own tenant directly, customer tenants with the guest account. */
@@ -104,7 +105,10 @@ export const vaultsApi = {
     const [details, members] = await Promise.all([azure.vaultDetails(resourceId), azure.listMembers(resourceId).catch(() => [])]);
     return { ...details, admins: members.filter((m) => m.level === 'manage').map((m) => ({ displayName: m.displayName, detail: m.detail || '' })) };
   },
-  addMember: async (containerId, principal, level) => (await vault.azureForId(containerId)).addMember(await containerResource(containerId), principal, level),
+  addMember: async (containerId, principal, level) => {
+    await requireVaultUse(containerId, 'share'); // #537 2b (Konrad N-A): giving access needs a confirmation
+    return (await vault.azureForId(containerId)).addMember(await containerResource(containerId), principal, level);
+  },
   removeMember: async (containerId, principalId) => (await vault.azureForId(containerId)).removeMember(await containerResource(containerId), principalId),
   /** People picker in the directory of the container's tenant (guests included). */
   searchPrincipals: async (query, containerId) => (containerId ? await vault.azureForId(containerId) : vault.azure).searchPrincipals(query),
@@ -177,6 +181,7 @@ export const vaultsApi = {
   },
   /** Invites an external person as guest into the container's tenant and grants the chosen level. */
   async inviteGuest(containerId, email, level) {
+    await requireVaultUse(containerId, 'share'); // #537 2b (Konrad N-A)
     const azure = await vault.azureForId(containerId);
     const guest = await azure.inviteGuest(cleanEmail(email));
     const r = await azure.addMember(await containerResource(containerId), guest, level);

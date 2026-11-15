@@ -13,7 +13,7 @@ function explain(e) {
 }
 
 /** Evaluates PRF for one of the given passkeys: [{ credentialId, prfSalt }] → { credentialId, prfOutput }. */
-export async function evaluatePrf(rpId, passkeys, { timeout = 120_000 } = {}) {
+export async function evaluatePrf(rpId, passkeys, { timeout = 120_000, signal } = {}) {
   if (!passkeys.length) throw new Error(t('Für diese App ist kein Passkey registriert'));
   let assertion;
   try {
@@ -26,6 +26,7 @@ export async function evaluatePrf(rpId, passkeys, { timeout = 120_000 } = {}) {
         allowCredentials: passkeys.map((p) => ({ type: 'public-key', id: b64uDecode(p.credentialId) })),
         extensions: { prf: { evalByCredential: Object.fromEntries(passkeys.map((p) => [p.credentialId, { first: b64uDecode(p.prfSalt) }])) } },
       },
+      signal,
     });
   } catch (e) {
     throw explain(e);
@@ -39,7 +40,7 @@ export async function evaluatePrf(rpId, passkeys, { timeout = 120_000 } = {}) {
  * Registers a new passkey with PRF. Returns { credentialId, prfSalt, prfOutput, rpId }.
  * Some authenticators only return the PRF value on sign-in; then a second confirmation follows.
  */
-export async function registerPrf(rpId, { userName, displayName, excludeCredentialIds = [], timeout = 120_000, attachment, hints }) {
+export async function registerPrf(rpId, { userName, displayName, excludeCredentialIds = [], timeout = 120_000, attachment, hints, signal }) {
   const prfSalt = randomBytes(32);
   let credential;
   try {
@@ -56,6 +57,7 @@ export async function registerPrf(rpId, { userName, displayName, excludeCredenti
         ...(hints?.length ? { hints } : {}),
         extensions: { prf: { eval: { first: prfSalt } } },
       },
+      signal,
     });
   } catch (e) {
     throw explain(e);
@@ -70,7 +72,7 @@ export async function registerPrf(rpId, { userName, displayName, excludeCredenti
   // Some authenticators only report PRF on sign-in (Windows Hello; security keys through Windows may report "enabled"
   // at creation and the value only on sign-in): try once before giving up.
   try {
-    const r = await evaluatePrf(rpId, [{ credentialId, prfSalt: salt }], { timeout });
+    const r = await evaluatePrf(rpId, [{ credentialId, prfSalt: salt }], { timeout, signal });
     return { rpId, credentialId, prfSalt: salt, prfOutput: r.prfOutput, ...kind };
   } catch (e) {
     if (ext?.enabled) throw e;

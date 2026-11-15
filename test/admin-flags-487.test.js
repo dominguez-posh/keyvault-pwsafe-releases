@@ -45,7 +45,7 @@ test('#487 both save paths of the main process go through the guard', () => {
   const items = readFileSync(new URL('../desktop/main/api/items.js', import.meta.url), 'utf8');
   assert.match(items, /vault\.saveItem\(containerId, await adminFlagsGuard\(containerId, item\)/);
   const browser = readFileSync(new URL('../desktop/main/browser.js', import.meta.url), 'utf8');
-  assert.match(browser, /adminFlagsGuard\(containerId, item, \{ browser: true \}\)/);
+  assert.match(browser, /adminFlagsGuard\(containerId, unsealed, \{ browser: true \}\)/); // #537 2b: after unsealForSave
   const guards = readFileSync(new URL('../desktop/main/guards.js', import.meta.url), 'utf8');
   assert.match(guards, /if \(!item \|\| \(!browser && config\.get\(\)\.adminTools === true\)\) return item;/);
 });

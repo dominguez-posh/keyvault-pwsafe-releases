@@ -45,10 +45,10 @@ test('copy PIN: no app PIN set – the vault demands one, whatever the personal 
 test('main process: copy, export, "Nur für mich", bridge and saves go through the vault rules', () => {
   const src = (p) => readFileSync(new URL(`../desktop/${p}`, import.meta.url), 'utf8');
   const items = src('main/api/items.js');
-  assert.match(items, /async copy\(text, containerId\) \{\s*await checkCopy\(/);
+  assert.match(items, /async copy\(text, containerId\) \{[^}]*await checkCopy\(/); // #537 2b: the access rule first
   assert.match(items, /exportPin\.consume\(containerId, pinToken\);\n\s*await checkExport\(containerId\);/);
   assert.match(items, /await checkRequired\(containerId, item\)/);
-  assert.match(items, /item: async [^\n]*noteServed\(/);
+  assert.match(items, /async item\(containerId, id, fresh, opts\) \{[\s\S]*?return noteServed\(containerId, item\);/);
   const bridge = src('main/browser.js');
   assert.match(bridge, /await checkCopy\(text\)/);
   assert.match(bridge, /noteServed\(containerId, await vault\.getItem/);

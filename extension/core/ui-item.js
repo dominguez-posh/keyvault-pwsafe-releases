@@ -11,6 +11,7 @@ import { expiryState } from './health.js';
 import { actionCard, actionRow, secretRow, urlRow, userRow } from './field-row.js';
 import { historySection } from './ui-history.js';
 import { totpEditor } from './ui-totp.js';
+import { isSealed } from './sealed.js';
 
 /**
  * @param {object} item  parsed item
@@ -46,7 +47,8 @@ export function itemDetail(item, ctx) {
   if (item.type === 'card') {
     const c = item.card;
     if (c.holder) rows.push(textField(t('Karteninhaber'), c.holder, ctx));
-    if (c.number) rows.push(secretField(t('Kartennummer'), formatCardNumber(c.number), ctx, { masked: `•••• •••• •••• ${c.number.slice(-4)}`, copyValue: c.number }));
+    // #537 2b: a held-back number (extension/core/sealed.js) shows no digits.
+    if (c.number) rows.push(isSealed(c.number) ? secretField(t('Kartennummer'), c.number, ctx, { masked: '•••• •••• •••• ••••' }) : secretField(t('Kartennummer'), formatCardNumber(c.number), ctx, { masked: `•••• •••• •••• ${c.number.slice(-4)}`, copyValue: c.number }));
     if (c.expiry) rows.push(textField(t('Gültig bis'), c.expiry, ctx));
     if (c.cvc) rows.push(secretField(t('Prüfnummer (CVC)'), c.cvc, ctx));
     if (c.pin) rows.push(secretField(t('PIN'), c.pin, ctx));
@@ -82,7 +84,8 @@ export function itemDetail(item, ctx) {
   if (item.passkeys.length) rows.push(passkeyList(item.passkeys));
   // #458: like the standard fields, an additional field without a value (e.g. from a template) is not shown here.
   for (const f of item.fields) if (String(f.value ?? '') !== '') rows.push(customField(f, ctx));
-  if (item.notes) rows.push(h('div', { class: 'field' }, h('label', {}, t('Notizen')), h('div', { class: 'notes' }, item.notes)));
+  if (isSealed(item.notes)) rows.push(secretField(t('Notizen'), item.notes, ctx)); // #537 2b: a secure note held back
+  else if (item.notes) rows.push(h('div', { class: 'field' }, h('label', {}, t('Notizen')), h('div', { class: 'notes' }, item.notes)));
 
   // With ctx.menu (desktop): the actions sit in the head – main action as a button, "quick" ones as icons, the rest
   // behind "⋯". Without it (popup): the classic row of buttons below the fields.
@@ -152,6 +155,7 @@ function secretField(label, value, ctx, { masked = '•••••••••�
   const span = h('span', { class: 'value secret' }, masked);
   let shown = false;
   const toggle = iconButton('eye', t('Anzeigen'), () => {
+    if (isSealed(value)) return void ctx.reveal?.(); // #537 2b: the app asks for a confirmation, then shows the entry
     shown = !shown;
     span.textContent = shown ? value : masked;
     span.classList.toggle('revealed', shown);
@@ -232,6 +236,7 @@ function totpField(secret, ctx, label = t('Einmalcode (TOTP)')) {
   const ring = h('span', { class: 'totp-timer' });
   // Copies only the current code, never the secret (#469).
   const copyCode = async () => {
+    if (isSealed(secret)) return void ctx.copy(secret, t('Einmalcode')); // #537 2b: the app computes and copies it after a confirmation
     const c = await totpCode(secret).catch(() => null);
     if (c) ctx.copy(c.code, t('Einmalcode'));
   };
@@ -242,6 +247,10 @@ function totpField(secret, ctx, label = t('Einmalcode (TOTP)')) {
     : h('div', { class: 'field' }, h('label', {}, label),
       h('div', { class: 'field-row' }, code, ring, iconButton('copy', t('Kopieren'), copyCode)));
   el.classList.add('totp-field');
+  if (isSealed(secret)) {
+    code.textContent = '••• •••';
+    return el;
+  }
   let config;
   try {
     config = parseTotp(secret);

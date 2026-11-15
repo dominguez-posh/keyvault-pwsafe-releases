@@ -9,7 +9,7 @@ import { resolveLogin } from '../../../extension/core/model.js';
 import { buildItemLink } from '../../../extension/core/links.js';
 import { call } from './ipc.js';
 import { items, progressListeners, st, ui } from './state.js';
-import { containerName, copy, field, notice, openUrl, writable, writableContainers } from './helpers.js';
+import { containerName, copy, copyFrom, field, notice, openUrl, writable, writableContainers, revealItem } from './helpers.js';
 import { agentTrust, loadAgentTrust } from './agents.js';
 import { newItem, renderDetail, splitKey } from './detail.js';
 import { FIELD_LABELS } from './file-vaults.js';
@@ -79,15 +79,16 @@ export function itemActions(i) {
   return [
     { action: 'favorite', icon: 'star', label: i.favorite ? t('Aus Favoriten entfernen') : t('Zu Favoriten hinzufügen'), disabled: !canWrite, onClick: () => toggleFavorite(i) },
     '-',
-    i.username || i.loginLinked ? { action: 'copy-user', icon: 'copy', label: t('Benutzername kopieren'), onClick: async () => copy((await usable()).username, t('Benutzername')) } : null,
-    i.type === 'login' || i.type === 'certificate' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copy((await usable()).password, t('Passwort')) } : null,
-    i.type === 'card' ? { action: 'copy-card', icon: 'copy', label: t('Kartennummer kopieren'), onClick: async () => copy((await open()).card.number, t('Kartennummer')) } : null,
+    i.username || i.loginLinked ? { action: 'copy-user', icon: 'copy', label: t('Benutzername kopieren'), onClick: async () => copyFrom(containerId, id, (await usable()).username, t('Benutzername')) } : null,
+    i.type === 'login' || i.type === 'certificate' ? { action: 'copy-password', icon: 'copy', label: t('Passwort kopieren'), onClick: async () => copyFrom(containerId, id, (await usable()).password, t('Passwort')) } : null,
+    i.type === 'card' ? { action: 'copy-card', icon: 'copy', label: t('Kartennummer kopieren'), onClick: async () => copyFrom(containerId, id, (await open()).card.number, t('Kartennummer')) } : null,
     i.hosts?.[0] ? { action: 'open', icon: 'external', label: t('Website öffnen'), onClick: () => (i.loginLinked ? openSite() : openUrl(`https://${i.hosts[0]}`)) } : null,
     '-',
     { action: 'edit', icon: 'edit', label: t('Bearbeiten'), disabled: !canWrite || !asServer, onClick: async () => {
       ui.selected = i.key;
       ui.editing = 'edit';
-      ui.editingItem = await open();
+      ui.editingItem = await revealItem(containerId, id).catch(() => null); // #537 2b: one confirmation when sealed
+      if (!ui.editingItem) { ui.editing = null; return; }
       renderList();
       renderDetail();
     } },

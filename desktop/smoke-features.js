@@ -147,7 +147,7 @@ export async function featureChecks(ctx) {
     try {
       await runArea(fn, { limitMs: 45_000 });
     } catch (e) {
-      fail(area, e.message);
+      fail(area, e.message); if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[features] ${area} threw: ${e.stack}`); // where it threw
     }
     if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[features] ${area} ${Date.now() - started} ms`);
     await closeDialogs();
@@ -1159,19 +1159,19 @@ export async function featureChecks(ctx) {
       await openItem('Smoke Microsoft');
       const tiles = await js('[...document.querySelectorAll(".detail-pane [data-admin-link]")].map((b) => b.dataset.adminLink).join(",")');
       for (const id of ['pim', 'm365', 'entra', 'intune', 'azure']) if (!String(tiles).split(',').includes(id)) fail('admin', `tile "${id}" missing`);
-      // #7: PIM as the first, wide action; the centers in three groups, each tile with its own symbol on its colour.
+      // #7: PIM first and wide, the centers in three groups; #538: each its own distinct symbol, centers blue, PIM violet.
       const panel = JSON.parse(await js(`JSON.stringify((() => {
         const p = document.querySelector(".detail-pane .admin-panel");
-        const tiles = [...(p?.querySelectorAll(".admin-link") || [])];
-        return {
-          first: tiles[0]?.dataset.adminLink || "",
-          groups: [...(p?.querySelectorAll(".admin-group") || [])].map((g) => g.dataset.adminGroup).join(","),
-          bare: tiles.filter((b) => !b.querySelector(".admin-logo svg *") || getComputedStyle(b.querySelector(".admin-logo")).backgroundImage === "none").map((b) => b.dataset.adminLink),
-          colors: new Set(tiles.map((b) => b.querySelector(".admin-logo")?.style.getPropertyValue("--c"))).size,
-        };
+        const tiles = [...(p?.querySelectorAll(".admin-link") || [])], logo = (b) => getComputedStyle(b.querySelector(".admin-logo"));
+        const probe = document.body.appendChild(document.createElement("span")); probe.style.color = "var(--accent)";
+        const accent = getComputedStyle(probe).color; probe.remove();
+        return { first: tiles[0]?.dataset.adminLink || "", groups: [...(p?.querySelectorAll(".admin-group") || [])].map((g) => g.dataset.adminGroup).join(","),
+          count: tiles.length, bare: tiles.filter((b) => !b.querySelector(".admin-logo svg *")).map((b) => b.dataset.adminLink),
+          symbols: new Set(tiles.map((b) => b.querySelector(".admin-logo svg")?.innerHTML || "")).size,
+          offBrand: tiles.slice(1).filter((b) => logo(b).color !== accent).map((b) => b.dataset.adminLink), pimFilled: !!tiles[0] && logo(tiles[0]).backgroundImage !== "none" };
       })())`));
       if (panel.first !== 'pim' || panel.groups !== 'identity,m365,azure') fail('admin', `admin panel layout: ${JSON.stringify(panel)}`);
-      if (panel.bare.length || panel.colors < 8) fail('admin', `admin tiles without their own symbol/colour: ${JSON.stringify(panel)}`);
+      if (panel.count !== 10 || panel.bare.length || panel.symbols !== 10 || panel.offBrand.length || !panel.pimFilled) fail('admin', `admin tiles: own symbol, blue, PIM violet: ${JSON.stringify(panel)}`);
       ctx.clearSignIns();
       await js('document.querySelector(".detail-pane [data-admin-link=entra]")?.click()');
       await sleep(400);
@@ -1436,7 +1436,15 @@ export async function featureChecks(ctx) {
     await step('logging', async () => (await import('./smoke-logging.js')).loggingCheck({ js, sleep, fail: (m) => fail('logging', m), api, vault, kvc, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #486
     await step('compliance', async () => (await import('./smoke-compliance.js')).complianceCheck({ js, sleep, fail: (m) => fail('compliance', m), api, vault, kvc, changed, setAdmin, isAdmin: () => !!config.get().adminTools })); // #500
     await step('tlsenv', async () => (await import('./smoke-tls-env.js')).tlsEnvCheck({ js, api, fail: (m) => fail('tlsenv', m) })); // #517
-    await step('passkeywindow', async () => (await import('./smoke-passkey-window.js')).passkeyWindowCheck({ fail: (m) => fail('passkeywindow', m) })); // #532
+    await step('passkeywindow', async () => (await import('./smoke-passkey-window.js')).passkeyWindowCheck({ fail: (m) => fail('passkeywindow', m), passkeyCeremony: ctx.passkeyCeremony })); // #532, #536
+    await step('masterpw', async () => (await import('./smoke-master-password.js')).masterPasswordCheck({ js, sleep, api, config, changed, ensurePin: ctx.ensurePin, resetPinGuard: ctx.resetPinGuard, fail: (m) => fail('masterpw', m) })); // #537
+    await step('hellokey', async () => (await import('./smoke-hello-key.js')).helloKeyCheck({ js, sleep, api, config, changed, resetPinGuard: ctx.resetPinGuard, bridge: ctx.browserHandlers, fail: (m) => fail('hellokey', m) })); // #537 stage 3
+    await step('settingscrypt', async () => (await import('./smoke-settings-sealed.js')).settingsSealedCheck({ js, sleep, api, config, changed, ensurePin: ctx.ensurePin, resetPinGuard: ctx.resetPinGuard, fail: (m) => fail('settingscrypt', m) })); // #537 stage 5
+    await step('mpreset', async () => (await import('./smoke-mp-reset.js')).mpResetCheck({ js, sleep, api, config, changed, ensurePin: ctx.ensurePin, resetPinGuard: ctx.resetPinGuard, fail: (m) => fail('mpreset', m) })); // #537 stage 6
+    await step('confirmeach', async () => (await import('./smoke-confirm-each.js')).confirmEachCheck({ js, sleep, api, config, changed, win: ctx.win, ensurePin: ctx.ensurePin, resetPinGuard: ctx.resetPinGuard, openQuestionIds: ctx.openQuestionIds, browserHandlers: ctx.browserHandlers, bridgeHandlers: ctx.bridgeHandlers, setWindowLocked: ctx.setWindowLocked, mcpService: ctx.mcpService, clipboardHas, fail: (m) => fail('confirmeach', m) })); // #537 2b
+    await step('memberapp', async () => (await import('./smoke-member-key.js')).memberKeyCheck({ js, sleep, api, config, changed, ensurePin: ctx.ensurePin, resetPinGuard: ctx.resetPinGuard, fail: (m) => fail('memberapp', m) })); // #539 Etappe 8
+    await step('breakglass', async () => (await import('./smoke-break-glass.js')).breakGlassCheck({ js, sleep, api, changed, fail: (m) => fail('breakglass', m) })); // #539 Etappe 10
+    await step('helloupgrade', async () => (await import('./smoke-hello-offer.js')).helloOfferCheck({ js, sleep, api, config, changed, ensurePin: ctx.ensurePin, resetPinGuard: ctx.resetPinGuard, fail: (m) => fail('helloupgrade', m) })); // #537 live test
   } finally {
     await cleanUp();
     config.update({ adminTools: false, theme: 'system', transparency: 'light' });

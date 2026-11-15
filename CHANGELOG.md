@@ -6,6 +6,33 @@ GitHub-Releases; die App zeigt ihn im Update-Dialog. Ohne Abschnitt für die Ver
 
 ## Unveröffentlicht
 
+## 0.10.0 – 2026-11-15
+- Sicherheit: Ein Masterpasswort für die ganze App statt App-PIN. Es schützt den persönlichen Tresor, die Konfiguration, die Offline-Kopie und alle Bestätigungen (Kopieren, Export, Admin-Modus, Passkey-Prüfung). Bestehende geteilte Datei-Tresore mit gemeinsamem Passwort öffnen weiter wie bisher (#537).
+- Sicherheit: Entsperren mit Windows Hello oder mit einer optionalen App-PIN. Der Hello-Schlüssel liegt im TPM des Geräts, Keevault prüft das über die Microsoft-TPM-Bestätigung; die Organisation kann Hello per Richtlinie verbieten. Nach dem Update von einer älteren Version fragt Keevault einmal „Windows Hello aktivieren?“ (#537).
+- Windows Hello startet bei jeder Abfrage von selbst (Entsperren, Erweiterung, Kopieren, Export, Admin-Modus, Freigaben für KI-Agenten, Passkey-Anmeldungen); Masterpasswort oder PIN erscheinen erst, wenn Hello abgebrochen wird oder scheitert. Gegen Anfragen in Serie startet Hello nur bei genau einer offenen Anfrage und für KI-Agenten höchstens einmal pro Minute von selbst. Der Hello-Dialog erscheint vorn (#537).
+- Sicherheit: Masterpasswort vergessen? Mit einem Sicherheitsschlüssel (FIDO-Stick) setzt du es zurück. Dabei wechselt der Tresor-Schlüssel, das alte Passwort öffnet danach nichts Neues mehr; der Zurücksetzen-Hinweis erscheint einmal je Gerät. Nur mit Windows Hello oder PIN geht das nicht (#537).
+- Sicherheit: „Immer bestätigen“ – optional fragt jeder Zugriff auf ein Geheimnis (Anzeigen, Kopieren, Eintippen, Erweiterung, KI-Agenten) nach Windows Hello oder Masterpasswort. Du wählst, ob es für alle Tresore oder nur für den persönlichen gilt. Standardmäßig aus (#537).
+- Sicherheit: Die Konfiguration in OneDrive liegt verschlüsselt. Auf einem neuen Gerät fragt Keevault, ob die gefundene Konfiguration übernommen werden soll; mit dem Masterpasswort wird sie geöffnet. Eine ältere Klartext-Kopie wird nicht blind übernommen (#537).
+- Geteilte Datei-Tresore (abgesichertes Format): Jede Person hat einen eigenen Schlüssel, der am Masterpasswort hängt, ohne Passkey-Dialog bei jedem Öffnen. Scheidet jemand aus, wechselt der Tresor-Schlüssel, ohne dass alle ein neues Passwort brauchen (#539).
+- Sicherheit: Neue geteilte Datei-Tresore werden nur noch im abgesicherten Format angelegt (#539).
+- Sicherheit: Ohne Notfall-Stick lässt sich kein abgesicherter Datei-Tresor anlegen oder umwandeln. Notfall-Stick heißt FIDO-Sicherheitsschlüssel mit PRF, z. B. YubiKey; Windows Hello und Smartphone zählen nicht. Er wird beim Einrichten getestet, der letzte lässt sich nicht entfernen, und er öffnet die Datei nur über „Mit Notfall-Stick öffnen“ (#539).
+- Sicherheit: Zugriffsanfrage mit Prüfcode: Neue Personen stellen eine Anfrage. Der Admin gibt sie nur frei, wenn er den 16-stelligen Code eintippt, den ihm die Person nennt; die App zeigt ihm den Code selbst nicht (#539).
+- Admin Center: Eigene Symbole je Aufgabe statt an Markenlogos erinnernder Zeichen; die Kacheln folgen dem Keevault-Blau (#538).
+- Das Passkey-Fenster zeigt immer Text und „Abbrechen“ und endet nach einem Zeitlimit von selbst – nie mehr ein leeres, festhängendes Fenster (#536).
+
+### English
+- Security: one master password for the whole app instead of the App PIN. It protects the personal vault, the configuration, the offline copy and all confirmations (copy, export, admin mode, passkey check). Existing shared file vaults with a common password keep opening as before (#537).
+- Security: unlock with Windows Hello or with an optional App PIN. The Hello key lives in the device's TPM, which Keevault checks via Microsoft's TPM attestation; the organization can forbid Hello by policy. After updating from an older version, Keevault asks once "Turn on Windows Hello?" (#537).
+- Windows Hello starts by itself for every prompt (unlock, extension, copy, export, admin mode, AI agent requests, passkey sign-ins); the master password or PIN only appears when Hello is cancelled or fails. Against requests in series, Hello only starts by itself when exactly one request is open, and for AI agents at most once a minute. The Hello dialog appears in front (#537).
+- Security: forgot the master password? Reset it with a security key (FIDO key). The vault key changes in the process, so the old password opens nothing new; a notice about the reset shows once per device. Windows Hello or PIN alone cannot do this (#537).
+- Security: "Always confirm" – optionally every access to a secret (show, copy, type, extension, AI agents) asks for Windows Hello or the master password. You choose whether it applies to all vaults or only the personal one. Off by default (#537).
+- Security: the configuration in OneDrive is stored encrypted. On a new device Keevault asks whether to adopt the configuration it found; the master password opens it. An older plain copy is not adopted blindly (#537).
+- Shared file vaults (secured format): each person has their own key tied to the master password, without a passkey prompt on every open. When someone leaves, the vault key changes without everyone needing a new password (#539).
+- Security: new shared file vaults are only created in the secured format (#539).
+- Security: a secured file vault can only be created or converted with an emergency key. The emergency key must be a FIDO security key with PRF, e.g. a YubiKey; Windows Hello and phones do not count. It is tested during setup, the last one cannot be removed, and it only opens the file via "Open with emergency key" (#539).
+- Security: access request with verification code: new people send a request. The admin only approves it by typing the 16-digit code the person tells them; the app does not show the admin the code (#539).
+- Admin Center: own icons per task instead of symbols resembling brand logos; the tiles follow the Keevault blue (#538).
+- The passkey window always shows text and "Cancel" and ends by itself after a time limit – no more empty, stuck window (#536).
 ## 0.9.34 – 2026-11-12
 - Sicherheit: Ein neues Masterpasswort oder ein neuer Wiederherstellungsschlüssel wechselt jetzt den Tresor-Schlüssel. Alte Passwörter und Wiederherstellungsschlüssel öffnen danach nichts Neues mehr. Fallen dabei Passkeys weg, warnt der Dialog vorher (#402).
 - Sicherheit: Lassen sich die Tresor-Vorgaben nicht lesen (z. B. ohne Netz), sind Export und Verschieben in den persönlichen Tresor gesperrt (#525).

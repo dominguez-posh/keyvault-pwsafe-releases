@@ -3,6 +3,7 @@
 // clientId, containers and language; values from that file cannot be changed in the app.
 
 import { app } from 'electron';
+import { DEVICE_KEYS } from './window-lock-settings.js'; // keys bound to this device (Konrad, fix/537-smoke)
 import fs from 'node:fs';
 import path from 'node:path';
 import { readPolicy } from './policy.js';
@@ -24,6 +25,9 @@ const DEFAULTS = {
   windowsProvider: false,
   windowsProviderHint: false,
   appPin: null,
+  // #537: device key DK wrapped with the master password (and optionally a PIN); { v, pin, hello, blob } – blob under DPAPI.
+  // Written only by desktop/main/unlock.js. appPin stays for older app versions (E3), never as a hash of the master password.
+  unlockKeys: null,
   pinGuard: null, // wrong PIN attempts { failures, blockedUntil } – survives a restart
   requirePin: false,
   windowHello: false, // #512: Windows Hello lifts the window lock besides the PIN – only through setWindowHello (with the PIN)
@@ -108,6 +112,15 @@ const DEFAULTS = {
   // null = not asked yet: nothing is written until the user says yes (asked once, also after the update).
   settingsCopy: null,
   settingsCopyPending: false, // the first start still asks whether to take the settings found there: no copy until then
+  mpResetsSeen: [], // #537 stage 6: the master password resets (their time) shown on this device – device only
+  // Written by config.update only when listed here – without these the device memories were silently dropped:
+  appSettingsSeen: {}, // #537 2b (Konrad N1): highest stamp of the personal vault's app settings seen here – device only
+  memberKeySeen: null, // #539 H1: { vault, fps, gen } of the member keys seen here (fingerprints) – device only
+  memberKeyDevice: null, // #539 H1: this device's copy of the member keys, sealed with DK – device only
+  helloOffered: false, // #537 live test: "Windows Hello aktivieren?" was asked on this device (first start or after the upgrade) – device only
+  confirmEachVaults: [], // #537 2b: personal vaults seen with "Immer bestätigen" on – device only
+  confirmEachPersonalOnly: [], // #537 2b: those seen with the scope "only the personal vault" – device only
+  settingsCopyPlainGone: '', // #537 E5: when the plain copy of before was replaced or removed (Settings names the OneDrive history)
 };
 // Travel with the personal vault to the user's other devices. Not: PIN, device keys, what is installed on this device
 // (browser integration, passkey provider, autostart), admin mode and the approvals for AI agents.
@@ -116,7 +129,8 @@ export const SYNC_KEYS = ['containers', 'hiddenContainers', 'containerOrder', 'd
   'updateChannel', 'breakGlass', 'autoDiscover', 'signInWindows', 'pimOnLock', 'adminPim', 'adminOffered'];
 const ORG_KEYS = ['tenantId', 'clientId', 'autoLockMinutes', 'clipboardSeconds', 'unlockPrompt', 'language', 'extensionIds', 'requirePin', 'updateMode', 'updateChannel', 'mcpEnabled', 'offlineMirror',
   'selfUpdate', 'browserIntegration', 'windowsProvider', 'signInWindows', 'mcpScope', 'defaultContainer',
-  'windowHello']; // #512: only false is enforced (the organization forbids Windows Hello; switching on stays the user's, with the PIN)
+  'windowHello', // #512: only false is enforced (the organization forbids Windows Hello; switching on stays the user's, with the PIN)
+  'sharedVaultPasskeyOnly']; // #539: only true is enforced (secured files only with a passkey)
 
 export class Config {
   constructor() {
@@ -141,7 +155,7 @@ export class Config {
 
   get() {
     // "defaults" in the organization file (e.g. written by the installer) preset values the user may change.
-    const presets = Object.fromEntries(Object.entries(this.org.defaults || {}).filter(([k]) => k in DEFAULTS));
+    const presets = Object.fromEntries(Object.entries(this.org.defaults || {}).filter(([k]) => k in DEFAULTS && !DEVICE_KEYS.includes(k))); // never a device memory
     // The installed app sets up the browser integration unless the user turns it off. The Windows passkey provider
     // (a package of its own) is only installed when someone turns it on – the extension's passkeys work without it.
     const installed = app.isPackaged ? { browserIntegration: true } : {};
@@ -149,6 +163,7 @@ export class Config {
     const enforced = [];
     for (const key of ORG_KEYS) {
       if (key === 'windowHello' && this.org[key] !== false) continue; // #512: never forced on
+      if (key === 'sharedVaultPasskeyOnly' && this.org[key] !== true) continue; // #539: never forced off
       if (this.org[key] !== undefined && this.org[key] !== '') {
         s[key] = this.org[key];
         enforced.push(key);

@@ -4,6 +4,7 @@ import { faviconToDataUrl } from '../core/image.js';
 import { itemHosts, resolveLogin } from '../core/model.js';
 import { setLanguage, t } from '../core/i18n.js';
 import { call, copy } from '../lib/api.js';
+import { isSealed, sealedPath } from '../core/sealed.js';
 import { buildItemLink } from '../core/links.js';
 import { sharedNames, vaultChoiceLabel } from '../core/session-meta.js';
 import { vaultDot } from '../core/ui-vault.js';
@@ -18,6 +19,9 @@ const openEntryUrl = (url) => openWebUrl(url, { open: (u) => chrome.tabs.create(
 
 /** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
 const usableItem = async (containerId, id) => resolveLogin(await call('item', { containerId, id }), (c, i) => call('item', { containerId: c, id: i }));
+// #537 2b: a secret is read and copied by the service worker (a sealed entry of the app is confirmed there first).
+const copySecret = (s, path, label) => call('copySecret', { containerId: s.containerId, id: s.id, path })
+  .then(() => toast(t('{label} kopiert', { label })), (e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error'));
 
 // #530: when the popup got where on its way to the list (ms since the page started), for the smoke test's warm start.
 const kvMarks = { module: Math.round(performance.now()) };
@@ -209,11 +213,7 @@ function renderList() {
       h('div', { class: 'row-actions', onclick: (e) => e.stopPropagation() },
         matchesSite(s) ? iconButton('fill', t('Ausfüllen'), () => fillItem(s)) : null,
         s.username || s.loginLinked ? iconButton('user', t('Benutzername kopieren'), async () => copy(s.loginLinked ? (await usableItem(s.containerId, s.id)).username : s.username, t('Benutzername'))) : null,
-        s.type === 'login' ? iconButton('copy', t('Passwort kopieren'), async () => {
-          const item = await usableItem(s.containerId, s.id);
-          if (item.password) copy(item.password, t('Passwort'));
-          else toast(t('Kein Passwort gespeichert'));
-        }) : null))));
+        s.type === 'login' ? iconButton('copy', t('Passwort kopieren'), () => copySecret(s, 'password', t('Passwort'))) : null))));
   }
   renderRows();
   // Exact URL first (keevault.de/admin before keevault.de): needs the entries' full URLs, the list only has hosts.
@@ -316,11 +316,7 @@ function entryMenu(e, s) {
     }),
     matchesSite(s) ? entry('fill', t('Ausfüllen'), () => fillItem(s)) : null,
     s.username || s.loginLinked ? entry('user', t('Benutzername kopieren'), async () => copy(s.loginLinked ? (await usableItem(s.containerId, s.id)).username : s.username, t('Benutzername'))) : null,
-    s.type === 'login' ? entry('copy', t('Passwort kopieren'), async () => {
-      const item = await usableItem(s.containerId, s.id).catch(() => null);
-      if (item?.password) copy(item.password, t('Passwort'));
-      else toast(t('Kein Passwort gespeichert'));
-    }) : null,
+    s.type === 'login' ? entry('copy', t('Passwort kopieren'), () => copySecret(s, 'password', t('Passwort'))) : null,
     st.canMove ? entry('move', t('Ausschneiden'), () => cutNow(s)) : null,
     itemLinkFor(s) ? entry('link', t('Link kopieren'), () => {
       copy(itemLinkFor(s), t('Link zum Eintrag'));
@@ -364,7 +360,8 @@ async function renderDetail(s, fresh = false) {
   const mayWrite = writableContainers().some((c) => c.id === item.containerId);
   const { itemDetail } = await itemUi();
   const detail = itemDetail(shown, {
-    copy,
+    copy: (value, label) => (isSealed(value) ? copySecret(s, sealedPath(value), label) : copy(value, label)), // #537 2b
+    reveal: () => toast(t('„Immer bestätigen“ ist an: Passwörter dieses Tresors zeigt nur die Keevault-App an.')),
     ...hoverCtx(item, hasAssets, mayWrite),
     openUrl: openEntryUrl,
     // Attachments and certificates: saved through the browser's download (base64 → file).

@@ -22,7 +22,7 @@ test('extension: the page surfaces cannot sign with the PIN on, the window passe
   assert.match(part('async function conditionalSelect', 'async function inlineCreate'), /passkeyPinState\(\)\)\.required\) throw/);
   const sign = part('async function sign(', 'async function findCandidate');
   assert.match(sign, /if \(!demo\) \{\s*const \{ response \} = await app\.passkeySign\(\{[^}]*pin,/);
-  assert.match(part('async function webauthnApprove', 'async function editInPopup'), /sign\(req, await findCandidate\([^)]*\), typeof pin === 'string' \? pin : ''\)/);
+  assert.match(part('async function webauthnApprove', 'async function editInPopup'), /sign\(req, await findCandidate\([^)]*\), pin\?\.hello === true \? \{ hello: true \} : typeof pin === 'string' \? pin : ''\)/);
 });
 
 test('extension: no local signing outside the demo, no PIN or its hash kept in the extension', () => {

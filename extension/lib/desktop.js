@@ -228,7 +228,17 @@ export const app = {
     if (!c) throw new Error(t('Tresor nicht gefunden'));
     return c;
   },
-  getItem: (containerId, itemId) => call('item', { containerId, itemId }),
+  /**
+   * #537 2b: { reveal: 'fill' | 'copy' } for a use of the secrets. An entry the app hands out sealed ("Immer bestätigen" in
+   * the personal vault) is then asked for in the app (master password, PIN or Windows Hello) – up to five minutes.
+   */
+  getItem: async (containerId, itemId, opts) => {
+    const item = await call('item', { containerId, itemId });
+    if (!opts?.reveal || !item?.sealed?.length) return item;
+    await needCap('itemReveal');
+    const site = opts.reveal === 'fill' && typeof opts.site === 'string' ? opts.site.slice(0, 260) : '';
+    return call('itemReveal', { containerId, itemId, purpose: opts.reveal === 'copy' ? 'copy' : 'fill', ...(site ? { site } : {}) }, 300_000);
+  },
   /** Admin tools: the account of a sign-in the user just started in the app, only for this host (else null). */
   // #464: history, linked assets and moving, through the app (older apps lack the capability: the popup hides these).
   history: async (containerId, itemId) => { await needCap('history'); return call('history', { containerId, itemId }); },
@@ -269,6 +279,9 @@ export const app = {
   lock: async () => changedHere(await call('lock')),
   /** Unlocks the app with its PIN (silent sign-in in the app; a Microsoft window only if the tenant insists). */
   unlockPin: async (pin) => changedHere(await call('unlockPin', { pin }, 120_000)),
+  /** #537 stage 4: the app asks Windows Hello and opens the session for the extension (the window stays locked). */
+  // (No caps check: the popup offers it only when the app reports Hello as on – an older app never does.)
+  unlockRequest: async () => changedHere(await call('unlockRequest', {}, 480_000)),
   /** Starts the app; the host does that itself, it works while the app is not running. */
   launch() {
     if (!port) connect();

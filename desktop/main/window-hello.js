@@ -3,13 +3,15 @@
 
 import { spawn } from 'node:child_process';
 import { t } from '../../extension/core/i18n.js';
-import { HELLO_AVAILABLE, WindowHelloGate, helloOn, helloOutput } from '../window-hello.js';
+import { HELLO_AVAILABLE, HELLO_VERIFIED, WindowHelloGate, helloOn, helloOutput } from '../window-hello.js';
 import { smokeTest } from './boot.js';
 import { helperExe } from './typing.js';
 import { config, opened, setWindowLocked, win, windowLockEpoch, windowLocked } from './state.js';
 import { changed } from './session.js';
 import { revealHeldQuestions } from './agents.js';
 import { diag } from './diag.js';
+import { helloUnlock } from './hello-key.js';
+import { helloAllowed } from './unlock.js';
 
 // Smoke test only: { availability, result } instead of the helper (set by desktop/main/smoke-window-hello.js).
 let simulated = null;
@@ -45,13 +47,18 @@ export async function helloAvailable() {
   return (await runHelper(['--hello-status'], '', 'availability', 10000)) === HELLO_AVAILABLE;
 }
 
-/** Switched on by the user, with an app PIN set. */
-export const windowHelloOn = () => helloOn(config.get(), config.has('windowHello'));
+/** #537: the Hello key of the master password is set up (and allowed) – it lifts the window lock too, through DK. */
+const helloKeyOn = () => !!config.get().unlockKeys?.hello && helloAllowed();
+
+/** Switched on by the user, with an app PIN set (#512) – or the Hello key of the master password (#537). */
+export const windowHelloOn = () => helloKeyOn() || helloOn(config.get(), config.has('windowHello'));
 
 const gate = new WindowHelloGate({
   on: windowHelloOn,
   locked: () => ({ opened, windowLocked, epoch: windowLockEpoch }),
   async verify() {
+    // #537: the Hello key counts only as an unwrapped device key (Konrad), never as Windows' yes/no.
+    if (helloKeyOn()) return (await helloUnlock.proveDk('window').then(() => true, (e) => { diag(`HELLO window key refused: ${e.name}`); return false; })) ? HELLO_VERIFIED : null;
     if (smokeTest) return simulated ? simulated.result : null;
     const hwnd = windowHandle();
     if (!hwnd) return null;

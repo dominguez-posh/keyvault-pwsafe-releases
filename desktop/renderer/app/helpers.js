@@ -4,6 +4,8 @@ import { h, icon, toast, modal } from '../../../extension/core/dom.js';
 import { t, locale } from '../../../extension/core/i18n.js';
 import { sharedNames, vaultChoiceLabel } from '../../../extension/core/session-meta.js';
 import { call } from './ipc.js';
+import { accessPrompt } from './confirm-each.js';
+import { isSealed, sealedPath } from '../../../extension/core/sealed.js';
 import { st, ui } from './state.js';
 
 export const LEVEL_LABEL = { read: 'Lesen', write: 'Bearbeiten', manage: 'Verwalten', none: 'Ohne Datenzugriff' };
@@ -12,22 +14,136 @@ export const containerName = (id) => st?.containers.find((c) => c.id === id)?.na
 /** Every copy confirms itself ("… in die Zwischenablage kopiert") or says that it failed. */
 // #480: containerId names the vault the value comes from; a vault that wants the app PIN for copying asks for it first.
 export const copy = (text, label = t('Wert'), containerId = null) => Promise.resolve(text)
-  .then((value) => call('copy', value, containerId).catch(async (e) => {
+  .then((value) => withAccess(() => call('copy', value, containerId).catch(async (e) => {
     if (e.name !== 'CopyPinRequired' || !(await copyPinPrompt(containerId || ui.containerId))) throw e;
     return call('copy', value, containerId);
-  }))
+  })))
   .then(() => toast(t('{label} in die Zwischenablage kopiert', { label })))
   .catch((e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error'));
+
+/**
+ * #537 2b: a call the main process may refuse with AccessConfirmRequired ("Immer bestätigen" in the personal vault):
+ * asks for the proof for exactly that use, then tries once more. Cancelled → the refusal stands.
+ */
+export async function withAccess(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e.name !== 'AccessConfirmRequired' || !e.access || !(await accessPrompt(e.access))) throw e;
+    return fn();
+  }
+}
+
+/** #537 2b: a value of entry containerId/id to copy – a held-back secret (marker) is copied by the main process itself. */
+export function copyFrom(containerId, id, value, label = t('Wert')) {
+  if (!isSealed(value)) return copy(value, label, containerId);
+  return withAccess(() => call('copySecret', containerId, id, sealedPath(value)))
+    .then(() => toast(t('{label} in die Zwischenablage kopiert', { label })))
+    .catch((e) => toast(t('Kopieren fehlgeschlagen: {message}', { message: e.message }), 'error'));
+}
+
+/** #537 2b: the entry with its secrets (editing, "Anzeigen") – asks for the proof when its vault wants one. */
+export const revealItem = (containerId, id) => withAccess(() => call('item', containerId, id, true, { reveal: true }));
+
+/** #537 live test (Lucas): the same words in every dialog that takes Windows Hello, the master password or the PIN. */
+export const HELLO_ALLOW = 'Mit Windows Hello erlauben';
+export const HELLO_OR = 'Oder mit Masterpasswort oder PIN:';
+export const HELLO_AGAIN = 'Erneut mit Windows Hello';
+
+/**
+ * #537 risk 3 (Lucas 14.11.2026, "überall automatisch"): with Windows Hello on, a dialog that shows its request asks Hello
+ * by itself – once, when it is on screen and has the focus (never a script without a visible request). The field for
+ * the master password or the PIN shows only when Hello fails, is cancelled or is not there; then "Erneut mit Windows
+ * Hello". start(): the one automatic start (false when it already ran or the dialog is gone).
+ */
+export function autoHelloOnce(isOn, { skipped = null } = {}) {
+  let done = false;
+  return (start) => {
+    if (done || window.kvSmokeNoAutoHello) return false; // smoke areas that answer the questions themselves
+    const go = () => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('focus', go);
+      // Konrad M1: what isOn says at the moment of the start counts (one request open, this dialog on top, …) – not, then
+      // never automatically for this request; skipped() shows the field at once.
+      if (!isOn() || document.visibilityState !== 'visible') { skipped?.(); return; }
+      start();
+    };
+    if (document.hasFocus()) setTimeout(go, 250); // drawn first, so the request stays visible behind Hello
+    else window.addEventListener('focus', go);
+    return true;
+  };
+}
+
+/**
+ * #537 stage 4 / risk 3: Windows Hello as the recommended way (primary button) above the field for the master password
+ * or the PIN – when Hello is on. Hello starts by itself once (autoHelloOnce); field (the .field element) stays hidden until
+ * it fails. The main process asks Windows Hello itself for this one use; onProof({ hello: true }) sends only the wish and
+ * returns false when it did not go through. null without Hello (the dialog stays as it was, the field shown at once).
+ */
+export function helloProofButton(onProof, { field: fieldEl = null } = {}) {
+  if (!st?.unlock?.hello) return null;
+  const or = h('p', { class: 'muted small hello-or' }, t(HELLO_OR));
+  const label = h('span', {}, t(HELLO_ALLOW));
+  let action = null; // Lena 1: the footer's action – hidden while Hello runs and the field is hidden, it would do nothing
+  const reveal = (again = true) => {
+    if (fieldEl) fieldEl.hidden = false;
+    or.hidden = false;
+    if (action) action.hidden = false;
+    if (again) label.textContent = t(HELLO_AGAIN);
+    fieldEl?.querySelector('input')?.focus();
+  };
+  const run = async () => {
+    button.disabled = true;
+    let ok = false;
+    try {
+      ok = (await onProof({ hello: true })) !== false;
+    } catch {
+      ok = false;
+    } finally {
+      button.disabled = false;
+    }
+    if (!ok) reveal();
+  };
+  const button = h('button', { type: 'button', class: 'btn primary block hello-proof', onclick: () => run() }, icon('shield'), label);
+  const box = h('div', { class: 'hello-proof-box' }, button, or);
+  if (autoHelloOnce(() => button.isConnected, { skipped: () => reveal(false) })(run) && fieldEl) { // the field waits for Hello
+    fieldEl.hidden = true;
+    or.hidden = true;
+    setTimeout(() => { // the dialog is built by now
+      action = box.closest('dialog')?.querySelector('.modal-footer .btn:last-child') || null;
+      if (action && fieldEl.hidden) action.hidden = true;
+    }, 0);
+  }
+  return box;
+}
+
+/** #537: the label of the secret a gate asks – the master password or the PIN once set up, else the app PIN. */
+export const secretLabel = () => (st?.unlock?.migrated ? t('Masterpasswort oder PIN') : t('App-PIN'));
 
 /** The app PIN for copies from one vault (checked in the main process, valid a minute). → true when confirmed */
 function copyPinPrompt(containerId) {
   if (!containerId) return Promise.resolve(false);
   return new Promise((resolve) => {
-    const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', class: 'copy-pin', 'aria-label': t('App-PIN') });
+    const mp = !!st?.unlock?.migrated;
+    const pin = h('input', { type: 'password', ...(mp ? {} : { inputmode: 'numeric' }), autocomplete: 'off', class: 'copy-pin', 'aria-label': secretLabel() });
     let ok = false;
-    const { dialog } = modal(t('App-PIN zum Kopieren'), h('div', {}, h('p', {}, t('Dieser Tresor verlangt beim Kopieren die App-PIN.')), field(t('App-PIN'), pin)), [
+    const pinField = field(secretLabel(), pin);
+    const hello = helloProofButton(async (proof) => {
+      try {
+        ok = await call('confirmCopyPin', containerId, proof);
+        close();
+        return true;
+      } catch (err) {
+        toast(err.message, 'error');
+        return false;
+      }
+    }, { field: pinField });
+    const { dialog, close } = modal(mp ? t('Bestätigen zum Kopieren') : t('App-PIN zum Kopieren'), h('div', {},
+      h('p', {}, mp ? t('Dieser Tresor verlangt beim Kopieren eine Bestätigung (Masterpasswort, PIN oder Windows Hello).') : t('Dieser Tresor verlangt beim Kopieren die App-PIN.')),
+      hello, pinField), [
       { label: t('Abbrechen') },
-      { label: t('Kopieren'), primary: true, onClick: async () => {
+      { label: t('Kopieren'), primary: !st.unlock?.hello, onClick: async () => { // Lena: one primary button – Hello's
         try {
           ok = await call('confirmCopyPin', containerId, pin.value);
           return true;

@@ -4,16 +4,29 @@ import { h, icon, toast, modal, passkeySuccess, showPinProblem } from '../../../
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
 import { st } from './state.js';
-import { choiceName, field, notice } from './helpers.js';
+import { HELLO_AGAIN, HELLO_ALLOW, HELLO_OR, autoHelloOnce, choiceName, field, notice } from './helpers.js';
 import { FIELD_LABELS } from './file-vaults.js';
 import { pinDialog } from './admin-mode.js';
 import { openRequests, pinTyping } from './pin-typed.js';
 import { focusField } from './focus.js';
 import { reloadAll } from './shell.js';
 
+/** #537 stage 4: what the passkey field asks once the master password is set up. */
+// #537 2b: a confirmation for one use of an entry of the personal vault ("Immer bestätigen").
+const confirmEach = (q) => /^(agent-)?confirm-each$/.test(q?.kind || '');
+const proofPrompt = (q) => (confirmEach(q) ? t('Masterpasswort oder PIN eingeben, um diesen Zugriff zu bestätigen') : passkeyPinPrompt());
+const passkeyPinPrompt = () => (st.unlock?.migrated ? t('Masterpasswort oder PIN eingeben, um diese Anmeldung zu erlauben') : t('App-PIN eingeben, um diese Anmeldung zu erlauben'));
+// #537 live test (Lucas): with Windows Hello on, its own button (the recommended way); no "leave the field empty" any more.
+const helloOr = () => (st.unlock?.hello ? h('p', { class: 'muted small hello-or' }, t(HELLO_OR)) : null);
+
 const windowsDialogs = new Map(); // request id → close()
 // #472 (review): every request dialog open in the window; Enter in a PIN field confirms only while it is the only one.
 const pinRequests = openRequests();
+// Konrad M1: at most one automatic Windows Hello for the questions within 60 s – a tool asking ten times gets one, the rest
+// waits for a click (kvSmokeAgentAutoGap: the smoke run's shorter gap).
+let lastQuestionAuto = 0;
+const questionAutoGap = () => (typeof window.kvSmokeAgentAutoGap === 'number' ? window.kvSmokeAgentAutoGap : 60_000);
+const onTop = (dialog) => [...document.querySelectorAll('dialog[open]')].at(-1) === dialog;
 // Shown under the PIN field while more than one request is open: then only a click confirms.
 const multiHint = (cls) => h('p', { class: `muted small ${cls}`, hidden: true }, t('Mehrere Anfragen offen – bestätige diese mit einem Klick.'));
 
@@ -70,22 +83,27 @@ const CONFIRM_DELAY_MS = 1200;
 const waitingQuestions = new Set();
 export function questionDialog(q) {
   let answered = false;
+  let close = () => {}; // set when the dialog exists (closes it and cleans up)
   const answer = (value) => {
     if (answered) return;
     answered = true;
     openQuestions.delete(q.id);
     call('answerQuestion', q.id, value).catch(() => {});
   };
-  const icons = { 'agent-connect': 'link', 'agent-read': 'key', 'agent-write': 'edit' };
+  const icons = { 'agent-connect': 'link', 'agent-read': 'key', 'agent-write': 'edit', 'confirm-each': 'lock', 'agent-confirm-each': 'lock', held: 'lock' };
   // #368: the account choice starts without a selection, the user picks the account that is handed to the tool.
   let choice = q.filter ? null : q.choices?.[0]?.value || 'allow';
   let delayPassed = false;
   let delayTimer = null;
+  let helloAllow = null; // #537 live test: "Mit Windows Hello erlauben" (set below when Hello is on)
+  let tryAutoHello = () => {}; // #537 risk 3: Hello starts by itself once the request can be answered (set below)
   // During the delay the button only looks disabled: a really disabled button would lose the keyboard focus and get no
   // more key presses. Disabled for real only without a choice, where it can't have the focus.
   const updateAllow = () => {
-    allow.disabled = choice === null || !!q.held; // #507: a held agent question is allowed only after the window's PIN
-    allow.setAttribute('aria-disabled', String(!delayPassed));
+    for (const b of [allow, helloAllow].filter(Boolean)) {
+      b.disabled = choice === null || !!q.held; // #507: a held agent question is allowed only after the window's PIN
+      b.setAttribute('aria-disabled', String(!delayPassed));
+    }
   };
   const startDelay = () => {
     clearTimeout(delayTimer);
@@ -96,13 +114,13 @@ export function questionDialog(q) {
   // Every key starts the delay again, except a confirming key after the pause (space acts on key up, so it must not
   // start the delay on key down either).
   const onKey = (e) => {
-    const confirming = (e.target === allow && (e.key === 'Enter' || e.key === ' '))
+    const confirming = ((e.target === allow || (helloAllow && e.target === helloAllow)) && (e.key === 'Enter' || e.key === ' '))
       || (q.filter && e.key === 'Enter' && e.target.matches?.('.q-option input:checked'));
     if (!delayPassed || !confirming) startDelay();
   };
   const options = (q.choices || []).map((c, i) => {
     const input = h('input', { type: 'radio', name: `q${q.id}`, value: c.value, checked: !q.filter && i === 0,
-      onchange: () => { choice = c.value; updateAllow(); },
+      onchange: () => { choice = c.value; updateAllow(); tryAutoHello(); },
       // Keyboard way through the account choice: Tab to the list, pick with arrows or space, then Enter.
       onkeydown: (e) => { if (q.filter && e.key === 'Enter' && input.checked) allow.click(); } });
     const label = h('label', { class: 'q-option' }, input,
@@ -177,13 +195,16 @@ export function questionDialog(q) {
     } }) : null;
   const pinError = q.pin ? h('div', { class: 'notice error q-pin-error', role: 'alert', hidden: true }) : null;
   let submitting = false;
-  const submitPin = async () => {
-    if (!pinInput.value) { pinInput.focus(); return; }
+  // #537 stage 4: the field takes the master password or the PIN; Windows Hello has its own button (helloAllow), the main
+  // process asks Hello for this one use.
+  const submitPin = async (viaHello = false) => {
+    if (!viaHello && !pinInput.value) { pinInput.focus(); return; }
     if (submitting) return;
     submitting = true;
     try {
-      await call('answerQuestion', q.id, choice, pinInput.value);
+      await call('answerQuestion', q.id, choice, viaHello ? { hello: true } : pinInput.value);
     } catch (err) {
+      if (viaHello) revealPin(); // Hello cancelled, failed or not there: now the field, and "Erneut mit Windows Hello"
       showPinProblem(pinError, err.message);
       pinInput.value = '';
       typing.reset();
@@ -197,6 +218,17 @@ export function questionDialog(q) {
     openQuestions.delete(q.id);
     close();
   };
+  // #537 risk 3: with Hello on, the field for the master password or the PIN waits until Hello did not go through.
+  // Never automatic for a held question or one sent again after the window's lock (Konrad M1: #507/#417 must hold).
+  const mayAuto = !!st.unlock?.hello && !window.kvSmokeNoAutoHello && !q.held && !q.resent;
+  const pinBox = q.pin ? h('div', { class: 'q-pin-box', hidden: mayAuto }) : null;
+  pinBox?.append(...[helloOr(), h('label', { for: 'q-pin-input' }, proofPrompt(q)), pinInput, pinMulti].filter(Boolean));
+  const revealPin = (again = true) => {
+    if (!pinBox) return;
+    pinBox.hidden = false;
+    allow.hidden = false; // Lena 1: "allow" only with the field
+    if (helloAllow && again) helloAllow.lastChild.textContent = t(HELLO_AGAIN);
+  };
   const allow = h('button', { type: 'button', class: 'btn primary', onpointerdown: () => { pressedInTime = delayPassed; }, onclick: async (e) => {
     if (q.held) return; // #507: allowed only after the window's PIN (the main process refuses it too)
     if (!delayPassed || choice === null || (e.detail > 0 && !pressedInTime)) return;
@@ -207,25 +239,39 @@ export function questionDialog(q) {
     answer(choice);
     close();
   } }, q.allow || t('Erlauben'));
+  // The same rules as "allow": after the delay, a click begun in time, an option chosen, never on a held request.
+  helloAllow = q.pin && st.unlock?.hello ? h('button', { type: 'button', class: 'btn primary block q-hello-allow', onpointerdown: () => { pressedInTime = delayPassed; }, onclick: async (e) => {
+    if (q.held) return;
+    if (!delayPassed || choice === null || (e.detail > 0 && !pressedInTime)) return;
+    await submitPin(true);
+  } }, icon('shield', 14), h('span', {}, t(HELLO_ALLOW))) : null;
+  if (helloAllow) allow.classList.remove('primary'); // Hello is the recommended way, the field the alternative
+  if (pinBox?.hidden) allow.hidden = true; // Lena 1: while Hello runs it would do nothing
   const body = h('div', { class: `question ${q.kind}` },
     h('div', { class: 'q-hero' },
       h('span', { class: 'q-badge' }, icon(icons[q.kind] || 'shield', 26)),
       h('div', { class: 'q-hero-text' },
-        h('div', { class: 'q-eyebrow' }, t('Anfrage eines KI-Agenten')),
+        h('div', { class: 'q-eyebrow' }, q.kind === 'confirm-each' ? t('Immer bestätigen') : q.kind === 'held' ? t('Anfrage der Browser-Erweiterung') : t('Anfrage eines KI-Agenten')),
         h('div', { class: 'q-title' }, q.title))),
     q.lead ? h('p', { class: 'q-lead' }, q.lead) : null,
     target,
     entriesList(q.entries),
     filterBar,
     options.length ? h('div', { class: `q-options${filterBar ? ' q-options-scroll' : ''}`, role: 'radiogroup' }, ...options, noHits) : null,
-    q.pin ? h('div', { class: 'field q-pin' }, h('label', { for: 'q-pin-input' }, t('App-PIN eingeben, um diese Anmeldung zu erlauben')), pinInput, pinMulti, pinError) : null,
+    q.pin ? h('div', { class: 'field q-pin' }, helloAllow, pinBox, pinError) : null,
     q.note ? h('p', { class: 'q-note' }, icon('shield', 13), q.note) : null,
     h('div', { class: 'q-actions' },
       h('button', { type: 'button', class: 'btn', onclick: () => { answer(q.cancel); close(); } }, t('Ablehnen')),
       allow));
-  const { dialog, close } = modal('', body, []);
+  const { dialog, close: closeModal } = modal('', body, []);
   dialog.classList.add('question-modal');
-  dialog.addEventListener('close', () => {
+  // The dialog's "close" event does not reach a dialog that modal() removes right after closing it: the cleanup runs on
+  // every way out (an answer here, the main process's questionClose, Esc/×) – else this request stayed "open" for the
+  // others (pinRequests.single: Enter after typing #472, the automatic Windows Hello of #537).
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     answer(q.cancel);
     clearTimeout(delayTimer);
     document.removeEventListener('keydown', onKey, true);
@@ -234,7 +280,9 @@ export function questionDialog(q) {
     waitingQuestions.delete(startDelay);
     pinRequests.remove(reqKey);
     for (const restart of waitingQuestions) restart();
-  });
+  };
+  dialog.addEventListener('close', cleanup);
+  close = () => { cleanup(); closeModal(); };
   openQuestions.set(q.id, () => { answered = true; close(); });
   pinRequests.add(reqKey, typing, (single) => { if (pinMulti) pinMulti.hidden = single; });
   waitingQuestions.add(startDelay);
@@ -244,8 +292,17 @@ export function questionDialog(q) {
   window.addEventListener('blur', startDelay);
   // #368: the focus is on no button, so Enter and space do nothing. With a search the cursor starts there.
   body.tabIndex = -1;
-  if (pinInput && !filterBar?.querySelector('.q-search')) focusField(pinInput);
+  if (pinInput && !pinBox.hidden && !filterBar?.querySelector('.q-search')) focusField(pinInput);
   else (filterBar?.querySelector('.q-search') || body).focus();
+  // #537 risk 3 (Lucas: "überall automatisch"): this dialog shows who wants what – Hello starts by itself, once, when
+  // an account is chosen; never for a held request (#507), never again after a cancel (then the field and the button).
+  if (helloAllow && mayAuto) {
+    // Konrad M1: only the one open request, its dialog on top, at most one automatic start within the gap.
+    const auto = autoHelloOnce(() => dialog.open && !q.held && !answered && pinRequests.single(reqKey) && onTop(dialog) && Date.now() - lastQuestionAuto >= questionAutoGap(),
+      { skipped: () => revealPin(false) });
+    tryAutoHello = () => { if (choice !== null && !q.held) auto(() => { lastQuestionAuto = Date.now(); submitPin(true); }); };
+    tryAutoHello();
+  }
 }
 
 /** Success moment after a passkey request from Windows: centred badge animation, gone after about a second. */
@@ -275,6 +332,9 @@ function windowsDialog(r) {
   const reqKey = `w:${r.id}`;
   let typing = null;
   let pinMulti = null;
+  let onFocus = null; // the window's focus listener of a sign-in dialog: removed when the dialog closes (Konrad, 9f3c6f9)
+  let afterShow = null; // #537 risk 3: Windows Hello started by itself once the dialog is on screen
+  let close = () => {}; // set when the dialog exists (closes it and cleans up)
   if (r.kind === 'get') {
     // #439: every sign-in is confirmed with the app PIN, typed here (the PIN is checked in the app, for this one use).
     const needPin = !!r.pin?.required;
@@ -291,12 +351,25 @@ function windowsDialog(r) {
         if (r.candidates.length === 1 && pinRequests.single(reqKey) && typing.ready(pinInput.value)) choose(r.candidates[0]);
       } }) : null;
     const pinError = h('div', { class: 'notice error win-pin-error', role: 'alert', hidden: true });
-    const choose = async (c) => {
-      if (pinInput && !pinInput.value) { pinInput.focus(); return; }
+    // Konrad (review of stage 4): Windows Hello from this dialog only by a real click after the delay of #368, counted
+    // from the dialog's appearance and from every return of the focus – never a click that was already on its way.
+    let shownAt = Date.now();
+    onFocus = () => { shownAt = Date.now(); };
+    window.addEventListener('focus', onFocus);
+    const hello = !!st.unlock?.hello && !!pinInput;
+    // #537 risk 3 (Lucas: "überall automatisch"): with Hello on, the field waits until Hello did not go through; one passkey
+    // asks Hello by itself once, several after the choice (a click on the passkey). auto: the one start by the dialog.
+    let fieldShown = !hello || !!window.kvSmokeNoAutoHello;
+    const choose = async (c, e, helloButton = false, auto = false) => {
+      const viaHello = hello && (helloButton || !fieldShown);
+      if (viaHello && !auto && (!e?.isTrusted || Date.now() - shownAt < CONFIRM_DELAY_MS)) return;
+      if (pinInput && !viaHello && !pinInput.value) { pinInput.focus(); return; } // the master password or the PIN first
       try {
-        await call('windowsDecision', r.id, { containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId, ...(pinInput ? { pin: pinInput.value } : {}) });
+        // #537 stage 4: an empty field with Windows Hello on – the main process asks Hello for this one sign-in.
+        await call('windowsDecision', r.id, { containerId: c.containerId, itemId: c.itemId, credentialId: c.credentialId, ...(pinInput ? { pin: viaHello ? { hello: true } : pinInput.value } : {}) });
       } catch (e) {
-        // Wrong PIN, blocked: the request stays open, the dialog stays.
+        // Wrong PIN, blocked, Hello cancelled: the request stays open, the dialog stays – now with the field.
+        if (viaHello) showField();
         showPinProblem(pinError, e.message);
         if (pinInput) { pinInput.value = ''; typing.reset(); pinInput.focus(); }
         return;
@@ -306,16 +379,38 @@ function windowsDialog(r) {
       flashPasskey(t('Angemeldet'));
       reloadAll().catch(() => {});
     };
+    const retryButtons = [];
+    const helloLabel = h('span', {}, t(HELLO_ALLOW));
+    const helloOne = hello && r.candidates.length === 1 ? h('button', { type: 'button', class: 'btn primary block win-hello-allow', onclick: (e) => choose(r.candidates[0], e, true) }, icon('shield', 14), helloLabel) : null;
+    const pinFieldBox = pinInput ? h('div', { class: 'win-pin-box', hidden: !fieldShown }, hello ? helloOr() : null, field(passkeyPinPrompt(), pinInput), pinMulti) : null;
+    const showField = (again = true) => {
+      fieldShown = true;
+      if (pinFieldBox) pinFieldBox.hidden = false;
+      if (again) helloLabel.textContent = t(HELLO_AGAIN);
+      for (const b of retryButtons) b.hidden = false;
+    };
     body = h('div', {}, head, lockedHint,
       noPin ? [notice(t('Für Passkeys braucht Keevault eine App-PIN. Lege sie jetzt fest – dann kannst du dich anmelden.'), 'warn'),
         h('p', {}, h('button', { type: 'button', class: 'btn primary', onclick: () => pinDialog({ passkeys: true, onSaved: () => { windowsDialogs.delete(r.id); close(); checkWindowsRequests(); } }) }, icon('key', 14), t('PIN festlegen')))] : null,
       r.candidates.length
         ? [h('p', {}, t('Mit welchem Passkey möchtest du dich anmelden?')),
-          pinInput ? field(t('App-PIN eingeben, um diese Anmeldung zu erlauben'), pinInput) : null, pinInput ? pinMulti : null, pinError,
-          ...r.candidates.map((c) => h('button', { type: 'button', class: 'choice', disabled: noPin, onclick: () => choose(c) },
-            icon('user'), h('span', {}, c.userName || t('(ohne Benutzername)')), h('span', { class: 'muted small' }, `${c.title} · ${c.container}`)))]
+          // #537 live test / risk 3: Windows Hello as its own button for the one passkey (started by itself), with several
+          // the click on a passkey asks Hello; after a cancel the field, and "Windows Hello" beside each passkey.
+          hello && r.candidates.length === 1 ? helloOne : null,
+          pinFieldBox, pinError,
+          ...r.candidates.map((c) => {
+            const pick = h('button', { type: 'button', class: 'choice', disabled: noPin, onclick: (e) => choose(c, e) },
+              icon('user'), h('span', {}, c.userName || t('(ohne Benutzername)')), h('span', { class: 'muted small' }, `${c.title} · ${c.container}`));
+            if (!(hello && r.candidates.length > 1)) return pick;
+            const again = h('button', { type: 'button', class: 'btn small win-hello-choice', hidden: true, title: t(HELLO_AGAIN), 'aria-label': `${t(HELLO_AGAIN)}: ${c.userName || c.title}`, onclick: (e) => choose(c, e, true) }, icon('shield', 14), t('Windows Hello'));
+            retryButtons.push(again);
+            return h('div', { class: 'choice-row' }, pick, again);
+          })]
         : h('p', {}, t('Im Tresor ist kein passender Passkey gespeichert.')));
     buttons = [{ label: t('Abbrechen'), onClick: () => decide({ cancel: true }) }];
+    if (hello && r.candidates.length === 1 && !fieldShown) {
+      afterShow = (dialog) => autoHelloOnce(() => dialog.open && pinRequests.single(reqKey) && onTop(dialog), { skipped: () => showField(false) })(() => choose(r.candidates[0], null, true, true));
+    }
   } else {
     const container = h('select', {}, ...r.containers.map((c) => h('option', { value: c.id, selected: c.id === st.settings.defaultContainer }, choiceName(st.containers.find((x) => x.id === c.id) || c))));
     const title = h('input', { value: r.rpName || r.rpId });
@@ -345,13 +440,21 @@ function windowsDialog(r) {
       } },
     ];
   }
-  const { dialog, close } = modal(t('Passkey'), body, buttons);
-  focusField(dialog.querySelector('.win-pin-input'));
-  // Closing with Esc or × cancels the request.
+  const { dialog, close: closeModal } = modal(t('Passkey'), body, buttons);
+  if (!dialog.querySelector('.win-pin-box[hidden]')) focusField(dialog.querySelector('.win-pin-input'));
+  // Closing with Esc or × cancels the request. The cleanup also on the dialog's own close (its "close" event does not
+  // reach the removed dialog – see questionDialog).
   pinRequests.add(reqKey, typing, (single) => { if (pinMulti) pinMulti.hidden = single; });
-  dialog.addEventListener('close', () => {
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     pinRequests.remove(reqKey);
+    if (onFocus) window.removeEventListener('focus', onFocus);
     if (windowsDialogs.has(r.id)) decide({ cancel: true }).catch(() => {});
-  });
+  };
+  dialog.addEventListener('close', cleanup);
+  close = () => { cleanup(); closeModal(); };
+  afterShow?.(dialog);
   return close;
 }

@@ -83,7 +83,7 @@ function previewList(preview, confirm, vaults) {
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : t('unbekannt'));
 
 /** Asks with the preview: → true when imported, false when not. */
-function askImport(preview, title) {
+export function askSettingsImport(preview, title) {
   return new Promise((resolve) => {
     let answered = false;
     const confirm = new Map();
@@ -91,6 +91,8 @@ function askImport(preview, title) {
     const ticked = (boxes) => [...boxes].filter(([, box]) => box.checked).map(([k]) => k);
     const { dialog } = modal(title, h('div', {},
       h('p', {}, t('Einstellungen von {device} ({date}) importieren?', { device: preview.device || t('unbekanntes Gerät'), date: when(preview.exportedAt) })),
+      // Konrad (review of 8f5521b): a plain file may come from anyone – device and date in it are not checked.
+      preview.plain ? h('p', { class: 'notice warn small settings-plain-origin' }, t('Unverschlüsselte Datei, Herkunft nicht geprüft – Gerät und Datum können falsch sein.')) : null,
       previewList(preview, confirm, vaults)), [
       { label: t('Nicht importieren'), onClick: () => { answered = true; resolve(false); } },
       { label: t('Importieren'), primary: true, onClick: async () => {
@@ -119,7 +121,7 @@ export async function importSettings() {
   try {
     const preview = await call('pickSettingsImport');
     if (!preview) return;
-    if (await askImport(preview, t('Einstellungen importieren'))) {
+    if (await askSettingsImport(preview, t('Einstellungen importieren'))) {
       toast(t('Einstellungen importiert'));
       await render();
     }
@@ -160,7 +162,9 @@ export async function firstStartSettings() {
         if ((await askOneDrive()) === 'retry') continue;
         break;
       }
-      if (status.found) imported = await askImport(status.preview, t('Einstellungen übernehmen'));
+      if (status.found) imported = await askSettingsImport(status.preview, t('Einstellungen übernehmen'));
+      // #537 E5: the plain copy of before is not taken by itself; the menu import still reads it when picked.
+      else if (status.plain) toast(t('Im OneDrive liegt nur eine alte, unverschlüsselte Kopie der Einstellungen – sie wird nicht übernommen. Importiere sie über das Menü nur, wenn du sie selbst angelegt hast.'));
       break;
     }
   } catch (e) {
@@ -182,6 +186,7 @@ function consentDialog() {
     const answer = (v) => () => { answered = true; resolve(v); };
     const { dialog } = modal(t('Einstellungen im OneDrive sichern'), h('div', {},
       h('p', {}, t('Einstellungen zusätzlich als Kopie im OneDrive sichern? Darin stehen Tresornamen, -adressen und Tenant-IDs, aber keine Passwörter oder Schlüssel.')),
+      h('p', { class: 'small settings-consent-sealed' }, t('Die Kopie ist mit dem Schlüssel deines persönlichen Tresors verschlüsselt – ohne persönlichen Tresor wird keine angelegt.')),
       h('p', { class: 'muted small' }, t('Du kannst das jederzeit unter Einstellungen → Allgemein ändern.'))), [
       { label: t('Nein'), onClick: answer(false) },
       { label: t('Ja, sichern'), primary: true, onClick: answer(true) },
@@ -216,4 +221,9 @@ export async function askSettingsCopy({ firstStart = false } = {}) {
 /** The Keevault folder in OneDrive is a junction or link: no copy goes there. */
 export function settingsCopyBlockedNotice(folder) {
   toast(t('Die Kopie der Einstellungen wurde nicht geschrieben: {folder} ist eine Verknüpfung (Junction). Entferne sie oder schalte die Kopie in den Einstellungen aus.', { folder }), 'error');
+}
+
+/** #537 E5: the plain copy of before was replaced by the encrypted one (or removed) – older versions may remain. */
+export function settingsCopyPlainGoneNotice() {
+  toast(t('Die Kopie deiner Einstellungen im OneDrive ist jetzt verschlüsselt. Die frühere unverschlüsselte Fassung kann noch im OneDrive-Versionsverlauf oder im Papierkorb liegen – lösche sie dort bei Bedarf.'));
 }

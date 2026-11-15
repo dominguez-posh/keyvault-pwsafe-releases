@@ -34,6 +34,8 @@ const VALUES = {
   DefaultVault: { setting: 'defaultContainer', type: 'vault' }, // vault URL → container id (host name)
   // #512 (0.9.33): 0 forbids unlocking the window with Windows Hello; 1 is not enforced (the user switches it on with the PIN).
   WindowHello: { setting: 'windowHello', type: 'boolean' },
+  // #539: 1 – secured file vaults open only with a passkey, never with the app's master password (0 is not enforced).
+  SharedVaultPasskeyOnly: { setting: 'sharedVaultPasskeyOnly', type: 'boolean' },
 };
 
 const unescape = (s) => s.replace(/\\(["\\])/g, '$1');

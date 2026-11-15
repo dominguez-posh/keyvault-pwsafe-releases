@@ -7,6 +7,7 @@ import { ROLE_NAMES } from '../../../extension/core/members.js';
 import { call } from './ipc.js';
 import { ui } from './state.js';
 import { field, notice } from './helpers.js';
+import { mpSetUp } from './master-password.js';
 import { reloadAll } from './shell.js';
 import { adminMode } from './modes.js';
 
@@ -34,7 +35,7 @@ export async function acceptOlderDialog(c) {
     if (left > 0 && wait.isConnected !== false) setTimeout(tick, 500);
   };
   tick();
-  const pin = h('input', { type: 'password', id: 'accept-older-pin', autocomplete: 'off', inputmode: 'numeric' });
+  const pin = h('input', { type: 'password', id: 'accept-older-pin', autocomplete: 'off', ...(mpSetUp() ? {} : { inputmode: 'numeric' }) });
   const name = h('input', { type: 'text', id: 'accept-older-name', autocomplete: 'off', spellcheck: 'false' });
   const result = h('div', { id: 'accept-older-result' });
   let checked = null;
@@ -53,13 +54,14 @@ export async function acceptOlderDialog(c) {
       ? h('p', { id: 'accept-older-lost' }, t('Auf diesem Gerät nicht feststellbar: der neuere Stand ist hier nicht entsperrt.'))
       : h('div', { id: 'accept-older-lost' }, h('p', {}, t('{count} Einträge sind neu oder geändert seit diesem Stand und gehen verloren:', { count: info.lost.length })), list(info.lost)),
     h('p', { class: 'muted small' }, t('Auf anderen Geräten nicht feststellbar: dort nicht gespeicherte Änderungen gehen verloren, und was dieses Gerät nie gesehen hat, kann es nicht zurückholen.')),
-    field(t('App-PIN'), pin),
+    // #537 (#521): taking an older state needs the master password itself (not the PIN, not Windows Hello) and a passkey.
+    field(mpSetUp() ? t('Masterpasswort') : t('App-PIN'), pin),
     result,
     field(t('Zum Bestätigen den Namen des Tresors eintippen: {name}', { name: info.name }), name),
     wait);
   return modal(t('Älteren Stand annehmen'), body, [
     { label: t('Abbrechen') },
-    { label: t('Mit App-PIN und Passkey prüfen'), onClick: async () => {
+    { label: mpSetUp() ? t('Mit Masterpasswort und Passkey prüfen') : t('Mit App-PIN und Passkey prüfen'), onClick: async () => {
       checked = await call('acceptOlderUnlock', info.token, pin.value);
       pin.value = '';
       result.replaceChildren(notice(t('Geprüft. {count} Versionen von entfernten oder abgelehnten Mitgliedern werden verworfen.', { count: checked.dropped }), checked.dropped ? 'warn' : 'info'));
@@ -67,7 +69,7 @@ export async function acceptOlderDialog(c) {
     } },
     { label: t('Älteren Stand annehmen'), danger: true, onClick: async () => {
       if (!checked) {
-        toast(t('Bitte erst mit App-PIN und Passkey bestätigen.'), 'error');
+        toast(mpSetUp() ? t('Bitte erst mit Masterpasswort und Passkey bestätigen.') : t('Bitte erst mit App-PIN und Passkey bestätigen.'), 'error');
         return false;
       }
       ui.containerId = await call('acceptOlderCommit', info.token, name.value);

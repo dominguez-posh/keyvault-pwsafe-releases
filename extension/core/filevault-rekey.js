@@ -1,5 +1,6 @@
 // Container key change of a file container: everything in the document is encrypted again with the new key.
 
+import { recryptMemberKeys } from './member-app.js';
 import { rekeyKeyring, KEY_CHANGE } from './protect.js';
 import { t } from './i18n.js';
 
@@ -31,7 +32,10 @@ export async function recryptDoc(doc, old, next, aad) {
     f.updated = stamp(f);
   }
   if (doc.logo?.data) doc.logo = { data: await recrypt(doc.logo.data, aad('logo')), updated: stamp(doc.logo) };
+  // #537 2b (Konrad N2): the app settings under the new key; their stamp inside (recordAt) stays as it is.
   if (doc.appSettings?.data) doc.appSettings = { data: await recrypt(doc.appSettings.data, aad('app-settings')), updated: stamp(doc.appSettings) };
+  // #539: the member key of the app's master password – the identities in secured files stay, only wrapped anew.
+  if (doc.memberKeys) doc.memberKeys = await recryptMemberKeys(doc.memberKeys, (data, ctx) => recrypt(data, aad(ctx)));
   for (const [fid, f] of Object.entries(doc.folderIcons || {})) {
     if (f.data) f.data = await recrypt(f.data, aad(`folder-icon/${fid}`));
     f.updated = stamp(f);
@@ -42,7 +46,7 @@ export async function recryptDoc(doc, old, next, aad) {
  * Real key change of a format-1 file (#402), switched off in this version (protect.js KEY_CHANGE): new key, everything
  * re-encrypted, new master password and recovery key, format 3. One write of the whole file. → { recoveryKey, dropped }.
  */
-export async function rekeyFile(vault, password, actor = '') {
+export async function rekeyFile(vault, password, actor = '', { dropEscrow = [] } = {}) {
   if (!KEY_CHANGE.enabled) throw new Error(t('Der Schlüsselwechsel ist in dieser Version noch nicht eingeschaltet'));
   vault.requireUnlocked();
   if (vault.secure) throw new Error(t('Abgesicherte Dateien verwalten Zugriff über Benutzer und Rollen'));
@@ -59,7 +63,7 @@ export async function rekeyFile(vault, password, actor = '') {
       await vault.decryptAll().catch(() => {});
     };
     try {
-      const r = await rekeyKeyring(vault.doc.keyring, old, { password }, actor);
+      const r = await rekeyKeyring(vault.doc.keyring, old, { password, dropEscrow }, actor);
       await recryptDoc(vault.doc, old, r.ck, (id) => vault.aad(id));
       vault.doc.keyring = r.keyring;
       vault.doc.version = 3;

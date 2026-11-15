@@ -15,6 +15,8 @@ export async function call(method, ...args) {
       const e = new Error(r.error.message);
       e.name = r.error.name;
       e.status = r.error.status;
+      if (r.error.purpose) e.purpose = r.error.purpose;
+      if (r.error.access) e.access = r.error.access; // #537 2b: which entry and use wants a confirmation // #537: what a fresh master password is asked for
       throw e;
     }
     return r.result;

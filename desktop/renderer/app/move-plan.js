@@ -4,7 +4,7 @@
 import { h, setChildren } from '../../../extension/core/dom.js';
 import { t } from '../../../extension/core/i18n.js';
 import { call } from './ipc.js';
-import { notice } from './helpers.js';
+import { notice, withAccess } from './helpers.js';
 import { itemAvatar } from './icons.js';
 
 const ROLES = { user: 'verwendet diesen Eintrag', linked: 'wird nur von diesen Einträgen verwendet' };
@@ -67,8 +67,9 @@ export function movePlanPanel(item, target) {
     async run() {
       if (!plan) throw new Error(t('Die Verknüpfungen werden noch geprüft'));
       if (plan.refused) throw new Error(plan.refused);
-      if (extras().length && check.checked) return call('moveWithAssets', item.containerId, target.value, item.id, { expected: plan.members.map((m) => m.id) });
-      const saved = await call('move', item.containerId, target.value, item.id);
+      // #537 2b (Konrad H2): out of a vault with "Immer bestätigen" the move asks for a confirmation first.
+      if (extras().length && check.checked) return withAccess(() => call('moveWithAssets', item.containerId, target.value, item.id, { expected: plan.members.map((m) => m.id) }));
+      const saved = await withAccess(() => call('move', item.containerId, target.value, item.id));
       return { saved, dropped: saved.droppedLinks?.length ? [{ title: saved.title, uses: saved.droppedLinks }] : [] };
     },
   };

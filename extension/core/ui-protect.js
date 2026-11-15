@@ -215,6 +215,12 @@ export function enableDialog(container, ctx, onDone) {
   ]);
 }
 
+/** #537: the sticks that stay (valid) or are dropped by a key change, as a list for the dialog ('' when none). */
+function escrowList(escrows, valid) {
+  return (escrows || []).filter((e) => (e.valid === true) === valid)
+    .map((e) => t('{label} (hinzugefügt von {who})', { label: e.label ? `„${e.label}“` : t('Sicherheitsschlüssel'), who: e.createdBy || '?' })).join(', ');
+}
+
 /**
  * Key change (#402): new master password and new recovery key, the container is encrypted again with a new key.
  * Passkeys and open invitations end – the dialog names them first. Resolves when done or cancelled.
@@ -223,6 +229,7 @@ export async function rekeyDialog(container, ctx, methods, refresh) {
   const pw1 = h('input', { type: 'password', autocomplete: 'new-password', 'data-rekey': 'password' });
   const pw2 = h('input', { type: 'password', autocomplete: 'new-password', 'data-rekey': 'repeat' });
   const lost = [...methods.passkeys.map((p) => p.label || t('Passkey')), ...methods.invites.map((i) => i.label || t('Einladung'))];
+  const extra = ctx.rekeyOption?.(container) || null; // #539 (desktop): "master password compromised" for the personal vault
   modal(t('Neuer Schlüssel für den Tresor'), h('div', { 'data-rekey': 'dialog' },
     h('p', {}, t('Der Tresor wird mit einem neuen Schlüssel neu verschlüsselt. Danach öffnen das alte Masterpasswort und der alte Wiederherstellungsschlüssel ihn auch zusammen mit einer alten Dateiversion nicht mehr. Du legst jetzt ein neues Masterpasswort fest und bekommst einen neuen Wiederherstellungsschlüssel.')),
     h('p', {}, lost.length
@@ -230,14 +237,21 @@ export async function rekeyDialog(container, ctx, methods, refresh) {
       : t('Es entfallen keine Passkeys oder Einladungen.')),
     // Said before the change, also when "Masterpasswort festlegen" leads here (passwordNeedsRekey); cancel changes nothing.
     methods.passkeys.length ? h('div', { 'data-rekey': 'passkeys-lost' }, notice(t('Danach musst du deine Passkeys und FIDO-Sticks neu hinzufügen.'), 'warn')) : null,
+    // #537 (H1): sticks for recovery and break-glass stay – only those the vault key vouches for (`valid`, checked with
+    // checkEscrows where the key is); listed with who added them, so a foreign one stands out. The label is the stick's
+    // own text and decides nothing; the others are named as dropped.
+    escrowList(methods.escrows, true) ? h('p', { 'data-rekey': 'escrows' }, t('Diese Sicherheitsschlüssel für Notfall und Wiederherstellung bleiben: {list}.', { list: escrowList(methods.escrows, true) })) : null,
+    escrowList(methods.escrows, false) ? h('div', { 'data-rekey': 'escrows-dropped' }, notice(t('Diese Sicherheitsschlüssel sind nicht mit dem Tresor-Schlüssel bestätigt und werden beim Wechsel verworfen: {list}.', { list: escrowList(methods.escrows, false) }), 'warn')) : null,
     h('p', { class: 'muted small' }, t('Auf anderen Geräten muss der Tresor danach neu entsperrt werden. Ältere Versionen von Einträgen sind dann nicht mehr lesbar.')),
     h('div', { class: 'field' }, h('label', {}, t('Neues Masterpasswort')), pw1, strengthMeter(pw1)),
-    h('div', { class: 'field' }, h('label', {}, t('Wiederholen')), pw2)), [
+    h('div', { class: 'field' }, h('label', {}, t('Wiederholen')), pw2), extra?.element || null), [
     { label: t('Abbrechen') },
     { label: t('Schlüssel wechseln'), primary: true, onClick: async () => {
       if (pw1.value !== pw2.value) throw new Error(t('Die Passwörter stimmen nicht überein'));
       const r = await ctx.update(container.id, { type: 'rekey', password: pw1.value });
+      if (extra) await extra.after(r);
       toast(t('Tresor neu verschlüsselt'));
+      if (r?.dropped?.escrows?.length) modal(t('Sicherheitsschlüssel nicht übernommen'), notice(t('Diese Einträge waren nicht mit dem Tresor-Schlüssel bestätigt und wurden verworfen: {list}', { list: r.dropped.escrows.join(', ') }), 'warn'));
       if (r?.failed?.length) modal(t('Nicht neu verschlüsselt'), h('pre', { class: 'errors' }, r.failed.join(', ')));
       if (r?.recoveryKey) await showRecoveryKey(r.recoveryKey);
       refresh();
@@ -274,6 +288,25 @@ export async function manageDialog(container, ctx, onChange) {
       toast(t('Passkey hinzugefügt'));
       refresh();
     }));
+    // #537 stage 6: recovery sticks of the personal vault (reset the master password); only where the app offers them.
+    const sticks = container.personal && ctx.addRecoveryStick ? (m.escrows || []).filter((e) => e.role === 'recovery') : [];
+    const stickRows = sticks.map((e) => h('div', { class: 'member recovery-stick', dataset: { stick: e.id } }, icon('shield'),
+      h('div', { class: 'row-text' },
+        h('div', { class: 'row-title' }, e.label || t('Wiederherstellung')),
+        h('div', { class: 'row-sub' }, [e.createdBy, formatDateTime(e.created)].filter(Boolean).join(' · '))),
+      // Konrad M1: removing a stick is a key change (the app asks the master password and shows the new recovery key).
+      iconButton('trash', t('Wiederherstellungs-Schlüssel entfernen'), async () => {
+        await ctx.removeRecoveryStick(container.id, e).catch((err) => toast(err.message, 'error'));
+        refresh();
+      })));
+    const addStick = container.personal && ctx.addRecoveryStick ? h('button', { type: 'button', class: 'btn add-recovery-stick', disabled: !ctx.passkeyAvailable }, icon('shield'), t('Wiederherstellungs-Schlüssel hinzufügen')) : null;
+    addStick?.addEventListener('click', busy(addStick, t('Sicherheitsschlüssel bestätigen …'), async () => {
+      await ctx.addRecoveryStick(container.id);
+      toast(t('Wiederherstellungs-Schlüssel hinzugefügt'));
+      refresh();
+    }));
+    // #537 2b: "Immer bestätigen" – only where the app offers it (personal vault).
+    const confirmEach = container.personal && ctx.confirmEachSection ? await ctx.confirmEachSection(container).catch(() => null) : null;
     const invite = h('button', { type: 'button', class: 'btn' }, icon('users'), t('Benutzer einladen'));
     invite.addEventListener('click', async () => {
       const name = h('input', { placeholder: t('z. B. Kim') });
@@ -346,6 +379,11 @@ export async function manageDialog(container, ctx, onChange) {
       // The personal vault belongs to one person: no invitations (the app refuses them too).
       h('div', { class: 'actions' }, addPasskey, container.personal ? null : invite),
       inviteRows.length ? [h('h3', {}, t('Offene Einladungen')), inviteRows] : null,
+      addStick ? [h('h3', {}, t('Masterpasswort zurücksetzen')),
+        h('p', { class: 'muted small' }, t('Ein FIDO-Stick als Wiederherstellungs-Schlüssel setzt das Masterpasswort zurück, wenn du es vergessen hast. Wer den Stick (und seine PIN) hat, kann das – bewahre ihn sicher auf.')),
+        stickRows.length ? stickRows : h('p', { class: 'muted' }, t('Noch kein Wiederherstellungs-Schlüssel.')),
+        h('div', { class: 'actions' }, addStick)] : null,
+      confirmEach,
       h('h3', {}, t('Weitere Methoden')),
       passwordRows.length ? passwordRows : null,
       h('p', { class: 'muted small' }, [m.password ? t('Masterpasswort eingerichtet') : t('Kein Masterpasswort'), m.recovery ? t('Wiederherstellungsschlüssel vorhanden') : t('Kein Wiederherstellungsschlüssel')].join(' · ')),

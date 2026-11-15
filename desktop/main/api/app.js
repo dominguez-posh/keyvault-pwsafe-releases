@@ -1,6 +1,8 @@
 // API: state of the app, settings, PIN and admin mode, unlocking, signing in and out, updates, log.
 
 import { app, dialog, shell, net } from 'electron';
+import { isHelloProof, runProof } from '../../proof.js';
+import { helloProof } from '../hello-key.js';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { entraSettings } from '../../auth.js';
@@ -18,9 +20,10 @@ import { applyBrowserIntegration } from '../browser.js';
 import { applyExtensionChannel } from '../extension-channel.js';
 import { diag } from '../diag.js';
 import { tlsEnvAtStart } from '../../tls-env.js';
+import { forWindow, settingsForWindow } from '../../window-lock-settings.js';
 import { windowLogLine } from '../../../extension/core/log-mask.js';
 import { appSigningRefusal } from '../release-gate.js';
-import { pinGuard, requireOpen, requirePin } from '../guards.js';
+import { passkeyPin, pinGuard, requireOpen, requirePin } from '../guards.js';
 import { otherInstallation } from '../install.js';
 import { bindPersonalKeys, pendingRecoveryIds, personalPaths, recentPin, renewedRecoveryIds, setRecentPin, unlockPersonalWithPin } from '../personal.js';
 import {
@@ -28,6 +31,7 @@ import {
   setKeptVault, setOfflineMode, signedIn,
 } from '../session.js';
 import { syncSettings } from '../settings-sync.js';
+import { isMigrated, setPinWrapWithPassword, unlockInfo, verifyUnlock } from '../unlock.js';
 import { windowHelloOn } from '../window-hello.js';
 import { applyShortcuts } from '../typing.js';
 import { applyStartWithWindows, applyView, setTitleBarDimmed, titleBarColors, titleBarDimmed } from '../window.js';
@@ -83,7 +87,7 @@ function lockedWindowState(all) {
   const settings = lockScreenSettings(all, forcedLanguage()); // allowlist (#507 review N3)
   return {
     ownApp: entraSettings(all).ownApp, signedIn: false, opened: false, windowLocked: true, hasFiles: all.fileContainers.length > 0,
-    pinSet: !!all.appPin, pinShort: !!all.appPin?.short, offline: false, offlineAt: null, signInMode: auth.useBroker?.() ? 'windows' : 'browser',
+    pinSet: !!all.appPin, pinShort: !isMigrated() && !!all.appPin?.short, unlock: unlockInfo(), offline: false, offlineAt: null, signInMode: auth.useBroker?.() ? 'windows' : 'browser',
     requirePin: !!all.requirePin, passkeyPinFixed: !!all.requirePin, account: null, containers: [], recoveryPending: [], recoveryRenewed: [], settings,
     version: app.getVersion(), build: buildKind(), autoUpdates: updater ? updater.mode() === 'auto' : false, updateKind: updater?.kind || 'dev',
     passkeyAvailable: process.platform === 'win32' || !!demo, smoke: !!smokeTest, releaseSigning: false, platform: process.platform,
@@ -114,7 +118,8 @@ export const appApi = {
       opened,
       hasFiles: settings.fileContainers.length > 0,
       pinSet: !!settings.appPin,
-      pinShort: !!settings.appPin?.short, // #475: set before the 6-character rule; known once it was entered
+      pinShort: !isMigrated() && !!settings.appPin?.short, // #475: set before the 6-character rule; known once it was entered
+      unlock: unlockInfo(), // #537: master password set up, PIN wrapper there
       offline: offlineMode,
       offlineAt: offlineMode ? offline?.at || null : null,
       signInMode: auth.useBroker?.() ? 'windows' : 'browser',
@@ -125,7 +130,7 @@ export const appApi = {
       containers: out,
       recoveryPending: pendingRecoveryIds(),
       recoveryRenewed: renewedRecoveryIds(),
-      settings: forcedLanguage() ? { ...settings, language: forcedLanguage() } : settings,
+      settings: forWindow(forcedLanguage() ? { ...settings, language: forcedLanguage() } : settings), // Konrad: no device keys
       version: app.getVersion(),
       build: buildKind(),
       autoUpdates: updater ? updater.mode() === 'auto' : false,
@@ -180,11 +185,12 @@ export const appApi = {
       }
       if (signedIn()) refreshAll().then(() => changed()).catch(() => {});
     }
-    return windowLocked ? lockScreenSettings(config.get(), forcedLanguage()) : config.get();
+    return settingsForWindow(config.get(), { locked: windowLocked, language: forcedLanguage() });
   },
   /** entra: also sign in to Microsoft Entra ID (Key Vault containers). */
   // #439: one after the other – parallel guesses must not slip past the attempt lock.
-  verifyPin: (pin) => inPinQueue(async () => {
+  // #537: once the master password is set up, the MP or the PIN wrapper unwraps the device key (kind: 'password' | 'pin').
+  verifyPin: (pin, kind) => (isMigrated() ? verifyUnlock(pin, { kind: kind === 'password' || kind === 'pin' ? kind : undefined }) : inPinQueue(async () => {
     const record = config.get().appPin;
     if (!record) return true;
     const wait = pinGuard.waitSeconds();
@@ -204,31 +210,41 @@ export const appApi = {
     pinGuard.failure();
     config.update({ pinGuard: pinGuard.toJSON() });
     throw new Error(pinGuard.waitSeconds() ? t('Falsche PIN – bitte {seconds} Sekunden warten', { seconds: pinGuard.waitSeconds() }) : t('Falsche PIN'));
-  }),
+  })),
   /** Admin mode on: only with the app PIN (no PIN set → not possible). Returns the settings. */
   async activateAdminMode(pin) {
     requireOpen();
     // Demo (#309): admin mode to try out without a PIN – there is nothing real to protect. The smoke test keeps the PIN.
     if (demo && !smokeTest) {
       config.update({ adminTools: true, pimButton: false, showOthersPrivate: false });
-      return config.get();
+      return forWindow(config.get());
     }
     if (!config.get().appPin) throw new Error(t('Für den Admin-Modus brauchst du eine App-PIN – lege sie unter Einstellungen fest.'));
-    await api.verifyPin(String(pin || ''));
-    pinGuard.consume(); // the PIN switched admin mode on – it opens nothing afterwards
+    if (isHelloProof(pin)) {
+      // #537 stage 4: a Windows Hello of its own for this switch (purpose-bound, used once); counts in the PIN queue.
+      await runProof(pin, { settings: config.get(), guard: pinGuard, save: passkeyPin.save, verify: async () => false, hello: helloProof, purpose: 'admin' }, inPinQueue, () => true);
+    } else {
+      await api.verifyPin(String(pin || ''));
+      pinGuard.consume(); // the PIN switched admin mode on – it opens nothing afterwards
+    }
     config.update({ adminTools: true, pimButton: false, showOthersPrivate: false });
     diag('ADMIN mode on');
-    return config.get();
+    return forWindow(config.get());
   },
   /** Admin mode off: no PIN needed. */
   deactivateAdminMode: async () => {
     config.update({ adminTools: false, pimButton: false, showOthersPrivate: false });
     diag('ADMIN mode off');
-    return config.get();
+    return forWindow(config.get());
   },
   /** { current?, next } – next null removes the PIN (not when the organization requires one). */
   async setPin({ current, next }) {
     requireOpen();
+    // #537: once the master password is set up the PIN only wraps the device key; set, changed or removed with the MP.
+    if (isMigrated()) {
+      await setPinWrapWithPassword(String(current ?? ''), next);
+      return api.state();
+    }
     const s = config.get();
     if (s.appPin) await api.verifyPin(current);
     pinGuard.consume();

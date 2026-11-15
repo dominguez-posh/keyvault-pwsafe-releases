@@ -1,6 +1,7 @@
 // API: entries – reading, saving, moving, versions, trash, copy and auto-type, import and export.
 
 import { dialog } from 'electron';
+import { markBreakGlass } from '../break-glass.js';
 import fs from 'node:fs/promises';
 import { decryptKdbx } from '../../kdbx.js';
 import { SAMPLE_CSV } from '../../../extension/core/import-sample.js';
@@ -21,7 +22,10 @@ import { autoTypeCalls, autoTypeText, autoTypeValue, selectedKey, setSelectedKey
 import { othersView, setPrivacy } from '../private.js';
 import { scanScreenQr } from '../qr-scan.js';
 import { checkCopy, checkExport, checkLeaveToPersonal, checkRequired, noteServed } from '../vault-rules.js';
-import { copyPin } from '../guards.js';
+import { accessConfirm, copyPin } from '../guards.js';
+import { confirmEachState, requireMove, sealFor, secretFor, setConfirmEach, strictVault, unsealForSave } from '../access.js';
+import { isSealed } from '../../../extension/core/sealed.js';
+import { withoutPasskeyKeys } from '../../passkey-keys.js';
 
 // Import: entries per block (progress and, in a file vault, one write each).
 const IMPORT_BLOCK = 50;
@@ -40,7 +44,43 @@ export const itemsApi = {
     // #476: other people's "Nur für mich" entries only for a Verwalter who switched them on in admin mode.
     return vault.summaries({ maxAgeMs: Infinity, others: await othersView() });
   },
-  item: async (containerId, id, fresh) => noteServed(containerId, await vault.getItem(containerId, id, { fresh, others: await othersView() })),
+  /**
+   * #537 2b: an entry of a vault with "Immer bestätigen" comes sealed (secrets as markers, extension/core/sealed.js);
+   * { reveal: true } after confirmAccess(…, 'view') hands it out once with its secrets (a linked login's source along).
+   */
+  async item(containerId, id, fresh, opts) {
+    const item = await vault.getItem(containerId, id, { fresh, others: await othersView() });
+    if (!(await strictVault(containerId))) return noteServed(containerId, item);
+    if (opts?.reveal !== true) return sealFor(containerId, item);
+    await accessConfirm.require(containerId, id, 'view');
+    accessConfirm.noteRevealed(containerId, item);
+    const [lc, lid] = item.type === 'login' && item.loginLink ? item.loginLink.split('/') : [];
+    const source = lc === containerId && lid && lid !== id ? await vault.getItem(lc, lid).catch(() => null) : null;
+    if (source) accessConfirm.noteRevealed(containerId, source);
+    return source ? { ...item, linkedSource: withoutPasskeyKeys(source) } : item;
+  },
+  /**
+   * #537 2b: the proof for one use (purpose 'view', 'copy', 'type' or 'move') of one entry; the next such use takes it.
+   * 'move' (Konrad H2) may name a list of entries of this vault (a selection, a folder): one proof, one move each.
+   */
+  confirmAccess: (containerId, id, purpose, proof) => {
+    requireOpen();
+    if (!['view', 'copy', 'type', 'fill', 'move', 'backup', 'share'].includes(purpose)) throw new Error(t('Unbekannter Zweck'));
+    return accessConfirm.confirm(containerId, id, purpose, proof);
+  },
+  /** #537 2b (Konrad, low): the move of a selection is over – its unused confirmations end. */
+  endMoveAccess: () => {
+    accessConfirm.drop('move');
+    return true;
+  },
+  /** #537 2b: copies one secret of a sealed entry (marker place, see sealed.js) after confirmAccess(…, 'copy'). */
+  async copySecret(containerId, id, path) {
+    requireOpen();
+    return copyToClipboard(await secretFor(containerId, id, String(path || '')));
+  },
+  /** #537 2b: the option in the personal vault – read, and switched only with a fresh proof. */
+  confirmEachState: (containerId) => confirmEachState(containerId),
+  setConfirmEach: (containerId, on, proof, scope) => setConfirmEach(containerId, on, proof, scope === 'personal' ? 'personal' : 'all'),
   /** #476: "Nur für mich" on or off (admin mode; checks in ../private.js). */
   async setPrivate(containerId, id, on) {
     requireOpen();
@@ -51,6 +91,7 @@ export const itemsApi = {
   save: async (containerId, item, expectedVersion) => {
     if (item?.type === 'server' && item.server) checkDeviceLinks(containerId, item.server);
     await checkRequired(containerId, item); // #480: required fields of the vault
+    item = await unsealForSave(containerId, item); // #537 2b: a sealed entry keeps its stored secrets
     const saved = await vault.saveItem(containerId, await adminFlagsGuard(containerId, item), { expectedVersion });
     config.update({ defaultContainer: containerId });
     return saved;
@@ -60,6 +101,7 @@ export const itemsApi = {
   linkedEntries: (containerId, id) => vault.linkedEntries(containerId, id),
   move: async (fromId, toId, id, opts) => {
     await checkLeaveToPersonal(fromId, toId); // review 0.9.33: the export lock holds through the personal vault
+    await requireMove(fromId, toId, id); // #537 2b (Konrad H2): out of a vault with "Immer bestätigen" only confirmed
     return vault.moveItem(fromId, toId, id, opts);
   },
   /** #452: what moving this entry would take along (linked assets), without changing anything. */
@@ -71,6 +113,7 @@ export const itemsApi = {
   /** #452: the entry with its linked assets, all or nothing (see core/move-assets.js). */
   moveWithAssets: async (fromId, toId, id, opts) => {
     await checkLeaveToPersonal(fromId, toId);
+    await requireMove(fromId, toId, id); // #537 2b (Konrad H2): one confirmation for the entry with its assets
     const { saved, moved, dropped } = await moveWithAssets(vault, fromId, toId, id, opts);
     return { saved, moved, dropped };
   },
@@ -81,10 +124,11 @@ export const itemsApi = {
   async movePasskey(args) {
     requireOpen();
     await checkLeaveToPersonal(args?.from?.containerId, args?.to?.containerId); // #519: the export lock, as for move
+    await requireMove(args?.from?.containerId, args?.to?.containerId, args?.from?.id); // #537 2b: as for move
     return movePasskeyBetween(vault, args); // (#464: the same function serves the extension's popup)
   },
   history: (containerId, id) => vault.history(containerId, id),
-  version: async (containerId, id, version) => vault.getVersion(containerId, id, version, { others: await othersView() }),
+  version: async (containerId, id, version) => sealFor(containerId, await vault.getVersion(containerId, id, version, { others: await othersView() })), // #537 2b
   restoreVersion: (containerId, id, version) => vault.restoreVersion(containerId, id, version),
   trash: async (containerId) => vault.trash(containerId, { others: await othersView() }),
   restore: (containerId, id) => vault.restore(containerId, id),
@@ -129,7 +173,7 @@ export const itemsApi = {
 
   async changelog(containerId, itemId) {
     const c = await vault.container(containerId);
-    return c.kind === 'file' ? files.changelog(containerId, itemId) : [];
+    return c.kind === 'file' ? markBreakGlass(containerId, await files.changelog(containerId, itemId)) : []; // #539 Etappe 10
   },
   async duplicate(containerId, id) {
     requireOpen();
@@ -140,6 +184,8 @@ export const itemsApi = {
 
   /** #480: containerId names the vault the value comes from; its settings may want the app PIN (confirmCopyPin). */
   async copy(text, containerId) {
+    if (isSealed(text)) throw new Error(t('Dieser Tresor verlangt für jeden Zugriff eine Bestätigung (Windows Hello, Masterpasswort oder PIN).'));
+    await accessConfirm.requireCopy(String(text)); // #537 2b: a secret shown after a confirmation needs one of its own for copying
     await checkCopy(String(text), typeof containerId === 'string' ? containerId : null);
     return copyToClipboard(String(text));
   },

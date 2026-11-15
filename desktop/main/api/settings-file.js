@@ -10,7 +10,7 @@ import { opened, win } from '../state.js';
 import { api } from './index.js';
 import { requireOpen } from '../guards.js';
 import { refreshAll, send, signedIn } from '../session.js';
-import { copyBlocked, exportContent, previewSettingsFile, setSettingsCopy, settingsCopyConsentDue, settingsCopyDecided, settingsCopyStatus, takeImport } from '../settings-copy.js';
+import { adoptOneDriveSetup, copyBlocked, exportContent, oneDriveSetupStatus, previewSettingsFile, setSettingsCopy, settingsCopyConsentDue, settingsCopyDecided, settingsCopyStatus, takeImport } from '../settings-copy.js';
 
 // Smoke runs choose no file in a dialog: the test names it (a temporary folder, never a real one).
 const testFile = () => (smokeTest && process.env.KVPWSAFE_TEST_SETTINGS_FILE) || null;
@@ -66,6 +66,14 @@ export const settingsFileApi = {
   setSettingsCopy: (on) => setSettingsCopy(on === true),
   /** The folder the copy is not written to because it is a link, or ''. */
   settingsCopyBlocked: () => copyBlocked,
+  /** #537 E5, new device: the encrypted configuration and the personal vault in OneDrive? → { found, device?, exportedAt? } */
+  oneDriveSetupStatus: () => oneDriveSetupStatus(),
+  /** #537 E5, new device: take them with the master password → { preview?, error? } (the preview as for an import). */
+  async adoptOneDriveSetup({ password } = {}) {
+    requireOpen();
+    const r = await adoptOneDriveSetup(password);
+    return { ...r, state: await api.state() };
+  },
   /** First start: the question is answered without importing (or there was nothing to import). */
   settingsCopyDecided: () => {
     settingsCopyDecided();

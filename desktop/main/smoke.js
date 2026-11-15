@@ -13,11 +13,11 @@ import { downgradeCheck, fileSwapCheck, foreignKeyCheck, rejectedCheck, removeRa
 import { acceptOlderCheck } from '../smoke-accept-older.js';
 import { t } from '../../extension/core/i18n.js';
 import { appRoot, demo, missingFiles, screenshot, smokeGuard } from './boot.js';
-import { config, files, mcp, opened, updater, vault, win, windows } from './state.js';
+import { config, files, mcp, opened, setWindowLocked, updater, vault, win, windows } from './state.js';
 import { hintContent, hintsShown } from './hint-window.js';
 import { askInApp, chooseAgentMicrosoft, questions, confirmAgentPasskey, confirmAgentRead, confirmAgentWrite, nativeQuestion, trustAgentEntry, waitForUnlock } from './agents.js';
 import { api, WINDOW_LOCKED_API } from './api/index.js';
-import { browserHandlers, confirmBrowserMove, noteExtension, simulateExtensionClients } from './browser.js';
+import { bridgeHandlers, browserHandlers, confirmBrowserMove, noteExtension, simulateExtensionClients } from './browser.js';
 import { simulateExtensionPolicy, simulateExtensionReinstall } from './extension-reinstall.js';
 import { copyViaHelperExe } from './clipboard.js';
 import { pinGuard } from './guards.js';
@@ -54,6 +54,7 @@ export function runSmokeTest() {
     let attached = false;
     w.webContents.on('did-finish-load', async () => {
       if (!w.webContents.getURL().startsWith('http://localhost/')) return;
+      const pageUrl = w.webContents.getURL();
       try {
         if (!attached) {
           attached = true;
@@ -80,7 +81,11 @@ export function runSmokeTest() {
           if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[smoke] passkey start clicked: ${clicked}`);
         });
       } catch (e) {
-        errors.push(`passkey window: ${e.message}`);
+        // #536 on purpose: a ceremony that ended without success (cancelled, refused, replaced by the next one) loads
+        // about:blank or the next page – the script waiting in the old page goes with it. Only that is no error.
+        if (/WebFrame was removed/.test(e.message)) await new Promise((r) => { setTimeout(r, 800); }); // the navigation commits
+        const left = w.isDestroyed() || w.webContents.getURL() !== pageUrl;
+        if (!(left && /WebFrame was removed/.test(e.message))) errors.push(`passkey window: ${e.message}`);
       }
     });
     w.webContents.on('console-message', (e) => {
@@ -130,7 +135,7 @@ export function runSmokeTest() {
       // File container protected by a passkey (virtual authenticator) and a master password.
       const file = path.join(app.getPath('userData'), 'demo.kvpws');
       if (areas.runs('protection')) try {
-        const created = await api.createFile({ path: file, name: 'Demo-Datei', password: 'demo-passwort', passkeyLabel: 'Smoke' });
+        const created = await api.createFile({ path: file, name: 'Demo-Datei', password: 'demo-passwort', passkeyLabel: 'Smoke', legacy: true });
         if (!/^RK-/.test(created.recoveryKey)) errors.push('file: no recovery key');
         await api.save(created.id, { title: 'Datei-Eintrag', username: 'u', password: 'p', urls: ['https://example.com'] });
         // Big import into a file vault (#326/#327): all entries arrive (a reload in between lost them before), the fourth
@@ -261,8 +266,8 @@ export function runSmokeTest() {
         await api.fileMemberOp(id, { type: 'sharing', enabled: true });
         const req = await api.requestFileAccess(id, { email: 'sam@contoso.com', attachment: 'cross-platform' });
         const sam = (await api.fileMembers(id)).members.find((m) => m.email === 'sam@contoso.com');
-        if (sam?.status !== 'pending' || sam.safetyCode !== req.safetyCode) errors.push('secured: request not pending');
-        await api.fileMemberOp(id, { type: 'approve', memberId: sam.id, role: 'editor' });
+        if (sam?.status !== 'pending' || sam.safetyCode) errors.push('secured: request not pending, or its code shown to the admin (#539)');
+        await api.fileMemberOp(id, { type: 'approve', memberId: sam.id, role: 'editor', code: req.safetyCode });
         const log = await api.changelog(id);
         for (const action of ['file-create', 'folder-create', 'item-create', 'sharing-on', 'member-approve']) {
           if (!log.some((e) => e.action === action && e.trusted)) errors.push(`secured: log misses ${action}`);
@@ -881,11 +886,11 @@ export function runSmokeTest() {
       // Feature checks of the recent functions (desktop/smoke-features.js) – the normal run only, views keep their state.
       if (!view) {
         await featureChecks({
-          js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe, vaultListRun, browserHandlers,
+          js, sleep, errors, win, api, vault, config, changed, signInFor, copyViaHelperExe, typeViaHelperExe, vaultListRun, browserHandlers, bridgeHandlers, setWindowLocked,
           areas,
           note: smokeGuard.note,
           clipboardHas: async (text) => (await runHelperExe('--clipboard-clear', text)) === 0,
-          clearSignIns: () => { setSignInJobs([]); },
+          clearSignIns: () => { setSignInJobs([]); }, passkeyCeremony: async (r) => (await import('./passkey-window.js')).passkeyCeremony(r), // #536
           adminCenterUrl,
           lastAdminUrl: () => lastAdminUrl,
           confirmAgentRead,

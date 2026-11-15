@@ -7,7 +7,7 @@ import { readVaultSettings, requireFields } from '../../extension/core/vault-set
 import { totpMatches } from '../../extension/core/totp.js';
 import { t } from '../../extension/core/i18n.js';
 import { config, vault } from './state.js';
-import { copyPin } from './guards.js';
+import { accessConfirm, copyPin } from './guards.js';
 
 /** Settings of a vault for a rule check; a read error gives the last stored ones (readVaultSettings). */
 export const rulesOf = (containerId) => readVaultSettings(vault, containerId);
@@ -100,4 +100,5 @@ export function clearCopyRules() {
   served.clear();
   servedTotp.clear();
   copyPin.clear();
+  accessConfirm.clear(); // #537 2b
 }

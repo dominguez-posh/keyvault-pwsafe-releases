@@ -16,7 +16,7 @@ import { FREE_LIMIT, LicenseLimitError, requestCode, verifyLicense } from './lic
 import { isImageDataUrl } from './image.js';
 import { normalizeFolderIcon } from './folder-icons.js';
 import {
-  ContainerKey, ContainerLockedError, setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries, mergeKeyrings,
+  ContainerKey, ContainerLockedError, setupKeyring, unlockKeyring, applyKeyringOp, describeKeyring, passkeyEntries, mergeKeyrings, withEscrowValidity,
 } from './protect.js';
 import { writeMeta, rememberMeta, cleanVaultName } from './session-meta.js';
 import { rekeyKeyvault, finishKeyChange, dropStaleKey, currentKey } from './session-rekey.js';
@@ -560,7 +560,7 @@ export class VaultSession {
       kind: c.kind,
       protected: !!keyring,
       locked: !!keyring && !key,
-      methods: keyring ? describeKeyring(keyring, rpId) : null,
+      methods: keyring ? await withEscrowValidity(describeKeyring(keyring, rpId), keyring, key) : null,
       passkeys: keyring ? passkeyEntries(keyring, rpId) : [],
     };
   }

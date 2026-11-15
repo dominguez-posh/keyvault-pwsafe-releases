@@ -6,9 +6,9 @@
   <!-- #465: the app PIN field inside the Keevault tag at the top of the page. An extension frame: the page can neither
        read nor script what is typed here. Same look as the tag (content/styles.js, .kvtag). -->
   <style>
-    :root { color-scheme: light dark; --kv: #0f6cbd; --line: #dde2ec; --muted: #5d6779; --surface: #fff; --ink: #141a26; --err: #b42318; }
+    :root { color-scheme: light dark; --kv: #0f6cbd; --line: #dde2ec; --muted: #5d6779; --surface: #fff; --ink: #141a26; --err: #b42318; --on-kv: #fff; }
     @media (prefers-color-scheme: dark) {
-      :root { --kv: #5aa6ff; --line: #2a3344; --muted: #9aa6ba; --surface: #171d28; --ink: #e8edf5; --err: #ff8a80; }
+      :root { --kv: #5aa6ff; --line: #2a3344; --muted: #9aa6ba; --surface: #171d28; --ink: #e8edf5; --err: #ff8a80; --on-kv: #0d1119; }
     }
     html, body { margin: 0; padding: 0; background: var(--surface); color: var(--ink); font: 13px "Segoe UI", system-ui, sans-serif; overflow: hidden; }
     * { box-sizing: border-box; }
@@ -24,6 +24,11 @@
     /* Locked while the app checks (#508): never by opacity. The visibility guard (content/visible-guard.js) counts an
        element with opacity below 1 as covered and starts its time over, so a quick second try was refused (#526). */
     input.pin:disabled { color: var(--muted); border-style: dashed; cursor: wait; }
+    /* #537 live test: Windows Hello first (the recommended way), the field for the master password or the PIN below. */
+    button.hello { width: 100%; border: 0; border-radius: 10px; background: var(--kv); color: var(--on-kv); font: inherit; font-weight: 700; padding: 8px 10px; cursor: pointer; }
+    button.hello:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(15,108,189,.35); }
+    button.hello:disabled { cursor: wait; }
+    .hello-or { margin: 0; color: var(--muted); font-size: 12px; }
     [hidden] { display: none !important; }
   </style>
 </head>

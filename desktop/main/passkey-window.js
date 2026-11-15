@@ -34,14 +34,23 @@ export async function serve(rel) {
 
 // One reusable window: real authenticators do not care, and the window opens faster the second time.
 let passkeyWindow = null;
-let ceremony = null; // { id, request, resolve, reject, timer }
+let ceremony = null; // { id, request, resolve, reject, timer, limit, owner, ownerHidden }
 
-function finishCeremony(result) {
+/** why (#536): what ended a ceremony that did not succeed, for diagnostics.log (no content, only the cause). */
+function finishCeremony(result, why) {
   const c = ceremony;
   if (!c) return;
   ceremony = null;
   clearTimeout(c.timer);
-  if (passkeyWindow && !passkeyWindow.isDestroyed()) passkeyWindow.hide();
+  clearTimeout(c.limit);
+  if (c.owner && !c.owner.isDestroyed()) c.owner.off('hide', c.ownerHidden);
+  diag(`PASSKEY ceremony ${c.request.mode} ${result?.ok ? 'done' : `ended (${why || 'page'})`}`);
+  if (passkeyWindow && !passkeyWindow.isDestroyed()) {
+    passkeyWindow.hide();
+    // #536: a page that may still wait for WebAuthn is replaced. Leaving the document cancels its request, and Windows
+    // closes its security dialog with it – which also gives the window back its X and Esc.
+    if (!result?.ok) passkeyWindow.webContents.loadURL('about:blank').catch(() => {});
+  }
   if (result?.ok) c.resolve(result.result);
   else c.reject(new Error(result?.error || t('Passkey-Vorgang abgebrochen oder abgelaufen')));
 }
@@ -76,8 +85,14 @@ function ensurePasskeyWindow() {
     if (quitting) return;
     e.preventDefault();
     // #532: without a ceremony there was nothing to end, and the window stayed open; it always goes away now.
-    if (ceremony) finishCeremony({ ok: false });
+    if (ceremony) finishCeremony({ ok: false }, 'window closed');
     else passkeyWindow.hide();
+  });
+  // #536: Esc cancels, handled here so that it works whatever state the page is in.
+  passkeyWindow.webContents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'Escape' || !ceremony) return;
+    e.preventDefault();
+    finishCeremony({ ok: false }, 'Esc');
   });
   // #532: visible only while a ceremony's page has its request (then it has content). Any other show – the system
   // restoring the owner's windows, a show before the page loaded – is undone and logged, so it never stays empty.
@@ -90,13 +105,13 @@ function ensurePasskeyWindow() {
   passkeyWindow.webContents.on('did-fail-load', (_e, code, desc, url, mainFrame) => {
     if (!mainFrame || !ceremony || !url.includes(`id=${ceremony.id}`)) return;
     diag(`PASSKEY page failed to load: ${code} ${desc}`);
-    finishCeremony({ ok: false, error: t('Das Passkey-Fenster konnte nicht geladen werden ({message})', { message: `${code} ${desc}` }) });
+    finishCeremony({ ok: false, error: t('Das Passkey-Fenster konnte nicht geladen werden ({message})', { message: `${code} ${desc}` }) }, 'load failed');
   });
   return passkeyWindow;
 }
 
 export function passkeyCeremony(request) {
-  if (ceremony) finishCeremony({ ok: false });
+  if (ceremony) finishCeremony({ ok: false }, 'replaced');
   return new Promise((resolve, reject) => {
     const id = randomUUID();
     const language = config.get().language === 'auto' ? app.getLocale() : config.get().language;
@@ -105,8 +120,19 @@ export function passkeyCeremony(request) {
     if (smokeTest) {
       ceremony.timer = setTimeout(async () => {
         const text = await passkeyWindow?.webContents.executeJavaScript('document.body.innerText').catch((e) => e.message);
-        finishCeremony({ ok: false, error: `smoke test: passkey timeout (${String(text).replace(/\s+/g, ' ').trim()})` });
+        finishCeremony({ ok: false, error: `smoke test: passkey timeout (${String(text).replace(/\s+/g, ' ').trim()})` }, 'smoke timeout');
       }, 30_000);
+    }
+    // #536: a ceremony never hangs longer than its WebAuthn timeout plus a margin, whatever Windows does with its dialog.
+    const c0 = ceremony;
+    c0.limit = setTimeout(() => {
+      if (ceremony === c0) finishCeremony({ ok: false }, 'time limit');
+    }, c0.request.timeoutMs + LIMIT_MARGIN_MS);
+    // #536: hiding the main window (closing it to the tray) ends the ceremony and takes its window along.
+    if (win && !win.isDestroyed()) {
+      c0.owner = win;
+      c0.ownerHidden = () => { if (ceremony === c0) finishCeremony({ ok: false }, 'main window hidden'); };
+      win.on('hide', c0.ownerHidden);
     }
     const w = ensurePasskeyWindow();
     w.setTitle(t('Passkey'));
@@ -116,7 +142,7 @@ export function passkeyCeremony(request) {
     setTimeout(() => {
       if (ceremony !== c || c.ready) return;
       diag(`PASSKEY page not ready after ${READY_TIMEOUT_MS / 1000} s (${request.mode})`);
-      finishCeremony({ ok: false, error: t('Das Passkey-Fenster konnte nicht geladen werden ({message})', { message: 'timeout' }) });
+      finishCeremony({ ok: false, error: t('Das Passkey-Fenster konnte nicht geladen werden ({message})', { message: 'timeout' }) }, 'not ready');
     }, READY_TIMEOUT_MS).unref?.();
     // Query instead of fragment: every ceremony must be a fresh document in the reused window. Shown only when its
     // page fetches the request (passkey:request) – before that it would be an empty window (#532).
@@ -125,6 +151,7 @@ export function passkeyCeremony(request) {
 }
 
 const READY_TIMEOUT_MS = 15_000;
+const LIMIT_MARGIN_MS = 15_000;
 
 ipcMain.handle('passkey:request', (event, id) => {
   if (event.sender.session !== passkeySession || ceremony?.id !== id) return null;
@@ -133,13 +160,28 @@ ipcMain.handle('passkey:request', (event, id) => {
     passkeyWindow.show();
     passkeyWindow.focus();
   }
+  diag(`PASSKEY page ready (${ceremony.request.mode})`);
   return ceremony.request;
+});
+
+// #536: the page has drawn its text and Cancel button and is about to call WebAuthn. Windows opens its security dialog
+// over the calling window, so that window is brought to the front first; the log tells whether it was.
+ipcMain.handle('passkey:started', (event, id) => {
+  if (event.sender.session !== passkeySession || ceremony?.id !== id) return false;
+  const w = passkeyWindow;
+  if (!smokeTest && w && !w.isDestroyed()) {
+    if (!w.isVisible()) w.show();
+    w.moveTop();
+    w.focus();
+  }
+  diag(`PASSKEY ceremony started (${ceremony.request.mode}, visible ${!!w?.isVisible()}, focused ${!!w?.isFocused()})`);
+  return true;
 });
 
 ipcMain.handle('passkey:done', (event, id, result) => {
   if (process.env.KVPWSAFE_SMOKE_DEBUG) console.log(`[smoke] passkey:done sameSession=${event.sender.session === passkeySession} sameId=${ceremony?.id === id} ok=${result?.ok}`);
   if (event.sender.session !== passkeySession || ceremony?.id !== id) return;
-  finishCeremony(result);
+  finishCeremony(result, result?.ok ? undefined : 'cancelled on the page');
 });
 
 /**

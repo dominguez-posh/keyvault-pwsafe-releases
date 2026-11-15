@@ -126,26 +126,29 @@ export async function firstStartCheck(ctx) {
 }
 
 /**
- * #515: a fresh profile starts with the Microsoft sign-in, then the App PIN (skipped once, set once), then the rest
+ * #515: a fresh profile starts with the Microsoft sign-in, then the master password (#537), then Windows Hello or the
+ * app PIN (#537 stage 3), then the rest
  * (the personal vault wizard; the rest itself is checked by firstStartCheck). The demo is signed in already:
  * kvSmokeSignedOut makes the step offer the sign-in itself, with the demo's stand-in account.
  */
 export async function firstAccountCheck(ctx) {
-  const { js, sleep, config } = ctx;
+  const { js, sleep, config, api } = ctx;
   const f = (msg) => ctx.fail('firstaccount', msg);
   const drive = firstStartDriver(ctx);
   const accountStep = () => js(`[...document.querySelectorAll(${JSON.stringify(`${ACCOUNT} .wizard-steps li`)})].findIndex((l) => l.classList.contains("on"))`);
-  const setPin = (a, b) => js(`(() => { const set = (s, v) => { const i = document.querySelector(${JSON.stringify(ACCOUNT)} + " " + s); if (i) { i.value = v; } return !!i; }; return set(".first-pin", ${JSON.stringify(a)}) && set(".first-pin2", ${JSON.stringify(b)}); })()`);
+  // #537: the second step sets the master password (required) and optionally a PIN for this device.
+  const setFields = (values) => js(`(() => { const set = (s, v) => { const i = document.querySelector(${JSON.stringify(ACCOUNT)} + " " + s); if (i) { i.value = v; } return !!i; }; return ${JSON.stringify(Object.entries(values))}.every(([s, v]) => set(s, v)); })()`);
+  const MP = 'Smoke-First-537!';
   const closeAll = async () => {
     await js('document.querySelectorAll("dialog[open] .modal-head .icon-btn").forEach((b) => b.click()); true');
     await until(async () => (await count(js, 'dialog[open]')) === 0, 3000);
   };
   const personalNext = () => until(async () => (await count(js, PERSONAL)) > 0 && !(await count(js, ACCOUNT)), 6000);
   try {
-    config.update({ appPin: null, entraUsed: false });
+    config.update({ appPin: null, unlockKeys: null, entraUsed: false });
     await js('window.kvSmokeAccountStep = true; window.kvSmokeSignedOut = true; true');
 
-    // First pass: sign in, skip the PIN.
+    // First pass: sign in, then close the wizard at the master password step (required, so no "Später").
     if (!(await drive.trigger(ACCOUNT))) return f('the sign-in step did not open at the first start');
     await sleep(600);
     if (await count(js, PERSONAL)) f('the personal vault wizard opened before the sign-in step');
@@ -153,31 +156,68 @@ export async function firstAccountCheck(ctx) {
     if (!(await count(js, `${ACCOUNT} .first-skip-signin`))) f('the sign-in step offers no way on without a Microsoft account');
     if (!(await count(js, `${ACCOUNT} .first-signin`))) return f('no "Mit Microsoft anmelden" button in the first step');
     await drive.click(`${ACCOUNT} .first-signin`);
-    if (!(await until(async () => (await accountStep()) === 1, 6000))) return f(`the PIN step did not follow the sign-in (step ${await accountStep()})`);
+    if (!(await until(async () => (await accountStep()) === 1, 6000))) return f(`the master password step did not follow the sign-in (step ${await accountStep()})`);
     if (!config.get().entraUsed) f('signing in at the first start did not note that Entra is used');
-    if (!(await count(js, `${ACCOUNT} .first-pin-later`))) return f('the PIN step has no "Später"');
-    await drive.click(`${ACCOUNT} .first-pin-later`);
-    if (!(await personalNext())) f('the personal vault wizard did not follow "Später"');
-    if (config.get().appPin) f('"Später" set a PIN');
+    if (!(await count(js, `${ACCOUNT} .first-mp`))) return f('the second step asks no master password');
+    if (await count(js, `${ACCOUNT} .first-pin-later`)) f('the master password step offers "Später" (E2: required for a new installation)');
+    await js(`document.querySelector(${JSON.stringify(ACCOUNT)})?.closest('dialog')?.querySelector('.modal-head .icon-btn')?.click(); true`);
+    if (!(await personalNext())) f('the personal vault wizard did not follow closing the step');
+    if (config.get().appPin || config.get().unlockKeys) f('closing the step set a PIN or master password');
     await closeAll(); // the personal vault wizard, then the team vault wizard that follows an abort
     await closeAll();
 
-    // Second pass: signed in now, set the PIN – too short first (#475), then the one the other checks use.
+    // Second pass: signed in now, set the master password – too short first, then valid. Without Windows Hello on this
+    // (simulated) device the next step offers the app PIN directly (#537 stage 3, Lucas): a PIN too short (#475), then valid.
+    delete process.env.KVPWSAFE_TEST_HELLO;
     if (!(await drive.trigger(ACCOUNT))) return f('the sign-in step did not open the second time');
     await sleep(400);
     if (await count(js, `${ACCOUNT} .first-signin`)) f('signed in, the step still offers to sign in');
     await drive.click(`${ACCOUNT} .wizard-buttons .btn.primary`);
-    if (!(await until(async () => (await accountStep()) === 1, 4000))) return f('"Weiter" did not lead to the PIN step');
-    await setPin('12345', '12345');
-    await drive.click(`${ACCOUNT} .first-pin-save`);
+    if (!(await until(async () => (await accountStep()) === 1, 4000))) return f('"Weiter" did not lead to the master password step');
+    if (await count(js, `${ACCOUNT} .first-pin`)) f('the master password step still asks a PIN (it comes after it now)');
+    await setFields({ '.first-mp': 'short-11-ch', '.first-mp2': 'short-11-ch' });
+    await drive.click(`${ACCOUNT} .first-mp-save`);
     await sleep(600);
-    if (config.get().appPin) f('a PIN of 5 characters was accepted');
-    if (!(await count(js, ACCOUNT))) return f('the step closed after a refused PIN');
-    await setPin('246813', '246813');
+    if (config.get().unlockKeys) f('a master password of 11 characters was accepted');
+    await setFields({ '.first-mp': MP, '.first-mp2': MP });
+    await drive.click(`${ACCOUNT} .first-mp-save`);
+    if (!(await until(() => !!config.get().unlockKeys?.blob, 8000))) return f('the master password was not set up');
+    if (!(await until(async () => (await accountStep()) === 2 && (await count(js, `${ACCOUNT} .first-pin`)) > 0, 6000))) return f('without Windows Hello the unlock step offers no app PIN');
+    if (await count(js, `${ACCOUNT} .first-hello-on`)) f('Windows Hello offered although it is not set up');
+    await setFields({ '.first-pin': '12345', '.first-pin2': '12345' });
     await drive.click(`${ACCOUNT} .first-pin-save`);
-    if (!(await until(() => !!config.get().appPin, 4000))) f('the PIN was not set');
-    if (!(await personalNext())) f('the personal vault wizard did not follow the PIN');
+    await sleep(800);
+    if ((await api.state()).unlock?.pin) f('a PIN of 5 characters was accepted');
+    if (!(await count(js, ACCOUNT))) return f('the step closed after a refused PIN');
+    await setFields({ '.first-pin': '246813', '.first-pin2': '246813' });
+    await drive.click(`${ACCOUNT} .first-pin-save`);
+    if (!(await until(async () => !!(await api.state()).unlock?.pin, 6000))) f('the app PIN was not set as a wrapper');
+    else if (config.get().appPin?.random) f('N1: with a PIN, appPin is not the hash of that PIN');
+    if (!(await personalNext())) f('the personal vault wizard did not follow the unlock step');
+    await closeAll();
+    await closeAll();
+
+    // Third pass: Windows Hello there (simulated) – "Windows Hello aktivieren?" recommended, the PIN only the alternative.
+    config.update({ unlockKeys: null, appPin: null });
+    process.env.KVPWSAFE_TEST_HELLO = 'sign';
+    if (!(await drive.trigger(ACCOUNT))) return f('the sign-in step did not open the third time');
+    await sleep(400);
+    await drive.click(`${ACCOUNT} .wizard-buttons .btn.primary`);
+    if (!(await until(async () => (await accountStep()) === 1, 4000))) return f('third pass: no master password step');
+    await setFields({ '.first-mp': MP, '.first-mp2': MP });
+    await drive.click(`${ACCOUNT} .first-mp-save`);
+    if (!(await until(async () => (await count(js, `${ACCOUNT} .first-hello-on`)) > 0, 8000))) return f('with Windows Hello the unlock step does not ask "Windows Hello aktivieren?"');
+    if (!(await count(js, `${ACCOUNT} .first-choose-pin`))) f('the app PIN is not offered as the alternative');
+    if (await count(js, `${ACCOUNT} .first-pin`)) f('the PIN fields show before choosing the alternative');
+    await drive.click(`${ACCOUNT} .first-hello-on`);
+    if (!(await until(() => !!config.get().unlockKeys?.hello, 8000))) f('"Windows Hello aktivieren" did not switch Hello on');
+    if (!(await personalNext())) f('the personal vault wizard did not follow switching Hello on');
   } finally {
+    // The other checks run on the app PIN: back to it (#537 has its own areas, "masterpw" and "hellokey"). First, so
+    // that restoring (which unlocks a personal vault of a full run with the PIN) finds the PIN, not this master password.
+    delete process.env.KVPWSAFE_TEST_HELLO;
+    config.update({ unlockKeys: null, appPin: null });
+    await ctx.ensurePin?.();
     await drive.restore();
   }
   return undefined;

@@ -17,6 +17,7 @@ import { applyShortcuts, selectedKey, setSelectedKey } from './typing.js';
 import { viewerId } from './private.js';
 import { clearCopyRules } from './vault-rules.js';
 import { pinGuard } from './guards.js';
+import { forgetDk } from './unlock.js';
 
 export class DemoAuth {
   account = null;
@@ -164,6 +165,7 @@ export function lockIfWindowsLocked() {
 
 export async function lockNow() {
   pinGuard.consume(); // a PIN entered before locking must not open the app afterwards
+  forgetDk(); // #537: the device key and a fresh master password end with the lock
   mcp?.revoke();
   cancelQuestions();
   clearCopyRules(); // #480

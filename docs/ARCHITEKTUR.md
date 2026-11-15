@@ -44,9 +44,11 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `guards.js` | Prüfungen vor einer Aktion: App offen, Funktion im Tresor erlaubt, PIN, Subscription-Owner |
 | `window.js` | Hauptfenster und Tray-Symbol, Titelleiste, Ansicht, Autostart, Links (`kvpwsafe://`) |
 | `passkey-window.js` | Verstecktes Fenster für WebAuthn mit PRF, Ausliefern der App-Dateien |
-| `personal.js` | Persönlicher Tresor: Speicherort, Anlegen, Schlüssel an die PIN gebunden |
+| `personal.js` | Persönlicher Tresor: Speicherort, Anlegen, Schlüssel an die PIN bzw. den Geräteschlüssel gebunden |
+| `unlock.js` | Ein Masterpasswort für die App (#537): `desktop/unlock-service.js` verdrahtet mit Einstellungen, DPAPI, persönlichem Tresor und Offline-Spiegel; Kern der Hüllen in `desktop/unlock-keys.js` |
+| `hello-key.js` | Windows Hello zum Entsperren mit dem Masterpasswort (#537 Etappe 3): `desktop/unlock-hello.js` verdrahtet mit dem Helper (`windows/Setup/HelloKey.cs`) bzw. im Smoke mit `desktop/hello-sim.js`; TPM-Attestierung in `desktop/hello-attest.js` |
 | `settings-sync.js` | Einstellungen, die im persönlichen Tresor mitwandern |
-| `settings-copy.js` | Einstellungen als Datei (#478): Kopie im OneDrive, Frage bei der Ersteinrichtung, Export/Import; Allowlist und strenge Prüfung in `desktop/settings-file.js` |
+| `settings-copy.js` | Einstellungen als Datei (#478): Kopie im OneDrive (verschlüsselt, #537 E5: `desktop/settings-sealed.js`), neues Gerät übernimmt mit Masterpasswort, Frage bei der Ersteinrichtung, Export/Import; Allowlist und strenge Prüfung in `desktop/settings-file.js` |
 | `clipboard.js` | Kopieren von Geheimnissen ohne Verlauf und Cloud, Ausschluss von der Fehlerberichterstattung |
 | `typing.js` | Auto-Type, globale Tastenkürzel, ausgewählter Eintrag |
 | `signin.js` | Ein-Klick-Anmeldung über die Erweiterung (Microsoft, Bastion, Admin Center) |
@@ -114,10 +116,13 @@ Fenster und Hauptprozess reden nur über die API: Das Fenster ruft `call('name',
 | `share.js` | Tresor teilen |
 | `file-vaults.js` | Datei-Tresore: anlegen, Passkey, Mitglieder, Änderungsprotokoll |
 | `personal.js` | Persönlicher Tresor: Assistent, erster Start |
-| `first-start.js` | Erster Start (#515): Microsoft-Anmeldung, dann App-PIN (überspringbar) |
+| `first-start.js` | Erster Start (#515): Microsoft-Anmeldung, dann Masterpasswort (#537, optional PIN) |
+| `master-password.js` | Masterpasswort (#537): Umzug von der App-PIN, frische Bestätigung, Feld des Sperrbildschirms |
+| `hello-unlock.js` | Windows Hello mit dem Masterpasswort (#537 Etappe 3): Schritt im Erststart, Knopf im Sperrbildschirm, Schalter in den Einstellungen |
 | `protection.js` | Zusätzlicher Schutz für die gemeinsamen Dialoge |
 | `backup.js` | Backup und Wiederherstellung |
 | `admin-tools.js` | Admin-Werkzeuge: Verbindungen, Admin Center, Passkeys verschieben |
+| `admin-links.js` | Liste der Admin Center (Daten, mit Unit-Test) |
 | `agents.js` | KI-Agenten: freigegebene Tresore und Ordner |
 | `requests.js` | Anfragen an das Fenster: Passkeys von Windows, Fragen von KI-Agenten |
 | `health.js` | Kontext der Berichte, Erinnerung an abgelaufene Einträge |

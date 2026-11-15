@@ -10,7 +10,7 @@ import path from 'node:path';
 export async function rekeyCheck({ api, fail }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kv-smoke-rekey-'));
   try {
-    const created = await api.createFile({ path: path.join(dir, 'rekey.kvpws'), name: 'Schluesselwechsel', password: 'old-password-1', passkeyLabel: 'Smoke' });
+    const created = await api.createFile({ path: path.join(dir, 'rekey.kvpws'), name: 'Schluesselwechsel', password: 'old-password-1', passkeyLabel: 'Smoke', legacy: true });
     await api.save(created.id, { title: 'Wechsel-Eintrag', username: 'u', password: 'secret-before', urls: ['https://example.com'] });
     const before = fs.readFileSync(path.join(dir, 'rekey.kvpws'), 'utf8');
     const r = await api.updateProtection(created.id, { type: 'rekey', password: 'new-password-2' });

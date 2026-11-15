@@ -17,10 +17,11 @@ const text = (v, what) => {
 
 /**
  * `deps`: vault (VaultSession), requireOpen(), changed(), movePasskey(args) (the app's function, keys stay inside),
- * checkMove(fromId, toId) (the app's vault rules, e.g. the export lock; main/vault-rules.js).
+ * checkMove(fromId, toId) (the app's vault rules, e.g. the export lock; main/vault-rules.js), confirmMove(fromId, toId,
+ * itemId) (#537 2b, Konrad H2: out of a vault with "Immer bestätigen" the person confirms with a proof in the app).
  * → handlers for the bridge (only for approved browser clients, see browser.js).
  */
-export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, confirm, checkMove = async () => {} }) {
+export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, confirm, checkMove = async () => {}, confirmMove = async () => false }) {
   // Moving into another vault: the user confirms in the app (info: { from, to, entries: [{ title, passkey }] }); without a way to ask: refused.
   const confirmed = async (info) => {
     if (typeof confirm !== 'function' || (await confirm(info)) !== true) throw new Error(t('Das Verschieben wurde im Keevault-Fenster nicht bestätigt'));
@@ -81,6 +82,7 @@ export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, 
         const item = await vault.getItem(fromId, itemId, { fresh: true });
         if (msg.expectedVersion !== undefined && msg.expectedVersion !== item.version) throw new Error(CHANGED);
         await confirmed(await cardInfo(fromId, toId, [item]));
+        await confirmMove(fromId, toId, itemId);
         if ((await vault.getItem(fromId, itemId, { fresh: true })).version !== item.version) throw new Error(CHANGED);
       }
       const saved = await vault.moveItem(fromId, toId, itemId, folderOf(msg));
@@ -101,6 +103,7 @@ export function browserItemHandlers({ vault, requireOpen, changed, movePasskey, 
       let checked = plan;
       if (fromId !== toId) {
         await confirmed(await cardInfo(fromId, toId, plan.members.map((m) => plan.items.get(m.id))));
+        await confirmMove(fromId, toId, itemId);
         checked = await planMoveWithAssets(vault, fromId, toId, itemId);
         if (checked.refused || signature(checked) !== signature(plan)) throw new Error(CHANGED);
       }

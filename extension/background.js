@@ -15,6 +15,7 @@ import { signInHost, signInPageHost, itemFitsPage, itemFitsUrl, matchesForPage, 
 import { itemHosts, sophosFillPassword, resolveLogin, fqdnUserName, normalizeTenant } from './core/model.js';
 import { faviconToDataUrl } from './core/image.js';
 import { totpCode } from './core/totp.js';
+import { secretCopy } from './lib/secret-copy.js';
 import { b64uEncode, randomBytes, sha256, toHex, mapLimit } from './core/util.js';
 import { setLanguage, t } from './core/i18n.js';
 import { createDemoBackend } from './core/demo.js';
@@ -134,11 +135,11 @@ async function unlock() {
   return state();
 }
 
-/** Unlock from the popup with the app PIN (the app checks it; wrong PINs count there). */
-async function unlockPin(pin) {
+/** Unlock from the popup: the app PIN, or #537 stage 4 Windows Hello asked by the app after a click there (the app checks). */
+async function unlockVia(viaApp) {
   await ready;
   if (demo) return unlock();
-  await app.unlockPin(pin);
+  await viaApp();
   await broadcast({ type: 'state:changed' });
   return state();
 }
@@ -291,11 +292,11 @@ async function lockedProtected() {
 }
 
 /** Entry with the sign-in it uses: a login linked to another (domain or Microsoft login) gets that one's values. */
-const usableItem = async (containerId, id) => resolveLogin(await vault.getItem(containerId, id), (c, i) => vault.getItem(c, i));
+const usableItem = async (containerId, id, reveal = 'fill', site = '') => resolveLogin(await vault.getItem(containerId, id, { reveal, site }), (c, i) => vault.getItem(c, i, { reveal, site })); // #537 2b: reveal, site (the page, named in the app)
 
 async function fillTab({ tabId, containerId, id, force = false, origin = '' }) {
-  const item = await usableItem(containerId, id);
   const frames = (await chrome.webNavigation.getAllFrames({ tabId })) || [];
+  const item = await usableItem(containerId, id, 'fill', hostFromUrl(frames.find((f) => f.frameId === 0)?.url || '') || '');
   let targets = frames.filter((f) => itemFitsUrl(item, f.url));
   if (!targets.length) {
     if (!force) {
@@ -714,7 +715,7 @@ async function webauthnApprove({ requestId, containerId, itemId, credentialId, t
   const req = await loadRequest(requestId);
   if (!req) throw new Error(t('Die Anfrage ist abgelaufen'));
   if (req.kind === 'get') {
-    const response = await sign(req, await findCandidate(req, { containerId, itemId, credentialId }), typeof pin === 'string' ? pin : '');
+    const response = await sign(req, await findCandidate(req, { containerId, itemId, credentialId }), pin?.hello === true ? { hello: true } : typeof pin === 'string' ? pin : ''); // #537: or Hello
     await finishRequest(requestId, { result: response });
     return { done: true };
   }
@@ -843,7 +844,8 @@ const pageCommands = {
   // #495: the last list without waiting for the app (popup-peek.js); the popup marks it "wird aktualisiert".
   peek: async () => (demo ? null : peekState(cachedSnapshot(), { settings: await getSettings(), features: appFeatures(), extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version })),
   unlock: () => unlock(),
-  unlockPin: ({ pin }) => unlockPin(pin),
+  unlockPin: ({ pin }) => unlockVia(() => app.unlockPin(pin)),
+  unlockHello: () => unlockVia(() => app.unlockRequest()),
   lock: () => lock(),
   refresh: async () => {
     await requireOpen();
@@ -855,7 +857,7 @@ const pageCommands = {
     await requireOpen();
     return vault.summaries();
   },
-  item: async ({ containerId, id, fresh }) => vault.getItem(containerId, id, { fresh }),
+  item: async ({ containerId, id, fresh, reveal }) => vault.getItem(containerId, id, { fresh, ...(reveal === 'fill' || reveal === 'copy' ? { reveal } : {}) }),
   // Version history and one older version (#464): only where the vault object can read them (developer demo).
   history: ({ containerId, id }) => (vault.history ? vault.history(containerId, id) : Promise.reject(new Error('history unavailable'))),
   version: ({ containerId, id, version }) => (vault.getVersion ? vault.getVersion(containerId, id, version) : Promise.reject(new Error('history unavailable'))),
@@ -877,6 +879,7 @@ const pageCommands = {
   },
   /** Copy from an extension page (popup): protected through the app (#337). */
   copy: ({ text }) => secureCopy(String(text ?? '')),
+  copySecret: (msg) => secretCopy(usableItem, secureCopy)(msg), // #537 2b (lib/secret-copy.js)
   /** The prompt window (passkey/PIN card) sizes itself to its content; nothing else may resize windows through here. */
   'prompt:fit': async ({ height }, sender) => {
     if (!sender.tab || !String(sender.url || '').startsWith(chrome.runtime.getURL('prompt/prompt.html'))) return;
@@ -917,7 +920,7 @@ const contentCommands = {
   },
   /** Current one-time code of an entry, only for a matching site (filled straight into the code field). */
   'cs:totp': async ({ containerId, id }, sender) => {
-    const item = await usableItem(containerId, id);
+    const item = await usableItem(containerId, id, 'fill', senderHost(sender) || '');
     if (!itemFitsPage(item, sender)) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     if (!item.totp) throw new Error(t('Kein Einmalcode (TOTP) hinterlegt'));
     return { code: (await totpCode(item.totp)).code };
@@ -925,7 +928,7 @@ const contentCommands = {
   'cs:fill': async ({ containerId, id }, sender) => {
     // Microsoft's sign-in only takes cs:msAccount, with its own checks: no way around them by filling in.
     if (MS_LOGIN_HOSTS.test(senderHost(sender) || '')) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
-    const item = await usableItem(containerId, id);
+    const item = await usableItem(containerId, id, 'fill', senderHost(sender) || '');
     if (!itemFitsPage(item, sender)) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     const totpCopied = await copyTotpAfterFill(item);
     return { username: item.username, password: await browserPassword(item), totpCopied };
@@ -991,7 +994,7 @@ const contentCommands = {
   'cs:bastionAccount': async ({ containerId, id, save = false, signIn = true }, sender) => {
     const bastion = await bastionContext(sender);
     if (!bastion) throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
-    const item = await usableItem(containerId, id);
+    const item = await usableItem(containerId, id, 'fill', senderHost(sender) || '');
     if (item.type !== 'login') throw new Error(t('Der Eintrag passt nicht zu dieser Website'));
     let saved = null;
     if (save) {

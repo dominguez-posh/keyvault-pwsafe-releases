@@ -61,6 +61,34 @@ export class OfflineMirror {
 
   /** After a verified PIN: derives the data key from the OS-protected secret and the PIN (created on first use). */
   async unlockKey(pin) {
+    const secret = await this.deviceSecret();
+    const salt = secret.subarray(0, 16);
+    const pinKey = await pbkdf2(String(pin), salt, PIN_ITERATIONS, 32, 'sha256');
+    this.key = Buffer.from(crypto.hkdfSync('sha256', Buffer.concat([secret, pinKey]), salt, 'keevault-offline-mirror', 32));
+  }
+
+  /**
+   * #537: after the master password (or a wrapper of the device key DK): the data key from the OS-protected secret and
+   * a key derived from DK – still both needed, the PIN no longer.
+   */
+  async unlockFactor(factor) {
+    const secret = await this.deviceSecret();
+    this.key = Buffer.from(crypto.hkdfSync('sha256', Buffer.concat([secret, Buffer.from(factor)]), secret.subarray(0, 16), 'keevault-offline-mirror/dk', 32));
+  }
+
+  /**
+   * #537: a new device key (move from the PIN, new master password): what is loaded is written again under the new key;
+   * a mirror that is not loaded is dropped – it is a cache and fills again online. The old key never reads it again.
+   */
+  async switchFactor(factor) {
+    const keep = !!this.key && this.entries.size > 0;
+    await this.unlockFactor(factor);
+    if (keep) await this.save();
+    else await fs.rm(this.dataFile, { force: true });
+  }
+
+  /** The random secret protected by the OS key store (created on first use). */
+  async deviceSecret() {
     let secret;
     try {
       secret = await this.unprotect(await fs.readFile(this.keyFile));
@@ -70,9 +98,7 @@ export class OfflineMirror {
       await fs.mkdir(path.dirname(this.keyFile), { recursive: true });
       await fs.writeFile(this.keyFile, await this.protect(secret));
     }
-    const salt = secret.subarray(0, 16);
-    const pinKey = await pbkdf2(String(pin), salt, PIN_ITERATIONS, 32, 'sha256');
-    this.key = Buffer.from(crypto.hkdfSync('sha256', Buffer.concat([secret, pinKey]), salt, 'keevault-offline-mirror', 32));
+    return secret;
   }
 
   lockKey() {

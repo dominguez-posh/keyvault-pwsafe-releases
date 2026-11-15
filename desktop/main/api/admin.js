@@ -6,7 +6,7 @@ import { bastionUrlInTenant } from '../../../extension/core/model.js';
 import { smokeTest } from '../boot.js';
 import { bridge, vault } from '../state.js';
 import { deviceLinksHere, launchRdp, launchSsh, launchTeamViewer, serverAccount, splitEntryKey, usableItem } from '../devices.js';
-import { requireOpen } from '../guards.js';
+import { accessConfirm, requireOpen } from '../guards.js';
 import { ADMIN_CENTER_HOSTS, MS_LOGIN_HOSTS, addSignInJob, adminCenterUrl, lastAdminUrl, setLastAdminUrl } from '../signin.js';
 
 export const adminApi = {
@@ -35,6 +35,7 @@ export const adminApi = {
     }
     if (!ADMIN_CENTER_HOSTS.includes(host)) throw new Error(t('Unbekanntes Admin Center'));
     if (key) {
+      await accessConfirm.require(...splitEntryKey(String(key)), 'fill'); // #537 2b: the extension gets this account's sign-in
       addSignInJob(MS_LOGIN_HOSTS, String(key), 'microsoft');
       url = adminCenterUrl(url, (await vault.getItem(...splitEntryKey(String(key)))).username);
     }
@@ -47,6 +48,8 @@ export const adminApi = {
     requireOpen();
     const item = await vault.getItem(containerId, id);
     if (item.type !== 'server') throw new Error(t('Kein Server-Eintrag'));
+    // #537 2b: a connection hands the account to mstsc, ssh, TeamViewer or the extension – one confirmation each.
+    if (['rdp', 'ssh', 'teamviewer', 'bastion'].includes(method)) await accessConfirm.require(containerId, id, 'fill');
     const s = await deviceLinksHere(containerId, item);
     if (method === 'rdp') {
       if (!s.host) throw new Error(t('Kein Server (IP oder Name) hinterlegt'));

@@ -8,6 +8,7 @@ import { BACKUP_EXTENSION, createBackup, generateBackupPassword, openBackup, rea
 import { vault, win } from '../state.js';
 import { backupSheetHtml, lastBackup, pendingRestore, printHtml, setLastBackup, setPendingRestore } from '../backup.js';
 import { requireOpen, requireSubscriptionOwner } from '../guards.js';
+import { requireVaultUse } from '../access.js';
 import { actor, changed, send } from '../session.js';
 
 export const backupApi = {
@@ -24,6 +25,7 @@ export const backupApi = {
   async createBackup(containerId) {
     requireOpen();
     const c = await requireSubscriptionOwner(containerId);
+    await requireVaultUse(containerId, 'backup'); // #537 2b (Konrad N-A): every secret of the vault leaves in it
     const { canceled, filePath } = await dialog.showSaveDialog(win, {
       title: t('Backup speichern'),
       defaultPath: `${String(c.name || 'Tresor').replace(/[^\w.-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.${BACKUP_EXTENSION}`,

@@ -7,6 +7,7 @@ import { call } from './ipc.js';
 import { panes } from './layout.js';
 import { explicitFolders, items, st, ui } from './state.js';
 import { field, writable, writableContainers } from './helpers.js';
+import { accessPrompt } from './confirm-each.js';
 import { renderDetail, splitKey } from './detail.js';
 import { renderList } from './list.js';
 import { folderList, modeItems, nsFolder } from './modes.js';
@@ -242,6 +243,23 @@ async function askMovePlan(i, targetId) {
   return { extras, expected: plan.members.map((m) => m.id) };
 }
 
+/**
+ * #537 2b (Konrad H2): a move out of a vault with "Immer bestätigen" needs a confirmation. The first refusal asks once for
+ * all entries of that vault in this move (selection, folder, drag and drop); then the move is tried again.
+ */
+async function withMoveAccess(list, targetId, asked, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    const a = e.name === 'AccessConfirmRequired' ? e.access : null;
+    if (a?.purpose !== 'move' || asked.has(a.containerId)) throw e;
+    asked.add(a.containerId);
+    const ids = list.filter((x) => x.containerId === a.containerId && x.containerId !== targetId).map((x) => x.id);
+    if (!(await accessPrompt({ ...a, itemId: ids.includes(a.itemId) ? ids : [a.itemId, ...ids] }))) throw e;
+    return fn();
+  }
+}
+
 /** Moves entries into another vault (each is re-created there and deleted in the source); returns the failures. */
 export async function moveItemsTo(list, targetId, folderOf = null) {
   let moved = 0;
@@ -249,19 +267,20 @@ export async function moveItemsTo(list, targetId, folderOf = null) {
   let last = null;
   let dropped = null;
   const gone = new Set(); // entries that went along with an earlier one
+  const asked = new Set(); // vaults whose move was confirmed already (#537 2b)
   for (const i of list) {
     if (i.containerId === targetId || gone.has(i.id)) continue;
     try {
       const ask = await askMovePlan(i, targetId);
       if (!ask) { failed++; continue; }
       if (ask.expected) {
-        const res = await call('moveWithAssets', i.containerId, targetId, i.id, { expected: ask.expected, ...(folderOf ? { folder: folderOf(i) } : {}) });
+        const res = await withMoveAccess(list, targetId, asked, () => call('moveWithAssets', i.containerId, targetId, i.id, { expected: ask.expected, ...(folderOf ? { folder: folderOf(i) } : {}) }));
         for (const m of ask.expected) gone.add(m);
         last = res.saved;
         moved += res.moved?.length || 1;
         if (res.dropped?.length) dropped = res.saved;
       } else {
-        last = await call('move', i.containerId, targetId, i.id, folderOf ? { folder: folderOf(i) } : undefined);
+        last = await withMoveAccess(list, targetId, asked, () => call('move', i.containerId, targetId, i.id, folderOf ? { folder: folderOf(i) } : undefined));
         moved++;
         if (last.droppedLinks?.length) dropped = last;
       }
@@ -270,6 +289,7 @@ export async function moveItemsTo(list, targetId, folderOf = null) {
       toast(`${i.title}: ${e.message}`, 'error');
     }
   }
+  if (asked.size) await call('endMoveAccess').catch(() => {}); // #537 2b: unused confirmations of this move end now
   clearSelection();
   ui.selected = list.length === 1 && last ? last.key : null;
   if (dropped) toast(droppedLinksText(dropped));

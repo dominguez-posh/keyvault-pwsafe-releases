@@ -4,6 +4,7 @@
 
 import { h, icon, modal } from './dom.js';
 import { t } from './i18n.js';
+import { isSealed } from './sealed.js';
 
 /**
  * One row. Click anywhere on the row (or Enter on the action button) runs the action; the arrow button opens
@@ -80,7 +81,9 @@ export const typeEntry = (ctx, what) => (ctx.typeInto ? [{ action: 'type', icon:
 export function secretRow(label, value, ctx, { masked, copyValue, typeWhat }) {
   const span = h('span', { class: 'value secret' }, masked);
   let shown = false;
+  const sealed = isSealed(value); // #537 2b: held back – "Anzeigen" asks the app for a confirmation (ctx.reveal)
   const toggle = () => {
+    if (sealed) return void ctx.reveal?.();
     shown = !shown;
     span.textContent = shown ? value : masked;
     span.classList.toggle('revealed', shown);
@@ -89,7 +92,7 @@ export function secretRow(label, value, ctx, { masked, copyValue, typeWhat }) {
     ctx, label, action: ctx.secureCopy === false ? t('Kopieren') : t('Sicher kopieren'), run: () => ctx.copy(copyValue, label),
     menu: () => [
       { action: 'reveal', icon: shown ? 'eyeOff' : 'eye', label: shown ? t('Ausblenden') : t('Anzeigen'), onClick: toggle },
-      { action: 'big', icon: 'type', label: t('In großer Schrift anzeigen'), onClick: () => bigView(label, value) },
+      { action: 'big', icon: 'type', label: t('In großer Schrift anzeigen'), onClick: () => (sealed ? ctx.reveal?.() : bigView(label, value)) },
       ...(typeWhat ? typeEntry(ctx, typeWhat) : []),
     ],
   });

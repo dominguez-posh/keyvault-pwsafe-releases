@@ -9,6 +9,7 @@
       <string id="SUPPORTED_Keevault_0_7_0">Keevault 0.7.0 oder neuer</string>
       <string id="SUPPORTED_Keevault_0_9_8">Keevault 0.9.8 oder neuer</string>
       <string id="SUPPORTED_Keevault_0_9_33">Keevault 0.9.33 oder neuer</string>
+      <string id="SUPPORTED_Keevault_0_10_0">Keevault 0.10.0 oder neuer</string>
       <string id="SUPPORTED_Keevault_0_7_10">Keevault 0.7.10 oder neuer</string>
       <string id="Vaults">Tresore automatisch verbinden</string>
       <string id="Vaults_Help">Diese Azure Key Vaults erscheinen bei allen betroffenen Benutzern nach der Anmeldung automatisch in Keevault (Kennzeichnung „Richtlinie“).
@@ -69,6 +70,8 @@ Betrifft nur die EXE-Installation pro Benutzer; MSI und MSIX aktualisieren sich 
       <string id="ExtensionIds_Help">IDs der Browser-Erweiterungen (32 Buchstaben a–p), die mit der App sprechen dürfen, durch Komma getrennt. Nur nötig, wenn Sie eine eigene Erweiterungs-ID verteilen; Standard ist die ID der veröffentlichten Keevault-Erweiterung.</string>
       <string id="WindowHello">Fenster mit Windows Hello entsperren erlauben</string>
       <string id="WindowHello_Help">Deaktiviert: Das App-Fenster lässt sich nur mit der App-PIN entsperren, nicht mit Windows Hello (Gesicht, Fingerabdruck, Windows-Hello-PIN). Aktiviert oder nicht konfiguriert: Der Benutzer entscheidet; eingeschaltet wird Windows Hello nur von ihm selbst mit seiner App-PIN, nie durch die Richtlinie (Standard: aus). Gilt nur für die Fenstersperre, wenn allein die Browser-Erweiterung entsperrt ist.</string>
+      <string id="SharedVaultPasskeyOnly">Abgesicherte Datei-Tresore nur mit Passkey</string>
+      <string id="SharedVaultPasskeyOnly_Help">Aktiviert: Abgesicherte Datei-Tresore (mit Benutzern und Rollen) öffnen sich nur mit einem Passkey oder Sicherheitsschlüssel, nie mit dem Masterpasswort der App, Windows Hello oder der App-PIN; die App verbindet auch keine Mitgliedschaft mehr mit dem Masterpasswort. Deaktiviert oder nicht konfiguriert: Standard – abgesicherte Tresore öffnen sich auch mit dem Masterpasswort der App, außer ein Admin hat für den Tresor „Nur mit Passkey“ eingeschaltet.</string>
       <string id="WindowsProvider">Keevault als Passkey-Anbieter in Windows</string>
       <string id="WindowsProvider_Help">Aktiviert: Keevault erscheint im Windows-Passkey-Dialog (Windows 11). Deaktiviert: der Passkey-Anbieter wird nicht registriert. Nicht konfiguriert: Benutzerentscheidung (Standard: an).</string>
       <string id="SignInWindows">Anmeldung im Windows-Dialog</string>

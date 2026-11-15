@@ -12,6 +12,7 @@ import { appRoot, smokeTest } from './boot.js';
 import { config, opened } from './state.js';
 import { deviceLinksHere, serverAccount, usableItem } from './devices.js';
 import { diag } from './diag.js';
+import { accessConfirm } from './guards.js';
 // Cycle with clipboard.js (it uses runHelperExe): both only call each other at run time.
 import { copyToClipboard } from './clipboard.js';
 import { showHint } from './hint-window.js';
@@ -101,6 +102,8 @@ let shortcutsActive = '';
 /** Value of the selected entry for auto-type ('u' user name, 'p' password, 'o' one-time code). */
 export async function autoTypeValue(key, what) {
   const i = key.indexOf('/');
+  // #537 2b: password and one-time code of a vault with "Immer bestätigen" only after confirmAccess(…, 'type').
+  if (what !== 'u') await accessConfirm.require(key.slice(0, i), key.slice(i + 1), 'type');
   let item = await usableItem(key.slice(0, i), key.slice(i + 1));
   // An asset types its connection account (#316): the linked RDP/SSH login (e.g. the AD account), else its own values.
   if (item.type === 'server') item = { ...item, ...(await serverAccount(item, (await deviceLinksHere(key.slice(0, i), item)).rdpLink)) };

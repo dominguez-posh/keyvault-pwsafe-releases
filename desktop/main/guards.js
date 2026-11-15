@@ -5,10 +5,16 @@ import { PinGuard } from '../pin.js';
 import { PasskeyPinGate } from '../passkey-pin.js';
 import { ExportPinGate } from '../export-pin.js';
 import { CopyPinGate } from '../copy-pin.js';
+import { AccessConfirm } from '../access-confirm.js';
 import { POLICY_LABELS } from '../../extension/core/session.js';
 import { keepAdminFlags, keepServer } from '../../extension/core/model.js';
 import { t } from '../../extension/core/i18n.js';
 import { config, opened, vault } from './state.js';
+import { secretMatches } from './unlock.js';
+import { helloProof } from './hello-key.js';
+// #537 2b: access.js reaches the personal vault and the API modules – loaded on first use, never while this module loads.
+let accessModule = null;
+const access = async () => (accessModule ??= await import('./access.js'));
 
 export function requireOpen() {
   if (!opened) throw new LockedError();
@@ -35,13 +41,25 @@ export const passkeyPin = new PasskeyPinGate({
   settings: () => config.get(),
   guard: pinGuard,
   save: (state) => { if (state || config.get().pinGuard) config.update({ pinGuard: state }); },
+  verify: (pin) => secretMatches(pin), // #537: master password or PIN once set up
+  hello: (purpose) => helloProof(purpose), // #537 stage 4: { hello: true } – a Windows Hello of its own per use
+  // #537 2b: with "Immer bestätigen" on in the personal vault every passkey use asks, whatever the passkey setting says.
+  forced: async () => (await access()).anyStrictVault(),
+  forcedSeen: () => !!accessModule?.strictSeen(),
 });
 
 /** #473: a plaintext export asks for the app PIN (see ../export-pin.js); the same counter as unlocking. */
-export const exportPin = new ExportPinGate({ settings: () => config.get(), guard: pinGuard, save: passkeyPin.save });
+export const exportPin = new ExportPinGate({ settings: () => config.get(), guard: pinGuard, save: passkeyPin.save, verify: passkeyPin.verify, hello: passkeyPin.hello });
 
 /** #480: copying from a vault whose settings want the app PIN (see ../copy-pin.js); the same counter as unlocking. */
-export const copyPin = new CopyPinGate({ settings: () => config.get(), guard: pinGuard, save: passkeyPin.save });
+export const copyPin = new CopyPinGate({ settings: () => config.get(), guard: pinGuard, save: passkeyPin.save, verify: passkeyPin.verify, hello: passkeyPin.hello });
+
+/** #537 2b: "Immer bestätigen" – one confirmation per use of an entry of the personal vault (see ../access-confirm.js). */
+export const accessConfirm = new AccessConfirm({
+  strict: async (containerId) => (await access()).strictVault(containerId),
+  settings: () => config.get(), guard: pinGuard, save: passkeyPin.save, verify: passkeyPin.verify, hello: passkeyPin.hello,
+  readItem: (containerId, itemId) => vault.getItem(containerId, itemId),
+});
 
 /** Unlocking needs a freshly verified PIN once one is set. */
 export function requirePin() {

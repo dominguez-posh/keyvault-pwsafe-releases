@@ -25,6 +25,6 @@ test('the ceremony does not show the window before its page asked for the reques
 test('a show without a ready ceremony is undone and closing without a ceremony hides the window', () => {
   const ensure = block('function ensurePasskeyWindow(');
   assert.match(ensure, /on\('show', \(\) => \{\s*if \(ceremony\?\.ready\) return;[\s\S]*?passkeyWindow\.hide\(\)/);
-  assert.match(ensure, /if \(ceremony\) finishCeremony\(\{ ok: false \}\);\s*else passkeyWindow\.hide\(\);/);
+  assert.match(ensure, /if \(ceremony\) finishCeremony\(\{ ok: false \}, 'window closed'\);\s*else passkeyWindow\.hide\(\);/);
   assert.match(ensure, /did-fail-load/);
 });

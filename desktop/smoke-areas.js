@@ -11,7 +11,7 @@ export const FEATURE_AREAS = [
   'browserimport', 'foldericons', 'vaultwizard', 'firstaccount', 'firstwizard', 'recoverykey', 'adminstart', 'narrowsidebar', 'sidebarfoot', 'version', 'versionchannel',
   'list', 'agentfront', 'agententer', 'agentrevoke', 'agentwrite', 'agentlock', 'agenttrust', 'passkeypin', 'passkeypinagent', 'passkeypinwindows', 'passkeypinbrowser', 'folderdrag', 'multidrag', 'multiclear', 'droptarget',
   'deleterefused', 'vaultprofile', 'deleterace', 'moveassets', 'cutpaste', 'mcpextra', 'helpfeedback', 'noscroll', 'passkeynarrow', 'listnarrow', 'passkeydrag', 'adminpin', 'admin', 'devices',
-  'bastionfqdn', 'adminpim', 'offlinedelete', 'winlock', 'releasesign', 'versionhistory', 'otpsecret', 'fieldhover', 'adminflags', 'nurfuermich', 'pimlock', 'machinesetup', 'settingsfile', 'logging', 'compliance', 'tlsenv', 'passkeywindow',
+  'bastionfqdn', 'adminpim', 'offlinedelete', 'winlock', 'releasesign', 'versionhistory', 'otpsecret', 'fieldhover', 'adminflags', 'nurfuermich', 'pimlock', 'machinesetup', 'settingsfile', 'logging', 'compliance', 'tlsenv', 'passkeywindow', 'masterpw', 'hellokey', 'settingscrypt', 'mpreset', 'confirmeach', 'memberapp', 'breakglass', 'helloupgrade',
 ];
 
 export const SMOKE_AREAS = [...FLOW_AREAS, ...FEATURE_AREAS];
